@@ -72,7 +72,9 @@ fn run() -> Result<(), CliError> {
         return Ok(());
     }
 
-    match args[1].as_str() {
+    // Make command case-insensitive
+    let cmd = args[1].to_lowercase();
+    match cmd.as_str() {
         // ── version ───────────────────────────────────────────────────────────
         "--version" | "-V" | "version" => {
             println!(
@@ -212,6 +214,7 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         promiscuous: true,
         snapshot_len: 65_535,
         filter,
+        pcap_export: None,
     };
 
     let mut pkt_num: usize = 0;
@@ -838,6 +841,14 @@ fn print_usage() {
     println!("  {Y}pktana conn{R}                     TCP/UDP connections + PID  (replaces ss / netstat)");
     println!("  {Y}pktana stats <IFACE>{R}            live dashboard: PPS · BPS · proto breakdown · top talkers");
     println!("  {Y}pktana watch <IFACE> [SECS]{R}     auto-refresh NIC counters every N seconds  (default 2)");
+    println!("  {Y}pktana tui <IFACE>{R}              terminal UI dashboard — realtime packets & bandwidth & GeoIP");
+    println!();
+
+    println!("{C}GEOLOCATION{R}");
+    println!(
+        "  {Y}pktana geoip <IP> [IP2] ...{R}      IP-to-country lookup (no API calls, offline)"
+    );
+    println!("  {Y}pktana geo <IP> [IP2] ...{R}       alias for geoip");
     println!();
 
     println!("{C}QUICK EXAMPLES{R}");
@@ -1300,13 +1311,103 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
         }
 
+        // ── tui ───────────────────────────────────────────────────────────────
+        "tui" => {
+            println!("{bar}");
+            println!("{B}  pktana tui{R}  —  Terminal UI dashboard");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana tui <IFACE>{R}");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Opens a full-screen terminal UI dashboard for live network monitoring");
+            println!("  on the specified interface.  Displays real-time packets, bandwidth,");
+            println!("  protocol breakdown, top talkers with GeoIP country info, and active");
+            println!("  connections.");
+            println!();
+            println!("{B}DASHBOARD LAYOUT{R}");
+            println!("  Header          — interface name, elapsed time, total packets");
+            println!("  Bandwidth       — RX/TX throughput gauges (MB/s)");
+            println!("  Protocol Chart  — TCP, UDP, ICMP, ARP breakdown with percentages");
+            println!("  Top Talkers     — top 10 source IPs by packet count with GeoIP country");
+            println!(
+                "  Recent Packets  — table of last 20 captured packets (time, size, proto, IPs)"
+            );
+            println!("  Connections     — active TCP/UDP sockets with state");
+            println!();
+            println!("{B}CONTROLS{R}");
+            println!("  q, Q, Esc       — quit the dashboard");
+            println!("  Ctrl+C          — quit (if q doesn't work)");
+            println!();
+            println!("{B}REQUIRES{R}");
+            println!("  • root or CAP_NET_RAW capability");
+            println!("  • pktana built with --features tui (includes ratatui and crossterm)");
+            println!("  • libpcap.so.1 in library path");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana tui eth0         # full TUI dashboard on eth0");
+            println!("  pktana tui ens3         # TUI on ens3");
+            println!();
+            println!("{B}FEATURES{R}");
+            println!("  • GeoIP lookup — automatically resolves top-talker IPs to countries");
+            println!("  • Live update — refreshes every 100ms");
+            println!("  • Protocol breakdown — see which protocols dominate traffic");
+            println!("  • Connection tracking — monitor active sockets in real-time");
+            println!("{bar}");
+        }
+
+        // ── geoip ─────────────────────────────────────────────────────────────
+        "geoip" | "geo" => {
+            println!("{bar}");
+            println!("{B}  pktana geoip{R}  —  IP-to-country geolocation lookup");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana geoip <IP> [IP2] [IP3] ...{R}");
+            println!("  {Y}pktana geo <IP> [IP2] ...{R}    (short alias)");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Performs offline IP-to-country code and continent lookup.");
+            println!("  No external API calls, no internet connection required.");
+            println!("  Private/reserved IP ranges are marked as 'Private / Unknown'.");
+            println!();
+            println!("{B}OUTPUT COLUMNS{R}");
+            println!("  IP          — IPv4 address being looked up");
+            println!("  CC          — 2-letter country code (ISO 3166-1 alpha-2)");
+            println!("  Continent   — 2-letter continent code (NA, EU, AS, etc.)");
+            println!("  Country     — full country name (e.g., 'United States')");
+            println!();
+            println!("{B}PRIVATE RANGES (marked as --){R}");
+            println!("  • 10.0.0.0/8  (private networks)");
+            println!("  • 172.16.0.0/12  (private networks)");
+            println!("  • 192.168.0.0/16  (private networks)");
+            println!("  • 127.0.0.0/8  (loopback)");
+            println!("  • 169.254.0.0/16  (link-local)");
+            println!("  • 100.64.0.0/10  (CGNAT)");
+            println!("  • Reserved ranges (0.0.0.0/8, 255.255.255.0/24, etc.)");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana geoip 8.8.8.8                        # look up Google DNS");
+            println!("  pktana geoip 1.1.1.1 8.8.8.8 9.9.9.9        # multiple lookups");
+            println!("  pktana geoip 192.168.1.1                    # private IP → --");
+            println!("  pktana geo 77.88.8.8 185.12.50.4            # using alias");
+            println!();
+            println!("{B}USE CASES{R}");
+            println!("  • Security — identify suspicious IPs and their origin countries");
+            println!("  • Traffic analysis — see geographic distribution of network traffic");
+            println!("  • Deployed in TUI dashboard — automatically resolves top talkers");
+            println!("  • Scripting — batch process lists of IPs for compliance reporting");
+            println!("{bar}");
+        }
+
         // ── unknown ───────────────────────────────────────────────────────────
         other => {
             eprintln!("pktana: no documentation found for '{other}'");
             eprintln!();
             eprintln!("Available topics:");
             eprintln!(
-                "  capture  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo"
+                "  capture  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  geoip"
             );
             return Err(CliError::Usage(format!("unknown help topic '{other}'")));
         }
@@ -1894,6 +1995,7 @@ fn run_stats(args: &[String]) -> Result<(), CliError> {
         promiscuous: true,
         snapshot_len: 65_535,
         filter,
+        pcap_export: None,
     };
     let mut live = LiveStats::new(interface);
     // initial clear so first render starts at top

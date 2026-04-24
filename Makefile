@@ -18,10 +18,43 @@ TARBALL   := $(DIST_DIR)/pktana-$(VERSION).tar.gz
 
 # ---- top-level targets --------------------------------
 
-.PHONY: pktana binary clean
+.PHONY: pktana binary clean check fmt clippy test help all
 
-## Build binary + RPM package
-pktana: _check-tools $(TARBALL)
+.DEFAULT_GOAL := help
+
+## Show help message
+help:
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo "  pktana Makefile - Complete Build System"
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+	@echo ""
+	@echo "Main targets:"
+	@echo "  make pktana    - ✅ Build EVERYTHING (recommended)"
+	@echo "                   → Format code"
+	@echo "                   → Run clippy linter"
+	@echo "                   → Run all tests"
+	@echo "                   → Compile release binary"
+	@echo "                   → Create RPM package"
+	@echo ""
+	@echo "  make clean     - 🧹 Remove all build artifacts"
+	@echo ""
+	@echo "Individual steps:"
+	@echo "  make check     - Run all code quality checks"
+	@echo "  make fmt       - Format code with rustfmt"
+	@echo "  make clippy    - Run clippy linter (strict mode)"
+	@echo "  make test      - Run all tests"
+	@echo "  make binary    - Build release binary only"
+	@echo ""
+	@echo "Quick start:"
+	@echo "  make pktana    ← This does everything you need!"
+	@echo ""
+	@echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+## Build everything (alias for pktana)
+all: pktana
+
+## Build binary + RPM package (runs all checks first)
+pktana: check $(TARBALL)
 	@echo ""
 	@echo "==> Building RPM  $(VERSION)-$(RELEASE).$(OS_TYPE) ..."
 	@rm -rf $(RPMROOT)
@@ -41,15 +74,36 @@ pktana: _check-tools $(TARBALL)
 	@echo ""
 	@echo "==> RPMs are ready:"
 	@find $(RPMROOT)/RPMS $(RPMROOT)/SRPMS -name '*.rpm' | sort
+	@echo ""
+	@echo "✅ BUILD SUCCESSFUL - All checks passed!"
+
+## Run all code quality checks
+check: _check-tools fmt clippy test
+	@echo "✅ All checks passed!"
+
+## Format all code
+fmt:
+	@echo "==> Running cargo fmt ..."
+	cargo fmt --all
+
+## Run clippy linter
+clippy:
+	@echo "==> Running clippy ..."
+	cargo clippy --all-targets --features pcap,tui -- -D warnings
+
+## Run tests
+test:
+	@echo "==> Running tests ..."
+	cargo test --all --features pcap,tui
 
 ## Build the Rust release binary only
 binary: _check-cargo $(BINARY)
 
 $(BINARY):
 	@echo "==> Compiling pktana (debug check) ..."
-	cargo build --features pcap -p pktana-cli
+	cargo build --features pcap,tui -p pktana-cli
 	@echo "==> Compiling pktana (release) ..."
-	cargo build --release --features pcap -p pktana-cli
+	cargo build --release --features pcap,tui -p pktana-cli
 
 $(TARBALL): $(BINARY)
 	@echo "==> Creating source tarball for rpmbuild ..."
@@ -62,7 +116,10 @@ $(TARBALL): $(BINARY)
 
 ## Remove all generated files
 clean:
+	@echo "==> Cleaning all build artifacts ..."
 	rm -rf $(DIST_DIR) target
+	cargo clean
+	@echo "✅ Clean complete!"
 
 # ---- internal sanity checks ---------------------------
 

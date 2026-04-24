@@ -10,6 +10,7 @@ pub mod geoip;
 pub mod nic;
 pub mod packet;
 pub mod parser;
+pub mod process;
 pub mod routes;
 
 pub use capture::{
@@ -29,4 +30,5 @@ pub use parser::{
     analyze_bytes, analyze_hex, analyze_hex_file, analyze_many_hex_lines, build_flow_table,
     sample_packets, ParseError, ParsedPacket,
 };
+pub use process::{build_socket_process_map, lookup_process, ProcessInfo, SocketId};
 pub use routes::{list_routes, routes_for_iface, RouteEntry};

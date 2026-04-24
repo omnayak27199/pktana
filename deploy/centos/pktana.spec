@@ -23,8 +23,14 @@ Requires:       libpcap >= 1.5
 
 %description
 pktana is a Linux-first packet analyzer written in Rust.
-It supports live capture (via libpcap) as well as offline PCAP file analysis.
-This package installs the pktana CLI binary.
+It supports live capture (via libpcap), offline PCAP file analysis,
+and a full-featured TUI (Terminal User Interface) dashboard with:
+- Real-time connection tracking
+- Process identification (PID/name)
+- GeoIP lookup
+- Sortable columns and advanced filtering
+- Mouse support
+This package installs the pktana CLI binary with all features enabled.
 
 %prep
 %setup -q
