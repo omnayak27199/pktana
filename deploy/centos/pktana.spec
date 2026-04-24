@@ -1,6 +1,6 @@
 # Version and release are injected by the Makefile via --define.
 # Defaults below are used only when building this spec file directly.
-%{!?pkg_version: %global pkg_version 0.1.0}
+%{!?pkg_version: %global pkg_version 0.3.0}
 %{!?pkg_release: %global pkg_release 1}
 
 # The binary is pre-compiled; disable debuginfo/debugsource sub-packages.

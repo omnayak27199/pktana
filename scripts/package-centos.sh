@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 PACKAGE_DIR="${DIST_DIR}/pktana-linux-amd64"
-VERSION="0.1.0"
+VERSION="0.3.0"
 
 cd "${ROOT_DIR}"
 
@@ -32,7 +32,6 @@ tar -czf "${DIST_DIR}/pktana-linux-amd64.tar.gz" -C "${DIST_DIR}" "pktana-linux-
 echo
 echo "Created package:"
 echo "  ${DIST_DIR}/pktana-linux-amd64.tar.gz"
-
 RPM_SOURCE_DIR="${DIST_DIR}/rpm-src/pktana-${VERSION}"
 rm -rf "${RPM_SOURCE_DIR}"
 mkdir -p "${RPM_SOURCE_DIR}"
