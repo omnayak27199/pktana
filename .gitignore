@@ -1,0 +1,18 @@
+# Rust build output
+/target/
+Cargo.lock
+
+# RPM build tree
+/dist/
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets / local config
+*.pem
+*.key
+root@172.19.34.168

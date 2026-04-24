@@ -1,0 +1,193 @@
+# ─── pktana CI/CD pipeline ───────────────────────────────────────────────────
+#
+# Triggered on:
+#   • every push/PR to main  →  build + test only
+#   • any tag v*.*.*          →  build + test + sign RPM + create GitHub Release
+#
+# Secrets required (set in GitHub repo → Settings → Secrets → Actions):
+#   GPG_PRIVATE_KEY   — ASCII-armored GPG private key  (gpg --armor --export-secret-keys <ID>)
+#   GPG_PASSPHRASE    — passphrase for that key
+#   CRATES_IO_TOKEN   — API token for crates.io publish  (optional; only on tags)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:     ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: Build, lint, test (runs on every push/PR)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install libpcap-dev
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (core, no features)
+        run: cargo clippy -p pktana-core -- -D warnings
+
+      - name: Clippy (cli + pcap feature)
+        run: cargo clippy -p pktana-cli --features pcap -- -D warnings
+
+      - name: Build debug (core)
+        run: cargo build -p pktana-core
+
+      - name: Build debug (cli + pcap)
+        run: cargo build -p pktana-cli --features pcap
+
+      - name: Run tests
+        run: cargo test --all
+
+      - name: Smoke test --version
+        run: cargo run -p pktana-cli --features pcap -- --version
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: RPM build + GPG sign + GitHub Release  (tags only)
+  # ────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Release RPM
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev rpm rpmbuild gnupg2
+
+      - name: Parse version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          echo "VERSION=${TAG}"  >> $GITHUB_OUTPUT
+          echo "RELEASE=1"       >> $GITHUB_OUTPUT
+
+      - name: Build release binary + RPM
+        run: |
+          make pktana \
+            VERSION="${{ steps.ver.outputs.VERSION }}" \
+            RELEASE="${{ steps.ver.outputs.RELEASE }}" \
+            OS_TYPE="el9"
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          GPG_ID=$(gpg --list-secret-keys --keyid-format LONG | grep '^sec' | awk '{print $2}' | cut -d/ -f2)
+          echo "GPG_ID=${GPG_ID}" >> $GITHUB_ENV
+
+      - name: Sign RPM
+        run: |
+          echo "%_gpg_name  ${GPG_ID}" >> ~/.rpmmacros
+          echo "%__gpg_sign_cmd  %{__gpg} gpg --batch --no-armor --passphrase-fd 3 --pinentry-mode loopback -u \"%{_gpg_name}\" -sbo %{__signature_filename} %{__plaintext_filename}" >> ~/.rpmmacros
+          RPM_PATH=$(ls dist/rpmbuild/RPMS/x86_64/pktana-*.rpm)
+          echo "${{ secrets.GPG_PASSPHRASE }}" | \
+            rpmsign --addsign --passphrase-fd=0 "${RPM_PATH}"
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist/rpmbuild/RPMS/x86_64/
+          sha256sum pktana-*.rpm > pktana-${{ steps.ver.outputs.VERSION }}.sha256
+          cat pktana-${{ steps.ver.outputs.VERSION }}.sha256
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          # Pull the section between this tag and the previous one from CHANGELOG.md
+          python3 - <<'EOF'
+          import re, sys
+          version = "${{ steps.ver.outputs.VERSION }}"
+          text = open("CHANGELOG.md").read()
+          pattern = rf"## \[{re.escape(version)}\].*?(?=\n## \[|\Z)"
+          m = re.search(pattern, text, re.S)
+          section = m.group(0).strip() if m else f"Release v{version}"
+          with open("/tmp/release_notes.md", "w") as f:
+              f.write(section)
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: /tmp/release_notes.md
+          files: |
+            dist/rpmbuild/RPMS/x86_64/pktana-*.rpm
+            dist/rpmbuild/SRPMS/pktana-*.src.rpm
+            dist/rpmbuild/RPMS/x86_64/pktana-*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 3: Publish pktana-core to crates.io  (tags only, after release)
+  # ────────────────────────────────────────────────────────────────────────────
+  publish-crate:
+    name: Publish to crates.io
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libpcap-dev
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Publish pktana-core
+        run: cargo publish -p pktana-core --token ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Publish pktana-cli
+        # pktana-cli depends on pktana-core; wait for index propagation
+        run: |
+          sleep 30
+          cargo publish -p pktana-cli --features pcap --token ${{ secrets.CRATES_IO_TOKEN }}
