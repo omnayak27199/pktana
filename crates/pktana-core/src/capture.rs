@@ -70,13 +70,18 @@ impl LinuxCaptureEngine {
         list_interfaces_impl()
     }
 
-    pub fn capture(config: &CaptureConfig) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+    pub fn capture(
+        config: &CaptureConfig,
+    ) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
         capture_impl(config)
     }
 
     /// Stream packets one-by-one, calling `on_packet` for each.
     /// Return `false` from the closure to stop early.
-    pub fn capture_streaming<F>(config: &CaptureConfig, on_packet: F) -> Result<CaptureStats, CaptureError>
+    pub fn capture_streaming<F>(
+        config: &CaptureConfig,
+        on_packet: F,
+    ) -> Result<CaptureStats, CaptureError>
     where
         F: FnMut(CapturePacket) -> bool,
     {
@@ -137,7 +142,10 @@ where
             .map_err(|err| CaptureError::Filter(err.to_string()))?;
     }
 
-    let mut stats = CaptureStats { packets_seen: 0, bytes_seen: 0 };
+    let mut stats = CaptureStats {
+        packets_seen: 0,
+        bytes_seen: 0,
+    };
 
     loop {
         if stats.packets_seen >= config.max_packets {
@@ -179,7 +187,9 @@ where
 }
 
 #[cfg(feature = "pcap")]
-fn capture_impl(config: &CaptureConfig) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+fn capture_impl(
+    config: &CaptureConfig,
+) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
     let inactive = pcap::Capture::from_device(config.interface.as_str())
         .map_err(|err| CaptureError::Interface(err.to_string()))?;
 
@@ -224,7 +234,9 @@ fn capture_impl(config: &CaptureConfig) -> Result<(Vec<CapturePacket>, CaptureSt
 }
 
 #[cfg(not(feature = "pcap"))]
-fn capture_impl(_config: &CaptureConfig) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+fn capture_impl(
+    _config: &CaptureConfig,
+) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
     Err(CaptureError::Unsupported(
         "live capture is not enabled; rebuild with `--features pcap`",
     ))

@@ -27,9 +27,15 @@ pub struct NicInfo {
 }
 
 impl NicInfo {
-    pub fn is_up(&self) -> bool      { self.state == "up" || (self.flags & 0x1) != 0 }
-    pub fn is_loopback(&self) -> bool { self.flags & 0x8 != 0 }
-    pub fn is_promisc(&self) -> bool  { self.flags & 0x100 != 0 }
+    pub fn is_up(&self) -> bool {
+        self.state == "up" || (self.flags & 0x1) != 0
+    }
+    pub fn is_loopback(&self) -> bool {
+        self.flags & 0x8 != 0
+    }
+    pub fn is_promisc(&self) -> bool {
+        self.flags & 0x100 != 0
+    }
     pub fn speed_label(&self) -> String {
         match self.speed_mbps {
             Some(s) if s >= 1000 => format!("{}G", s / 1000),
@@ -60,11 +66,11 @@ pub enum BypassMode {
 impl std::fmt::Display for BypassMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::KernelStack   => write!(f, "Kernel stack (no bypass)"),
-            Self::Xdp           => write!(f, "XDP eBPF (driver-level)"),
-            Self::AfXdp         => write!(f, "AF_XDP zero-copy"),
+            Self::KernelStack => write!(f, "Kernel stack (no bypass)"),
+            Self::Xdp => write!(f, "XDP eBPF (driver-level)"),
+            Self::AfXdp => write!(f, "AF_XDP zero-copy"),
             Self::DpdkUserspace => write!(f, "DPDK / userspace PMD"),
-            Self::Hybrid        => write!(f, "Hybrid (XDP + AF_XDP)"),
+            Self::Hybrid => write!(f, "Hybrid (XDP + AF_XDP)"),
         }
     }
 }
@@ -140,23 +146,24 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
     // /sys/class/net/<ifc>/device is a symlink to the PCI device directory.
     let pci_address = fs::read_link(format!("{base}/device"))
         .ok()
-        .and_then(|p| {
-            p.file_name()
-                .map(|n| n.to_string_lossy().to_string())
-        });
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let pci_base = pci_address.as_ref()
+    let pci_base = pci_address
+        .as_ref()
         .map(|addr| format!("/sys/bus/pci/devices/{addr}"));
 
-    let pci_vendor_id = pci_base.as_ref()
+    let pci_vendor_id = pci_base
+        .as_ref()
         .and_then(|b| fs::read_to_string(format!("{b}/vendor")).ok())
         .map(|s| s.trim().to_string());
 
-    let pci_device_id = pci_base.as_ref()
+    let pci_device_id = pci_base
+        .as_ref()
         .and_then(|b| fs::read_to_string(format!("{b}/device")).ok())
         .map(|s| s.trim().to_string());
 
-    let numa_node = pci_base.as_ref()
+    let numa_node = pci_base
+        .as_ref()
         .and_then(|b| fs::read_to_string(format!("{b}/numa_node")).ok())
         .and_then(|s| s.trim().parse::<i32>().ok());
 
@@ -166,16 +173,19 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
     let (dpdk_bound, userspace_driver) = detect_dpdk_driver(&pci_address, &pci_base);
 
     // ── SR-IOV ───────────────────────────────────────────────────────────────
-    let sriov_vfs_enabled = pci_base.as_ref()
+    let sriov_vfs_enabled = pci_base
+        .as_ref()
         .and_then(|b| fs::read_to_string(format!("{b}/sriov_numvfs")).ok())
         .and_then(|s| s.trim().parse::<u32>().ok());
 
-    let sriov_vfs_total = pci_base.as_ref()
+    let sriov_vfs_total = pci_base
+        .as_ref()
         .and_then(|b| fs::read_to_string(format!("{b}/sriov_totalvfs")).ok())
         .and_then(|s| s.trim().parse::<u32>().ok());
 
     // A VF has a "physfn" symlink inside its PCI device directory.
-    let is_virtual_function = pci_base.as_ref()
+    let is_virtual_function = pci_base
+        .as_ref()
         .map(|b| std::path::Path::new(&format!("{b}/physfn")).exists())
         .unwrap_or(false);
 
@@ -197,14 +207,14 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
 
     // ── Bypass summary ────────────────────────────────────────────────────────
     let bypass_mode = {
-        let has_xdp   = !xdp_prog_ids.is_empty();
+        let has_xdp = !xdp_prog_ids.is_empty();
         let has_afxdp = afxdp_sockets > 0;
         match (dpdk_bound, has_xdp, has_afxdp) {
-            (true, _, _)       => BypassMode::DpdkUserspace,
-            (_, true, true)    => BypassMode::Hybrid,
-            (_, true, false)   => BypassMode::Xdp,
-            (_, false, true)   => BypassMode::AfXdp,
-            _                  => BypassMode::KernelStack,
+            (true, _, _) => BypassMode::DpdkUserspace,
+            (_, true, true) => BypassMode::Hybrid,
+            (_, true, false) => BypassMode::Xdp,
+            (_, false, true) => BypassMode::AfXdp,
+            _ => BypassMode::KernelStack,
         }
     };
 
@@ -240,11 +250,16 @@ fn count_afxdp_sockets(name: &str) -> usize {
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
         .unwrap_or(0);
-    if ifindex == 0 { return 0; }
+    if ifindex == 0 {
+        return 0;
+    }
 
-    let Ok(content) = fs::read_to_string("/proc/net/xdp") else { return 0 };
-    content.lines()
-        .skip(1)  // header
+    let Ok(content) = fs::read_to_string("/proc/net/xdp") else {
+        return 0;
+    };
+    content
+        .lines()
+        .skip(1) // header
         .filter(|line| {
             let cols: Vec<&str> = line.split_whitespace().collect();
             // column 3 is ifindex (0-based col index)
@@ -253,16 +268,12 @@ fn count_afxdp_sockets(name: &str) -> usize {
         .count()
 }
 
-const USERSPACE_DRIVERS: &[&str] = &[
-    "vfio-pci",
-    "igb_uio",
-    "uio_pci_generic",
-];
+const USERSPACE_DRIVERS: &[&str] = &["vfio-pci", "igb_uio", "uio_pci_generic"];
 
 /// Detect if the PCI device is bound to a DPDK/userspace driver.
 fn detect_dpdk_driver(
     pci_address: &Option<String>,
-    pci_base:    &Option<String>,
+    pci_base: &Option<String>,
 ) -> (bool, Option<String>) {
     // 1. Check the current driver symlink for the device.
     if let Some(base) = pci_base {
@@ -293,14 +304,20 @@ fn detect_dpdk_driver(
 /// /sys/class/net/<ifc>/queues/rx-N and tx-N.
 fn count_queues(name: &str) -> (usize, usize, usize) {
     let queues_dir = format!("/sys/class/net/{name}/queues");
-    let Ok(entries) = fs::read_dir(&queues_dir) else { return (0, 0, 0) };
+    let Ok(entries) = fs::read_dir(&queues_dir) else {
+        return (0, 0, 0);
+    };
 
     let mut rx = 0usize;
     let mut tx = 0usize;
     for entry in entries.flatten() {
         let n = entry.file_name().to_string_lossy().to_string();
-        if n.starts_with("rx-") { rx += 1; }
-        if n.starts_with("tx-") { tx += 1; }
+        if n.starts_with("rx-") {
+            rx += 1;
+        }
+        if n.starts_with("tx-") {
+            tx += 1;
+        }
     }
     let combined = rx.min(tx);
     (rx, tx, combined)
@@ -313,24 +330,28 @@ fn read_hw_features(name: &str) -> Vec<String> {
     let Ok(content) = fs::read_to_string(format!("/sys/class/net/{name}/features")) else {
         return Vec::new();
     };
-    content.lines()
+    content
+        .lines()
         .filter_map(|line| {
             let mut parts = line.split_whitespace();
-            let feat  = parts.next()?;
+            let feat = parts.next()?;
             let state = parts.next()?;
-            if state == "on" { Some(feat.to_string()) } else { None }
+            if state == "on" {
+                Some(feat.to_string())
+            } else {
+                None
+            }
         })
         .collect()
 }
-
 
 /// Return info for a single interface by name.
 pub fn get_nic_info(name: &str) -> io::Result<NicInfo> {
     let base = format!("/sys/class/net/{name}");
 
     let state = read_sysfs(&base, "operstate").unwrap_or_else(|_| "unknown".to_string());
-    let mac   = read_sysfs(&base, "address").unwrap_or_else(|_| "??:??:??:??:??:??".to_string());
-    let mtu   = read_sysfs(&base, "mtu")
+    let mac = read_sysfs(&base, "address").unwrap_or_else(|_| "??:??:??:??:??:??".to_string());
+    let mtu = read_sysfs(&base, "mtu")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
@@ -348,8 +369,8 @@ pub fn get_nic_info(name: &str) -> io::Result<NicInfo> {
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
 
-    let (rx_bytes, rx_packets, rx_errors, rx_dropped,
-         tx_bytes, tx_packets, tx_errors, tx_dropped) = read_stats(name);
+    let (rx_bytes, rx_packets, rx_errors, rx_dropped, tx_bytes, tx_packets, tx_errors, tx_dropped) =
+        read_stats(name);
 
     let ip_addresses = read_ip_addresses(name);
 
@@ -417,8 +438,9 @@ fn read_stats(name: &str) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
             .filter_map(|s| s.parse().ok())
             .collect();
         if nums.len() >= 16 {
-            return (nums[0], nums[1], nums[2], nums[3],
-                    nums[8], nums[9], nums[10], nums[11]);
+            return (
+                nums[0], nums[1], nums[2], nums[3], nums[8], nums[9], nums[10], nums[11],
+            );
         }
     }
     zero
@@ -553,13 +575,17 @@ fn read_ipv4_via_ifindex(name: &str, _ifindex: u32, fib_trie: &str) -> Vec<Strin
                 let mut found_local = false;
                 while j < lines.len() && j < i + 10 {
                     let l = lines[j].trim();
-                    if l.contains("host LOCAL") { found_local = true; }
+                    if l.contains("host LOCAL") {
+                        found_local = true;
+                    }
                     if found_local && l.contains(&format!("dev {name}")) {
                         addrs.push(format!("{ip}/32"));
                         break;
                     }
                     // Stop if we hit another IP node
-                    if l.starts_with("+--") && j != i { break; }
+                    if l.starts_with("+--") && j != i {
+                        break;
+                    }
                     j += 1;
                 }
             }
