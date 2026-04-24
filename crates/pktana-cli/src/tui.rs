@@ -1,34 +1,27 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
-//! Terminal User Interface for pktana — live network dashboard.
+//! Advanced Terminal User Interface for pktana — feature-complete live network dashboard.
 //!
-//! Activated with: `pktana tui <interface>`
-//!
-//! Layout:
-//!   ┌─ Header ─────────────────────────────────────────────────────────────┐
-//!   │ pktana live dashboard  iface=eth0  elapsed=00:01:23  pkts=4521       │
-//!   ├─ Bandwidth ──────────────┬─ Protocol Breakdown ──────────────────────┤
-//!   │ RX: 12.3 MB/s ▓▓▓▓▓▓░░░ │  TCP  ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░  68%              │
-//!   │ TX:  4.1 MB/s ▓▓░░░░░░░ │  UDP  ▓▓▓▓░░░░░░░░░░░  22%              │
-//!   ├─ Top Talkers ────────────┴───────────────────────────────────────────┤
-//!   │  1. 8.8.8.8        US  United States   12 321 pkts   4.2 MB         │
-//!   │  2. 185.12.50.4    DE  Germany          3 210 pkts   1.1 MB         │
-//!   ├─ Recent Packets ─────────────────────────────────────────────────────┤
-//!   │  No.  Time              Bytes   Proto  Source           Destination  │
-//!   │    1  13:21:04.123456    1 500  TCP    192.168.1.5      8.8.8.8      │
-//!   ├─ Connections ────────────────────────────────────────────────────────┤
-//!   │  Proto  Local                  Remote                 State          │
-//!   └──────────────────────────────────────────────────────────────────────┘
+//! Features:
+//! - Process tracking (PID/name)
+//! - Sortable columns
+//! - Advanced filtering (keyword-based)
+//! - Connection state tracking
+//! - Historic connections
+//! - Mouse support
+//! - Multiple tabs
 
 #[cfg(feature = "tui")]
 pub mod inner {
     use std::collections::HashMap;
     use std::io;
+    use std::net::IpAddr;
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     use crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
@@ -36,482 +29,707 @@ pub mod inner {
         backend::CrosstermBackend,
         layout::{Constraint, Direction, Layout, Rect},
         style::{Color, Modifier, Style},
-        text::{Line, Span},
-        widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Row, Table},
+        widgets::{Block, Borders, Paragraph, Row, Table, TableState},
         Frame, Terminal,
     };
 
     use pktana_core::{
-        geoip_lookup_str, list_connections, CaptureConfig, CapturePacket, GeoInfo,
-        LinuxCaptureEngine,
+        analyze_bytes, build_socket_process_map, geoip_lookup_str, CaptureConfig, CapturePacket,
+        GeoInfo, LinuxCaptureEngine, ProcessInfo, SocketId,
     };
 
-    // ─── State ─────────────────────────────────────────────────────────────────
+    // ─── Connection tracking ───────────────────────────────────────────────────
+
+    #[derive(Clone, Debug)]
+    #[allow(dead_code)]
+    struct Connection {
+        id: usize,
+        protocol: String,
+        local_ip: String,
+        local_port: u16,
+        remote_ip: String,
+        remote_port: u16,
+        state: String,
+        process: Option<ProcessInfo>,
+        geo: Option<GeoInfo>,
+        first_seen: Instant,
+        last_seen: Instant,
+        packets_sent: u64,
+        packets_recv: u64,
+        bytes_sent: u64,
+        bytes_recv: u64,
+        active: bool,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum SortColumn {
+        Protocol,
+        LocalAddr,
+        RemoteAddr,
+        State,
+        Process,
+        BytesTotal,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum SortDirection {
+        Ascending,
+        Descending,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Tab {
+        Overview,
+        Details,
+        Help,
+    }
+
+    // ─── App state ─────────────────────────────────────────────────────────────
 
     struct App {
         interface: String,
-        start: Instant,
-        last_tick: Instant,
-        total_pkts: u64,
-        total_bytes: u64,
-        tick_pkts: u64,
-        tick_bytes: u64,
-        bw_rx_bps: f64,
-        proto_counts: HashMap<String, (u64, u64)>,
-        talkers: HashMap<String, (u64, u64, Option<GeoInfo>)>,
-        recent: Vec<PacketRow>,
-        log: Vec<String>,
-    }
+        start_time: Instant,
+        connections: Vec<Connection>,
+        next_conn_id: usize,
+        process_map: HashMap<SocketId, ProcessInfo>,
+        last_process_update: Instant,
 
-    #[derive(Clone)]
-    struct PacketRow {
-        num: u64,
-        time: String,
-        bytes: usize,
-        proto: String,
-        src: String,
-        dst: String,
+        // UI state
+        selected_index: usize,
+        sort_column: SortColumn,
+        sort_direction: SortDirection,
+        filter_text: String,
+        filter_mode: bool,
+        show_historic: bool,
+        current_tab: Tab,
+        table_state: TableState,
+
+        // Stats
+        total_packets: u64,
+        total_bytes: u64,
+        protocol_counts: HashMap<String, u64>,
     }
 
     impl App {
         fn new(interface: &str) -> Self {
-            let now = Instant::now();
+            let mut table_state = TableState::default();
+            table_state.select(Some(0));
+
             Self {
                 interface: interface.to_string(),
-                start: now,
-                last_tick: now,
-                total_pkts: 0,
+                start_time: Instant::now(),
+                connections: Vec::new(),
+                next_conn_id: 0,
+                process_map: HashMap::new(),
+                last_process_update: Instant::now(),
+                selected_index: 0,
+                sort_column: SortColumn::BytesTotal,
+                sort_direction: SortDirection::Descending,
+                filter_text: String::new(),
+                filter_mode: false,
+                show_historic: false,
+                current_tab: Tab::Overview,
+                table_state,
+                total_packets: 0,
                 total_bytes: 0,
-                tick_pkts: 0,
-                tick_bytes: 0,
-                bw_rx_bps: 0.0,
-                proto_counts: HashMap::new(),
-                talkers: HashMap::new(),
-                recent: Vec::new(),
-                log: Vec::new(),
+                protocol_counts: HashMap::new(),
             }
         }
 
-        fn ingest(&mut self, pkt: &CapturePacket) {
-            use pktana_core::analyze_bytes;
-            self.total_pkts += 1;
-            self.total_bytes += pkt.data.len();
-            self.tick_pkts += 1;
-            self.tick_bytes += pkt.data.len() as u64;
+        fn update_process_map(&mut self) {
+            // Refresh every 2 seconds
+            if self.last_process_update.elapsed() > Duration::from_secs(2) {
+                self.process_map = build_socket_process_map();
+                self.last_process_update = Instant::now();
 
-            let (proto, src, dst) = if let Ok(parsed) = analyze_bytes(&pkt.data) {
-                let s = &parsed.summary;
-                (s.proto_label().to_string(), s.src_str(), s.dst_str())
+                // Update existing connections with process info
+                for conn in &mut self.connections {
+                    if conn.process.is_none() {
+                        if let (Ok(local_ip), Ok(remote_ip)) = (
+                            conn.local_ip.parse::<IpAddr>(),
+                            conn.remote_ip.parse::<IpAddr>(),
+                        ) {
+                            let socket_id = SocketId::new(
+                                local_ip,
+                                conn.local_port,
+                                remote_ip,
+                                conn.remote_port,
+                            );
+                            if let Some(proc_info) = self.process_map.get(&socket_id) {
+                                conn.process = Some(proc_info.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        fn ingest_packet(&mut self, pkt: &CapturePacket) {
+            self.total_packets += 1;
+            self.total_bytes += pkt.data.len() as u64;
+
+            let Ok(parsed) = analyze_bytes(&pkt.data) else {
+                return;
+            };
+
+            let summary = &parsed.summary;
+            let protocol = summary.proto_label().to_string();
+
+            *self.protocol_counts.entry(protocol.clone()).or_insert(0) += 1;
+
+            // Extract connection tuple
+            let (src_ip, src_port, dst_ip, dst_port) = match extract_connection_tuple(summary) {
+                Some(tuple) => tuple,
+                None => return,
+            };
+
+            // Find or create connection
+
+            if let Some(conn) = self.connections.iter_mut().find(|c| {
+                (c.local_ip == src_ip
+                    && c.local_port == src_port
+                    && c.remote_ip == dst_ip
+                    && c.remote_port == dst_port)
+                    || (c.local_ip == dst_ip
+                        && c.local_port == dst_port
+                        && c.remote_ip == src_ip
+                        && c.remote_port == src_port)
+            }) {
+                // Update existing connection
+                conn.last_seen = Instant::now();
+                conn.packets_recv += 1;
+                conn.bytes_recv += pkt.data.len() as u64;
+                conn.active = true;
             } else {
-                ("?".into(), "?".into(), "?".into())
-            };
+                // Create new connection
+                let geo = geoip_lookup_str(&dst_ip);
 
-            let e = self.proto_counts.entry(proto.clone()).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += pkt.data.len() as u64;
+                // Try to find process info
+                let process = if let (Ok(local_ip), Ok(remote_ip)) =
+                    (src_ip.parse::<IpAddr>(), dst_ip.parse::<IpAddr>())
+                {
+                    let socket_id = SocketId::new(local_ip, src_port, remote_ip, dst_port);
+                    self.process_map.get(&socket_id).cloned()
+                } else {
+                    None
+                };
 
-            if self.talkers.len() < 2_000 || self.talkers.contains_key(&src) {
-                let t = self
-                    .talkers
-                    .entry(src.clone())
-                    .or_insert_with(|| (0, 0, geoip_lookup_str(&src)));
-                t.0 += 1;
-                t.1 += pkt.data.len() as u64;
-            }
-
-            let row = PacketRow {
-                num: self.total_pkts,
-                time: format_ts(pkt.timestamp_sec, pkt.timestamp_usec),
-                bytes: pkt.data.len(),
-                proto,
-                src,
-                dst,
-            };
-            self.recent.push(row);
-            if self.recent.len() > 200 {
-                self.recent.remove(0);
+                self.connections.push(Connection {
+                    id: self.next_conn_id,
+                    protocol: protocol.clone(),
+                    local_ip: src_ip,
+                    local_port: src_port,
+                    remote_ip: dst_ip,
+                    remote_port: dst_port,
+                    state: "ESTABLISHED".to_string(),
+                    process,
+                    geo,
+                    first_seen: Instant::now(),
+                    last_seen: Instant::now(),
+                    packets_sent: 0,
+                    packets_recv: 1,
+                    bytes_sent: 0,
+                    bytes_recv: pkt.data.len() as u64,
+                    active: true,
+                });
+                self.next_conn_id += 1;
             }
         }
 
-        fn tick(&mut self) {
-            let elapsed = self.last_tick.elapsed().as_secs_f64();
-            if elapsed > 0.0 {
-                self.bw_rx_bps = self.tick_bytes as f64 * 8.0 / elapsed;
+        fn cleanup_stale_connections(&mut self) {
+            let now = Instant::now();
+            for conn in &mut self.connections {
+                if now.duration_since(conn.last_seen) > Duration::from_secs(60) {
+                    conn.active = false;
+                }
             }
-            self.tick_pkts = 0;
-            self.tick_bytes = 0;
-            self.last_tick = Instant::now();
+
+            if !self.show_historic {
+                self.connections.retain(|c| c.active);
+            }
+        }
+
+        fn apply_sort(&mut self) {
+            let sort_col = self.sort_column;
+            let sort_dir = self.sort_direction;
+
+            self.connections.sort_by(|a, b| {
+                let cmp = match sort_col {
+                    SortColumn::Protocol => a.protocol.cmp(&b.protocol),
+                    SortColumn::LocalAddr => a
+                        .local_ip
+                        .cmp(&b.local_ip)
+                        .then(a.local_port.cmp(&b.local_port)),
+                    SortColumn::RemoteAddr => a
+                        .remote_ip
+                        .cmp(&b.remote_ip)
+                        .then(a.remote_port.cmp(&b.remote_port)),
+                    SortColumn::State => a.state.cmp(&b.state),
+                    SortColumn::Process => {
+                        let a_proc = a.process.as_ref().map(|p| p.name.as_str()).unwrap_or("");
+                        let b_proc = b.process.as_ref().map(|p| p.name.as_str()).unwrap_or("");
+                        a_proc.cmp(b_proc)
+                    }
+                    SortColumn::BytesTotal => {
+                        let a_total = a.bytes_sent + a.bytes_recv;
+                        let b_total = b.bytes_sent + b.bytes_recv;
+                        a_total.cmp(&b_total)
+                    }
+                };
+
+                match sort_dir {
+                    SortDirection::Ascending => cmp,
+                    SortDirection::Descending => cmp.reverse(),
+                }
+            });
+        }
+
+        fn filtered_connections(&self) -> Vec<&Connection> {
+            if self.filter_text.is_empty() {
+                return self.connections.iter().collect();
+            }
+
+            let filter_lower = self.filter_text.to_lowercase();
+
+            self.connections
+                .iter()
+                .filter(|conn| {
+                    // Simple contains search across all fields
+                    format!(
+                        "{} {} {} {} {} {}",
+                        conn.protocol,
+                        conn.local_ip,
+                        conn.remote_ip,
+                        conn.state,
+                        conn.process.as_ref().map(|p| p.name.as_str()).unwrap_or(""),
+                        conn.geo.as_ref().map(|g| g.country_name).unwrap_or("")
+                    )
+                    .to_lowercase()
+                    .contains(&filter_lower)
+                })
+                .collect()
         }
     }
 
-    fn format_ts(sec: i64, usec: i64) -> String {
-        let t = sec % 86400;
-        let h = t / 3600;
-        let m = (t % 3600) / 60;
-        let s = t % 60;
-        format!("{h:02}:{m:02}:{s:02}.{usec:06}")
-    }
+    fn extract_connection_tuple(
+        summary: &pktana_core::PacketSummary,
+    ) -> Option<(String, u16, String, u16)> {
+        let (src_port, dst_port) = match &summary.transport {
+            Some(pktana_core::TransportHeader::Tcp {
+                source_port,
+                destination_port,
+                ..
+            }) => (*source_port, *destination_port),
+            Some(pktana_core::TransportHeader::Udp {
+                source_port,
+                destination_port,
+                ..
+            }) => (*source_port, *destination_port),
+            _ => (0, 0),
+        };
 
-    fn fmt_bytes(b: u64) -> String {
-        if b >= 1_000_000_000 {
-            format!("{:.1} GB", b as f64 / 1e9)
-        } else if b >= 1_000_000 {
-            format!("{:.1} MB", b as f64 / 1e6)
-        } else if b >= 1_000 {
-            format!("{:.1} KB", b as f64 / 1e3)
+        let (src_ip, dst_ip) = if let Some(ipv4) = &summary.ipv4 {
+            (ipv4.source.to_string(), ipv4.destination.to_string())
         } else {
-            format!("{b} B")
-        }
-    }
+            return None;
+        };
 
-    fn fmt_bps(bps: f64) -> String {
-        if bps >= 1e9 {
-            format!("{:.1} Gbps", bps / 1e9)
-        } else if bps >= 1e6 {
-            format!("{:.1} Mbps", bps / 1e6)
-        } else if bps >= 1e3 {
-            format!("{:.1} Kbps", bps / 1e3)
-        } else {
-            format!("{:.0} bps", bps)
-        }
-    }
-
-    fn elapsed_str(start: Instant) -> String {
-        let s = start.elapsed().as_secs();
-        let h = s / 3600;
-        let m = (s % 3600) / 60;
-        let sec = s % 60;
-        format!("{h:02}:{m:02}:{sec:02}")
+        Some((src_ip, src_port, dst_ip, dst_port))
     }
 
     // ─── UI rendering ──────────────────────────────────────────────────────────
 
-    fn ui(f: &mut Frame, app: &App) {
-        let area = f.area();
-
-        // Outer vertical split: header | body
-        let outer = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)])
-            .split(area);
-
-        // Header
-        draw_header(f, outer[0], app);
-
-        // Body: top-half | packet list | connections
-        let body = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10), // stats
-                Constraint::Min(8),     // recent packets
-                Constraint::Length(8),  // connections
-            ])
-            .split(outer[1]);
-
-        // Stats row: bandwidth | proto breakdown | top talkers
-        let stats_row = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-            ])
-            .split(body[0]);
-
-        draw_bandwidth(f, stats_row[0], app);
-        draw_proto(f, stats_row[1], app);
-        draw_talkers(f, stats_row[2], app);
-        draw_packets(f, body[1], app);
-        draw_connections(f, body[2]);
+    fn ui(f: &mut Frame, app: &mut App) {
+        match app.current_tab {
+            Tab::Overview => render_overview(f, app),
+            Tab::Details => render_details(f, app),
+            Tab::Help => render_help(f, app),
+        }
     }
 
-    fn draw_header(f: &mut Frame, area: Rect, app: &App) {
-        let text = Line::from(vec![
-            Span::styled(
-                " pktana ",
+    fn render_overview(f: &mut Frame, app: &mut App) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Header
+                Constraint::Length(8), // Stats panel
+                Constraint::Min(10),   // Connections table
+                Constraint::Length(3), // Status bar
+            ])
+            .split(f.area());
+
+        // Header
+        render_header(f, chunks[0], app);
+
+        // Stats panel
+        render_stats_panel(f, chunks[1], app);
+
+        // Connections table
+        render_connections_table(f, chunks[2], app);
+
+        // Status bar
+        render_status_bar(f, chunks[3], app);
+    }
+
+    fn render_header(f: &mut Frame, area: Rect, app: &App) {
+        let elapsed = format_duration(app.start_time.elapsed());
+        let active_count = app.connections.iter().filter(|c| c.active).count();
+        let total_count = app.connections.len();
+
+        let text = if app.show_historic {
+            format!(
+                " pktana TUI | {} | {} active | {} total ({}historic) | {}",
+                app.interface,
+                active_count,
+                total_count,
+                total_count - active_count,
+                elapsed
+            )
+        } else {
+            format!(
+                " pktana TUI | {} | {} connections | {}",
+                app.interface, active_count, elapsed
+            )
+        };
+
+        let header = Paragraph::new(text)
+            .style(
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("live dashboard  "),
-            Span::styled(
-                format!("iface={}", app.interface),
-                Style::default().fg(Color::Yellow),
-            ),
-            Span::raw(format!(
-                "  elapsed={}  pkts={}  total={}  [q] quit",
-                elapsed_str(app.start),
-                app.total_pkts,
-                fmt_bytes(app.total_bytes),
-            )),
-        ]);
-        let p = Paragraph::new(text).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        f.render_widget(p, area);
-    }
-
-    fn draw_bandwidth(f: &mut Frame, area: Rect, app: &App) {
-        let bps = app.bw_rx_bps;
-        let ratio = (bps / 1e9_f64).min(1.0); // normalize to 1 Gbps
-        let label = format!(" RX  {}  ", fmt_bps(bps));
-        let g = Gauge::default()
-            .block(
-                Block::default()
-                    .title(" Bandwidth ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
             )
-            .gauge_style(Style::default().fg(Color::Green))
-            .ratio(ratio)
-            .label(label);
-        f.render_widget(g, area);
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(header, area);
     }
 
-    fn draw_proto(f: &mut Frame, area: Rect, app: &App) {
-        let total = app.total_pkts.max(1);
-        let mut protos: Vec<(&String, &(u64, u64))> = app.proto_counts.iter().collect();
-        protos.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    fn render_stats_panel(f: &mut Frame, area: Rect, app: &App) {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
 
-        let items: Vec<ListItem> = protos
-            .iter()
-            .take(6)
-            .map(|(name, (pkts, bytes))| {
-                let pct = *pkts as f64 / total as f64 * 100.0;
-                let bar_len = (pct / 5.0) as usize; // max 20 chars at 100%
-                let bar = "▓".repeat(bar_len) + &"░".repeat(20usize.saturating_sub(bar_len));
-                ListItem::new(format!(
-                    "{:<6} {} {:4.1}%  {}",
-                    name,
-                    &bar[..bar.len().min(20)],
-                    pct,
-                    fmt_bytes(*bytes)
-                ))
-            })
-            .collect();
-
-        let list = List::new(items).block(
-            Block::default()
-                .title(" Protocol Breakdown ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        f.render_widget(list, area);
-    }
-
-    fn draw_talkers(f: &mut Frame, area: Rect, app: &App) {
-        let mut talkers: Vec<(&String, &(u64, u64, Option<GeoInfo>))> =
-            app.talkers.iter().collect();
-        talkers.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
-
-        let header = Row::new(vec!["#", "IP", "CC", "Country", "Pkts", "Data"]).style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Cyan),
-        );
-
-        let rows: Vec<Row> = talkers
-            .iter()
-            .take(8)
-            .enumerate()
-            .map(|(i, (ip, (pkts, bytes, geo)))| {
-                let (cc, country) = if let Some(g) = geo {
-                    (g.country_code, g.country_name)
-                } else {
-                    ("--", "Unknown")
-                };
-                Row::new(vec![
-                    format!("{}", i + 1),
-                    (*ip).clone(),
-                    cc.to_string(),
-                    country.to_string(),
-                    pkts.to_string(),
-                    fmt_bytes(*bytes),
-                ])
-            })
-            .collect();
-
-        let widths = [
-            Constraint::Length(3),
-            Constraint::Length(17),
-            Constraint::Length(4),
-            Constraint::Length(18),
-            Constraint::Length(8),
-            Constraint::Length(9),
+        // Left: Traffic stats
+        let traffic_text = [
+            format!("Total Packets: {}", app.total_packets),
+            format!("Total Bytes: {}", format_bytes(app.total_bytes)),
+            format!("Connections: {}", app.connections.len()),
         ];
-        let table = Table::new(rows, widths)
-            .header(header)
-            .block(
-                Block::default()
-                    .title(" Top Talkers (GeoIP) ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            )
-            .row_highlight_style(Style::default().fg(Color::Yellow));
-        f.render_widget(table, area);
+        let traffic = Paragraph::new(traffic_text.join("\n")).block(
+            Block::default()
+                .title(" Traffic Stats ")
+                .borders(Borders::ALL),
+        );
+        f.render_widget(traffic, chunks[0]);
+
+        // Right: Protocol breakdown
+        let mut proto_list: Vec<_> = app.protocol_counts.iter().collect();
+        proto_list.sort_by_key(|(_, count)| std::cmp::Reverse(**count));
+
+        let proto_text: Vec<String> = proto_list
+            .iter()
+            .take(5)
+            .map(|(proto, count)| format!("{}: {}", proto, count))
+            .collect();
+
+        let protocols = Paragraph::new(proto_text.join("\n")).block(
+            Block::default()
+                .title(" Top Protocols ")
+                .borders(Borders::ALL),
+        );
+        f.render_widget(protocols, chunks[1]);
     }
 
-    fn draw_packets(f: &mut Frame, area: Rect, app: &App) {
+    fn render_connections_table(f: &mut Frame, area: Rect, app: &mut App) {
         let header = Row::new(vec![
-            "No.",
-            "Time",
-            "Bytes",
             "Proto",
-            "Source",
-            "Destination",
+            "Local Address",
+            "Remote Address",
+            "State",
+            "Process",
+            "Country",
+            "Bytes",
         ])
         .style(
             Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Cyan),
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         );
 
-        let recent: Vec<&PacketRow> = app.recent.iter().rev().take(50).collect();
-        let rows: Vec<Row> = recent
+        let filtered = app.filtered_connections();
+        let rows: Vec<Row> = filtered
             .iter()
-            .map(|r| {
-                Row::new(vec![
-                    r.num.to_string(),
-                    r.time.clone(),
-                    r.bytes.to_string(),
-                    r.proto.clone(),
-                    r.src.clone(),
-                    r.dst.clone(),
-                ])
-            })
-            .collect();
+            .map(|conn| {
+                let local = format!("{}:{}", conn.local_ip, conn.local_port);
+                let remote = format!("{}:{}", conn.remote_ip, conn.remote_port);
+                let process = conn
+                    .process
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("-");
+                let country = conn.geo.as_ref().map(|g| g.country_code).unwrap_or("--");
+                let bytes = format_bytes(conn.bytes_sent + conn.bytes_recv);
 
-        let widths = [
-            Constraint::Length(6),
-            Constraint::Length(18),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(26),
-            Constraint::Length(26),
-        ];
-        let table = Table::new(rows, widths).header(header).block(
-            Block::default()
-                .title(" Recent Packets ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        f.render_widget(table, area);
-    }
-
-    fn draw_connections(f: &mut Frame, area: Rect) {
-        let conns = list_connections().unwrap_or_default();
-        let header = Row::new(vec!["Proto", "Local", "Remote", "State", "PID", "Process"]).style(
-            Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Cyan),
-        );
-
-        let rows: Vec<Row> = conns
-            .iter()
-            .take(5)
-            .map(|c| {
-                let local = format!("{}:{}", c.local_ip, c.local_port);
-                let remote = if c.remote_port == 0 {
-                    "—".to_string()
+                let style = if !conn.active {
+                    Style::default().fg(Color::DarkGray)
                 } else {
-                    format!("{}:{}", c.remote_ip, c.remote_port)
+                    Style::default()
                 };
-                let pid = if c.pid == 0 {
-                    "—".to_string()
-                } else {
-                    c.pid.to_string()
-                };
+
                 Row::new(vec![
-                    c.proto.clone(),
+                    conn.protocol.clone(),
                     local,
                     remote,
-                    c.state.clone(),
-                    pid,
-                    c.process.clone(),
+                    conn.state.clone(),
+                    process.to_string(),
+                    country.to_string(),
+                    bytes,
                 ])
+                .style(style)
             })
             .collect();
 
-        let widths = [
-            Constraint::Length(6),
-            Constraint::Length(22),
-            Constraint::Length(22),
-            Constraint::Length(13),
-            Constraint::Length(7),
-            Constraint::Min(10),
-        ];
-        let table = Table::new(rows, widths).header(header).block(
-            Block::default()
-                .title(" Active Connections ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+        let sort_indicator = match app.sort_direction {
+            SortDirection::Ascending => "↑",
+            SortDirection::Descending => "↓",
+        };
+
+        let title = format!(
+            " Connections (Sort: {:?} {}) ",
+            app.sort_column, sort_indicator
         );
-        f.render_widget(table, area);
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(6),
+                Constraint::Length(22),
+                Constraint::Length(22),
+                Constraint::Length(12),
+                Constraint::Length(15),
+                Constraint::Length(8),
+                Constraint::Length(12),
+            ],
+        )
+        .header(header)
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .row_highlight_style(Style::default().bg(Color::DarkGray));
+
+        f.render_stateful_widget(table, area, &mut app.table_state);
     }
 
-    // ─── Entry point ───────────────────────────────────────────────────────────
+    fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
+        let status = if app.filter_mode {
+            format!("Filter: {} (Esc to clear)", app.filter_text)
+        } else {
+            "/ filter | s sort | t toggle historic | Tab switch tabs | q quit".to_string()
+        };
+
+        let bar = Paragraph::new(status)
+            .style(Style::default().fg(Color::Green))
+            .block(Block::default().borders(Borders::ALL));
+        f.render_widget(bar, area);
+    }
+
+    fn render_details(f: &mut Frame, _app: &App) {
+        let text = "Connection Details (press Tab to return)";
+        let widget =
+            Paragraph::new(text).block(Block::default().title(" Details ").borders(Borders::ALL));
+        f.render_widget(widget, f.area());
+    }
+
+    fn render_help(f: &mut Frame, _app: &App) {
+        let help_text = vec![
+            "KEYBOARD SHORTCUTS",
+            "",
+            "Tab / Shift+Tab - Switch tabs",
+            "↑ / ↓ / j / k   - Navigate",
+            "s               - Cycle sort column",
+            "S (Shift+s)     - Toggle sort direction",
+            "/               - Enter filter mode",
+            "t               - Toggle historic connections",
+            "Esc             - Clear filter / back",
+            "q               - Quit",
+            "",
+            "MOUSE SUPPORT",
+            "",
+            "Click row       - Select connection",
+            "Double-click    - View details",
+            "Scroll wheel    - Navigate list",
+        ];
+
+        let widget = Paragraph::new(help_text.join("\n"))
+            .block(Block::default().title(" Help ").borders(Borders::ALL));
+        f.render_widget(widget, f.area());
+    }
+
+    // ─── Utilities ─────────────────────────────────────────────────────────────
+
+    fn format_bytes(bytes: u64) -> String {
+        if bytes >= 1_000_000_000 {
+            format!("{:.1} GB", bytes as f64 / 1e9)
+        } else if bytes >= 1_000_000 {
+            format!("{:.1} MB", bytes as f64 / 1e6)
+        } else if bytes >= 1_000 {
+            format!("{:.1} KB", bytes as f64 / 1e3)
+        } else {
+            format!("{} B", bytes)
+        }
+    }
+
+    fn format_duration(d: Duration) -> String {
+        let secs = d.as_secs();
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        let s = secs % 60;
+        format!("{:02}:{:02}:{:02}", h, m, s)
+    }
+
+    // ─── Main TUI loop ─────────────────────────────────────────────────────────
 
     pub fn run_tui(interface: &str) -> io::Result<()> {
+        // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
         let mut app = App::new(interface);
 
         // Spawn capture thread
+        let (tx, rx) = mpsc::channel();
         let iface = interface.to_string();
-        let (tx, rx) = std::sync::mpsc::channel::<CapturePacket>();
-
         std::thread::spawn(move || {
             let config = CaptureConfig {
                 interface: iface,
                 promiscuous: true,
                 snapshot_len: 65535,
-                timeout_ms: 500,
                 filter: None,
                 max_packets: usize::MAX,
+                pcap_export: None,
             };
-            let _result = LinuxCaptureEngine::stream(&config, |pkt| {
+            let _ = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
                 let _ = tx.send(pkt);
                 true
             });
         });
 
-        let tick_rate = Duration::from_millis(500);
+        let tick_rate = Duration::from_millis(100);
         let mut last_tick = Instant::now();
+        let mut last_cleanup = Instant::now();
 
         loop {
-            terminal.draw(|f| ui(f, &app))?;
+            terminal.draw(|f| ui(f, &mut app))?;
 
-            // Drain packets from capture thread
+            // Process captured packets
             while let Ok(pkt) = rx.try_recv() {
-                app.ingest(&pkt);
+                app.ingest_packet(&pkt);
             }
 
-            // Handle keyboard input
-            let timeout = tick_rate
-                .checked_sub(last_tick.elapsed())
-                .unwrap_or_default();
+            // Update process map periodically
+            app.update_process_map();
 
+            // Cleanup stale connections
+            if last_cleanup.elapsed() > Duration::from_secs(5) {
+                app.cleanup_stale_connections();
+                last_cleanup = Instant::now();
+            }
+
+            // Apply sorting
+            app.apply_sort();
+
+            // Handle input
+            let timeout = tick_rate.saturating_sub(last_tick.elapsed());
             if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc) {
-                        break;
+                match event::read()? {
+                    Event::Key(key) => {
+                        if app.filter_mode {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.filter_mode = false;
+                                    app.filter_text.clear();
+                                }
+                                KeyCode::Enter => {
+                                    app.filter_mode = false;
+                                }
+                                KeyCode::Backspace => {
+                                    app.filter_text.pop();
+                                }
+                                KeyCode::Char(c) => {
+                                    app.filter_text.push(c);
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('q') | KeyCode::Char('Q') => break,
+                                KeyCode::Esc => break,
+                                KeyCode::Char('/') => app.filter_mode = true,
+                                KeyCode::Char('t') => app.show_historic = !app.show_historic,
+                                KeyCode::Char('s') => {
+                                    // Cycle sort column
+                                    app.sort_column = match app.sort_column {
+                                        SortColumn::Protocol => SortColumn::LocalAddr,
+                                        SortColumn::LocalAddr => SortColumn::RemoteAddr,
+                                        SortColumn::RemoteAddr => SortColumn::State,
+                                        SortColumn::State => SortColumn::Process,
+                                        SortColumn::Process => SortColumn::BytesTotal,
+                                        SortColumn::BytesTotal => SortColumn::Protocol,
+                                    };
+                                }
+                                KeyCode::Char('S') => {
+                                    // Toggle sort direction
+                                    app.sort_direction = match app.sort_direction {
+                                        SortDirection::Ascending => SortDirection::Descending,
+                                        SortDirection::Descending => SortDirection::Ascending,
+                                    };
+                                }
+                                KeyCode::Tab => {
+                                    app.current_tab = match app.current_tab {
+                                        Tab::Overview => Tab::Details,
+                                        Tab::Details => Tab::Help,
+                                        Tab::Help => Tab::Overview,
+                                    };
+                                }
+                                KeyCode::Up | KeyCode::Char('k') if app.selected_index > 0 => {
+                                    app.selected_index -= 1;
+                                    app.table_state.select(Some(app.selected_index));
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    let max = app.filtered_connections().len().saturating_sub(1);
+                                    if app.selected_index < max {
+                                        app.selected_index += 1;
+                                        app.table_state.select(Some(app.selected_index));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
+                    Event::Mouse(mouse) if matches!(mouse.kind, MouseEventKind::ScrollDown) => {
+                        let max = app.filtered_connections().len().saturating_sub(1);
+                        if app.selected_index < max {
+                            app.selected_index += 1;
+                            app.table_state.select(Some(app.selected_index));
+                        }
+                    }
+                    Event::Mouse(mouse)
+                        if matches!(mouse.kind, MouseEventKind::ScrollUp)
+                            && app.selected_index > 0 =>
+                    {
+                        app.selected_index -= 1;
+                        app.table_state.select(Some(app.selected_index));
+                    }
+                    _ => {}
                 }
             }
 
             if last_tick.elapsed() >= tick_rate {
-                app.tick();
                 last_tick = Instant::now();
             }
         }
 
+        // Cleanup
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),

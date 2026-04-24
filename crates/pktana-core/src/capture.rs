@@ -10,6 +10,7 @@ pub struct CaptureConfig {
     pub promiscuous: bool,
     pub snapshot_len: i32,
     pub filter: Option<String>,
+    pub pcap_export: Option<String>,
 }
 
 impl Default for CaptureConfig {
@@ -20,6 +21,7 @@ impl Default for CaptureConfig {
             promiscuous: true,
             snapshot_len: 65_535,
             filter: None,
+            pcap_export: None,
         }
     }
 }
@@ -145,6 +147,17 @@ where
             .map_err(|err| CaptureError::Filter(err.to_string()))?;
     }
 
+    // Setup PCAP export if requested
+    let mut pcap_writer = if let Some(export_path) = &config.pcap_export {
+        Some(
+            capture
+                .savefile(export_path)
+                .map_err(|err| CaptureError::Open(format!("PCAP export: {}", err)))?,
+        )
+    } else {
+        None
+    };
+
     let mut stats = CaptureStats {
         packets_seen: 0,
         bytes_seen: 0,
@@ -156,6 +169,11 @@ where
         }
         match capture.next_packet() {
             Ok(packet) => {
+                // Write to PCAP file if export is enabled
+                if let Some(ref mut writer) = pcap_writer {
+                    writer.write(&packet);
+                }
+
                 let data = packet.data.to_vec();
                 stats.packets_seen += 1;
                 stats.bytes_seen += data.len();

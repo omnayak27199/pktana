@@ -15,7 +15,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 echo "Building release binary..."
-cargo build --release -p pktana-cli
+cargo build --release -p pktana-cli --features pcap,tui
 
 rm -rf "${PACKAGE_DIR}"
 mkdir -p "${PACKAGE_DIR}"

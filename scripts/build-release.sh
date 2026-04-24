@@ -12,7 +12,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 echo "Building pktana release binary..."
-cargo build --release -p pktana-cli
+cargo build --release -p pktana-cli --features pcap,tui
 
 echo
 echo "Built:"
