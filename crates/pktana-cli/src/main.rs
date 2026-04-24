@@ -1,6 +1,8 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+mod tui;
+
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
@@ -131,6 +133,15 @@ fn run() -> Result<(), CliError> {
 
         // ── NIC auto-refresh (replaces watch ip -s) ───────────────────────────
         "watch" => run_watch(&args[2..]),
+
+        // ── TUI live dashboard ────────────────────────────────────────────────
+        "tui" => {
+            let iface = args.get(2).map(|s| s.as_str()).unwrap_or("eth0");
+            tui::inner::run_tui(iface).map_err(CliError::Io)
+        }
+
+        // ── GeoIP lookup ──────────────────────────────────────────────────────
+        "geoip" | "geo" => run_geoip(&args[2..]),
 
         "help" | "--help" | "-h" | "-?" => match args.get(2).map(|s| s.as_str()) {
             Some(topic) => print_doc(topic),
@@ -2089,4 +2100,30 @@ fn dns_type_str(t: u16) -> &'static str {
         255 => "ANY",
         _ => "?",
     }
+}
+
+// ─── GeoIP lookup command ─────────────────────────────────────────────────────
+
+fn run_geoip(args: &[String]) -> Result<(), CliError> {
+    use pktana_core::geoip_lookup_str;
+
+    if args.is_empty() {
+        return Err(CliError::Usage(
+            "usage: pktana geoip <IP> [IP2] [IP3] ...".into(),
+        ));
+    }
+
+    println!("{:<18}  {:<4}  {:<9}  Country", "IP", "CC", "Continent");
+    println!("{}", "─".repeat(55));
+
+    for ip in args {
+        match geoip_lookup_str(ip) {
+            Some(geo) => println!(
+                "{:<18}  {:<4}  {:<9}  {}",
+                ip, geo.country_code, geo.continent, geo.country_name
+            ),
+            None => println!("{:<18}  --    --         Private / Unknown", ip),
+        }
+    }
+    Ok(())
 }
