@@ -130,11 +130,18 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "%_gpg_name  ${GPG_ID}" >> ~/.rpmmacros
-          echo "%__gpg_sign_cmd  %{__gpg} gpg --batch --no-armor --passphrase-fd 3 --pinentry-mode loopback -u \"%{_gpg_name}\" -sbo %{__signature_filename} %{__plaintext_filename}" >> ~/.rpmmacros
+          # Write passphrase to a temp file (avoids --passphrase-fd which Ubuntu rpm lacks)
+          echo "$GPG_PASSPHRASE" > /tmp/gpg-pass
+          chmod 600 /tmp/gpg-pass
+
+          cat >> ~/.rpmmacros << EOF
+          %_gpg_name ${GPG_ID}
+          %__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-pass -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+          EOF
+
           RPM_PATH=$(ls dist/rpmbuild/RPMS/x86_64/pktana-*.rpm)
-          printf '%s' "$GPG_PASSPHRASE" | \
-            rpmsign --addsign --passphrase-fd=0 "${RPM_PATH}"
+          rpmsign --addsign "${RPM_PATH}"
+          rm -f /tmp/gpg-pass
 
       - name: Generate SHA256 checksums
         run: |
