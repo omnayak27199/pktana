@@ -81,6 +81,8 @@ jobs:
     needs: build-and-test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -130,14 +132,14 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          # Write passphrase to a temp file (avoids --passphrase-fd which Ubuntu rpm lacks)
-          echo "$GPG_PASSPHRASE" > /tmp/gpg-pass
+          # Write passphrase to a temp file — Ubuntu's rpmsign lacks --passphrase-fd
+          printf '%s' "$GPG_PASSPHRASE" > /tmp/gpg-pass
           chmod 600 /tmp/gpg-pass
 
-          cat >> ~/.rpmmacros << EOF
-          %_gpg_name ${GPG_ID}
-          %__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-pass -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
-          EOF
+          cat >> ~/.rpmmacros << 'MACROS'
+%_gpg_name ${GPG_ID}
+%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-pass -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+MACROS
 
           RPM_PATH=$(ls dist/rpmbuild/RPMS/x86_64/pktana-*.rpm)
           rpmsign --addsign "${RPM_PATH}"
