@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -76,7 +77,7 @@ fn run() -> Result<(), CliError> {
             );
             println!("license  : Apache-2.0");
             println!("repo     : {}", env!("CARGO_PKG_REPOSITORY"));
-            return Ok(());
+            Ok(())
         }
 
         // ── packet capture ────────────────────────────────────────────────────
@@ -181,8 +182,8 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     let sep = "─".repeat(118);
     println!(
-        "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  {}",
-        "No.", "Time", "Bytes", "Proto", "Source", "Destination", "Info"
+        "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info",
+        "No.", "Time", "Bytes", "Proto", "Source", "Destination"
     );
     println!("{sep}");
     let _ = std::io::stdout().flush();
@@ -224,8 +225,8 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
             }
             Err(_) => {
                 println!(
-                    "{:>5}  {:<17}  {:>7}  {:<5}  {}",
-                    pkt_num, ts, bytes, "?", "[parse error]"
+                    "{:>5}  {:<17}  {:>7}  {:<5}  [parse error]",
+                    pkt_num, ts, bytes, "?"
                 );
             }
         }
@@ -278,8 +279,8 @@ fn run_nic(args: &[String]) -> Result<(), CliError> {
         None | Some("list") => {
             let nics = list_nics()?;
             println!(
-                "{:<16}  {:<5}  {:<19}  {:<6}  {:<8}  {}",
-                "Interface", "State", "MAC", "MTU", "Speed", "IP Addresses"
+                "{:<16}  {:<5}  {:<19}  {:<6}  {:<8}  IP Addresses",
+                "Interface", "State", "MAC", "MTU", "Speed"
             );
             println!("{}", "─".repeat(90));
             for nic in &nics {
@@ -370,7 +371,7 @@ fn run_inspect(args: &[String]) -> Result<(), CliError> {
 
 fn decode_hex_str(hex: &str) -> Result<Vec<u8>, CliError> {
     let hex: String = hex.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(CliError::Usage("Hex string has odd length".into()));
     }
     (0..hex.len())
@@ -1449,8 +1450,8 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
         println!("  IRQ / CPU AFFINITY  (per queue)");
         println!("  ───────────────────────────────────────");
         println!(
-            "    {:<32}  {:<6}  {:<14}  {}",
-            "Queue", "IRQ", "SMP mask", "CPU list"
+            "    {:<32}  {:<6}  {:<14}  CPU list",
+            "Queue", "IRQ", "SMP mask"
         );
         println!("    {}", "─".repeat(70));
         for q in &r.queue_irq_affinities {
@@ -1659,8 +1660,8 @@ fn run_routes(args: &[String]) -> Result<(), CliError> {
     };
 
     println!(
-        "{:<16}  {:<24}  {:<8}  {:<26}  {:<8}  {}",
-        "Interface", "Destination", "Prefix", "Gateway / Nexthop", "Metric", "Type"
+        "{:<16}  {:<24}  {:<8}  {:<26}  {:<8}  Type",
+        "Interface", "Destination", "Prefix", "Gateway / Nexthop", "Metric"
     );
     println!("{}", "─".repeat(100));
 
@@ -1701,8 +1702,8 @@ fn run_connections() -> Result<(), CliError> {
     }
     println!("Active Connections ({})\n", conns.len());
     println!(
-        "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {}",
-        "Proto", "Local Address", "Remote Address", "State", "PID", "Process"
+        "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  Process",
+        "Proto", "Local Address", "Remote Address", "State", "PID"
     );
     println!("{}", "─".repeat(100));
     for c in &conns {
@@ -1816,7 +1817,7 @@ impl LiveStats {
         println!("  Protocol Breakdown:");
         let total = self.total_pkts.max(1);
         let mut protos: Vec<(&String, &(u64, u64))> = self.proto.iter().collect();
-        protos.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        protos.sort_by_key(|b| Reverse(b.1 .0));
         for (name, (pkts, bytes)) in protos.iter().take(6) {
             let pct = *pkts as f64 / total as f64 * 100.0;
             println!(
@@ -1833,7 +1834,7 @@ impl LiveStats {
         // Top talkers
         println!("  Top Talkers (by packets):");
         let mut talkers: Vec<(&String, &(u64, u64))> = self.talkers.iter().collect();
-        talkers.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        talkers.sort_by_key(|b| Reverse(b.1 .0));
         for (i, (ip, (pkts, bytes))) in talkers.iter().take(10).enumerate() {
             println!(
                 "    {:>2}.  {:<26}  {:>8} pkts   {}",
@@ -1854,7 +1855,7 @@ impl LiveStats {
         // trim talkers if huge
         if self.talkers.len() > 5_000 {
             let mut v: Vec<(String, (u64, u64))> = self.talkers.drain().collect();
-            v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            v.sort_by_key(|b| Reverse(b.1 .0));
             v.truncate(1_000);
             self.talkers = v.into_iter().collect();
         }
@@ -2056,11 +2057,8 @@ fn dns_parse_name(data: &[u8], mut pos: usize) -> Option<String> {
 /// Number of bytes the name occupies in the DNS wire format (incl. final 0x00 or 2-byte pointer).
 fn dns_name_len(data: &[u8], mut pos: usize) -> usize {
     let start = pos;
-    loop {
-        let len = match data.get(pos) {
-            Some(&l) => l as usize,
-            None => break,
-        };
+    while let Some(&l) = data.get(pos) {
+        let len = l as usize;
         if len == 0 {
             pos += 1;
             break;
