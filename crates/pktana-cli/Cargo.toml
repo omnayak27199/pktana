@@ -16,7 +16,7 @@ pcap = ["pktana-core/pcap"]
 tui = ["dep:ratatui", "dep:crossterm"]
 
 [dependencies]
-pktana-core = { path = "../pktana-core", version = "0.1.0" }
+pktana-core = { path = "../pktana-core", version = "0.2.0" }
 ratatui    = { version = "0.29", optional = true }
 crossterm  = { version = "0.28", optional = true }
 
