@@ -1,3 +1,6 @@
+// Copyright 2026 Omprakash (omnayak27199@gmail.com)
+// SPDX-License-Identifier: Apache-2.0
+
 /// NIC / interface information gathered purely from Linux sysfs and procfs.
 /// No external commands (ip, ethtool, ifconfig) are required.
 use std::fs;

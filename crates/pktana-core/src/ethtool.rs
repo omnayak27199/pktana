@@ -1,3 +1,6 @@
+// Copyright 2026 Omprakash (omnayak27199@gmail.com)
+// SPDX-License-Identifier: Apache-2.0
+
 //! ethtool-equivalent information gathered purely from sysfs / procfs.
 //! Covers: driver info, extended statistics, features/offloads,
 //!         channel / queue info, link settings, PCIe link status,

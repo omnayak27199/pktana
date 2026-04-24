@@ -1,3 +1,6 @@
+// Copyright 2026 Omprakash (omnayak27199@gmail.com)
+// SPDX-License-Identifier: Apache-2.0
+
 //! Routing table reader — pure /proc/net/route + /proc/net/ipv6_route.
 //! No external commands (ip route, netstat -r) required.
 use std::fs;

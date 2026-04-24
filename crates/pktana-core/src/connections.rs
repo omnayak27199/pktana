@@ -1,3 +1,6 @@
+// Copyright 2026 Omprakash (omnayak27199@gmail.com)
+// SPDX-License-Identifier: Apache-2.0
+
 //! Active network connection listing from /proc/net/tcp, tcp6, udp, udp6.
 //! No external tools (ss, netstat) required.
 use std::collections::HashMap;
