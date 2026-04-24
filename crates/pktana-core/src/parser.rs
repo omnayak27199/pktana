@@ -3,7 +3,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::flow::FlowTable;
-use crate::packet::{EtherType, EthernetFrame, IpProtocol, Ipv4Header, PacketSummary, TransportHeader};
+use crate::packet::{
+    EtherType, EthernetFrame, IpProtocol, Ipv4Header, PacketSummary, TransportHeader,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPacket {
@@ -98,7 +100,9 @@ fn parse_ethernet_frame(bytes: &[u8]) -> Result<ParsedPacket, ParseError> {
     let payload = &bytes[14..];
     let (ipv4, transport, payload_len) = match ethernet.ether_type {
         EtherType::Ipv4 => parse_ipv4(payload)?,
-        EtherType::Arp | EtherType::Ipv6 | EtherType::Vlan | EtherType::Other(_) => (None, None, payload.len()),
+        EtherType::Arp | EtherType::Ipv6 | EtherType::Vlan | EtherType::Other(_) => {
+            (None, None, payload.len())
+        }
     };
 
     Ok(ParsedPacket {
@@ -113,7 +117,9 @@ fn parse_ethernet_frame(bytes: &[u8]) -> Result<ParsedPacket, ParseError> {
     })
 }
 
-fn parse_ipv4(payload: &[u8]) -> Result<(Option<Ipv4Header>, Option<TransportHeader>, usize), ParseError> {
+fn parse_ipv4(
+    payload: &[u8],
+) -> Result<(Option<Ipv4Header>, Option<TransportHeader>, usize), ParseError> {
     if payload.len() < 20 {
         return Err(ParseError::Truncated("ipv4"));
     }
@@ -145,8 +151,8 @@ fn parse_ipv4(payload: &[u8]) -> Result<(Option<Ipv4Header>, Option<TransportHea
 
     let ip_payload = &payload[ihl..];
     let (transport, payload_len) = match protocol {
-        IpProtocol::Tcp  => parse_tcp(ip_payload)?,
-        IpProtocol::Udp  => parse_udp(ip_payload)?,
+        IpProtocol::Tcp => parse_tcp(ip_payload)?,
+        IpProtocol::Udp => parse_udp(ip_payload)?,
         IpProtocol::Icmp => parse_icmp(ip_payload)?,
         _ => (Some(TransportHeader::Unsupported), ip_payload.len()),
     };
@@ -162,7 +168,8 @@ fn parse_tcp(payload: &[u8]) -> Result<(Option<TransportHeader>, usize), ParseEr
     let source_port = u16::from_be_bytes([payload[0], payload[1]]);
     let destination_port = u16::from_be_bytes([payload[2], payload[3]]);
     let sequence_number = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
-    let acknowledgement_number = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    let acknowledgement_number =
+        u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
     let data_offset = ((payload[12] >> 4) as usize) * 4;
     if payload.len() < data_offset {
         return Err(ParseError::Truncated("tcp options"));
@@ -210,7 +217,7 @@ fn parse_icmp(payload: &[u8]) -> Result<(Option<TransportHeader>, usize), ParseE
         return Err(ParseError::Truncated("icmp"));
     }
     let icmp_type = payload[0];
-    let code      = payload[1];
+    let code = payload[1];
     let payload_len = payload.len().saturating_sub(4);
     Ok((Some(TransportHeader::Icmp { icmp_type, code }), payload_len))
 }

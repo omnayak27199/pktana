@@ -198,7 +198,7 @@ impl PacketSummary {
             Some(TransportHeader::Udp { .. }) => "UDP",
             Some(TransportHeader::Icmp { .. }) => "ICMP",
             _ => match self.ethernet.ether_type {
-                EtherType::Arp  => "ARP",
+                EtherType::Arp => "ARP",
                 EtherType::Ipv6 => "IPv6",
                 EtherType::Vlan => "VLAN",
                 _ => "Other",
@@ -227,10 +227,14 @@ impl PacketSummary {
     pub fn dst_str(&self) -> String {
         if let Some(ip) = &self.ipv4 {
             match &self.transport {
-                Some(TransportHeader::Tcp { destination_port, .. }) => {
+                Some(TransportHeader::Tcp {
+                    destination_port, ..
+                }) => {
                     format!("{}:{}", ip.destination, destination_port)
                 }
-                Some(TransportHeader::Udp { destination_port, .. }) => {
+                Some(TransportHeader::Udp {
+                    destination_port, ..
+                }) => {
                     format!("{}:{}", ip.destination, destination_port)
                 }
                 _ => ip.destination.to_string(),
@@ -243,7 +247,13 @@ impl PacketSummary {
     /// Human-readable Info column: flag names, service names, ICMP descriptions.
     pub fn info_str(&self) -> String {
         match &self.transport {
-            Some(TransportHeader::Tcp { source_port, destination_port, flags, window_size, .. }) => {
+            Some(TransportHeader::Tcp {
+                source_port,
+                destination_port,
+                flags,
+                window_size,
+                ..
+            }) => {
                 let flagstr = tcp_flags_str(*flags);
                 let svc = port_service(*destination_port)
                     .or_else(|| port_service(*source_port))
@@ -252,15 +262,17 @@ impl PacketSummary {
                 let win_warn = if *window_size == 0 { " [ZERO-WIN]" } else { "" };
                 format!("{flagstr}{svc}{win_warn}")
             }
-            Some(TransportHeader::Udp { source_port, destination_port, .. }) => {
-                port_service(*destination_port)
-                    .or_else(|| port_service(*source_port))
-                    .unwrap_or("UDP")
-                    .to_string()
-            }
+            Some(TransportHeader::Udp {
+                source_port,
+                destination_port,
+                ..
+            }) => port_service(*destination_port)
+                .or_else(|| port_service(*source_port))
+                .unwrap_or("UDP")
+                .to_string(),
             Some(TransportHeader::Icmp { icmp_type, code }) => icmp_info(*icmp_type, *code),
             _ => match self.ethernet.ether_type {
-                EtherType::Arp  => "ARP".to_string(),
+                EtherType::Arp => "ARP".to_string(),
                 EtherType::Ipv6 => "IPv6".to_string(),
                 EtherType::Vlan => "VLAN".to_string(),
                 EtherType::Other(v) => format!("EtherType 0x{v:04x}"),
@@ -275,33 +287,49 @@ impl PacketSummary {
 /// so the standard 6 control bits live in the low byte.
 pub fn tcp_flags_str(flags: u16) -> String {
     let mut parts: Vec<&str> = Vec::new();
-    if flags & 0x0002 != 0 { parts.push("SYN"); }
-    if flags & 0x0010 != 0 { parts.push("ACK"); }
-    if flags & 0x0001 != 0 { parts.push("FIN"); }
-    if flags & 0x0004 != 0 { parts.push("RST"); }
-    if flags & 0x0008 != 0 { parts.push("PSH"); }
-    if flags & 0x0020 != 0 { parts.push("URG"); }
-    if parts.is_empty() { "[no flags]".to_string() } else { parts.join("-") }
+    if flags & 0x0002 != 0 {
+        parts.push("SYN");
+    }
+    if flags & 0x0010 != 0 {
+        parts.push("ACK");
+    }
+    if flags & 0x0001 != 0 {
+        parts.push("FIN");
+    }
+    if flags & 0x0004 != 0 {
+        parts.push("RST");
+    }
+    if flags & 0x0008 != 0 {
+        parts.push("PSH");
+    }
+    if flags & 0x0020 != 0 {
+        parts.push("URG");
+    }
+    if parts.is_empty() {
+        "[no flags]".to_string()
+    } else {
+        parts.join("-")
+    }
 }
 
 fn port_service(port: u16) -> Option<&'static str> {
     match port {
-        22   => Some("SSH"),
-        23   => Some("Telnet"),
-        25   => Some("SMTP"),
-        53   => Some("DNS"),
+        22 => Some("SSH"),
+        23 => Some("Telnet"),
+        25 => Some("SMTP"),
+        53 => Some("DNS"),
         67 | 68 => Some("DHCP"),
-        80   => Some("HTTP"),
-        110  => Some("POP3"),
-        123  => Some("NTP"),
-        143  => Some("IMAP"),
-        179  => Some("BGP"),
-        443  => Some("HTTPS"),
-        514  => Some("Syslog"),
-        587  => Some("SMTP"),
-        636  => Some("LDAPS"),
-        993  => Some("IMAPS"),
-        995  => Some("POP3S"),
+        80 => Some("HTTP"),
+        110 => Some("POP3"),
+        123 => Some("NTP"),
+        143 => Some("IMAP"),
+        179 => Some("BGP"),
+        443 => Some("HTTPS"),
+        514 => Some("Syslog"),
+        587 => Some("SMTP"),
+        636 => Some("LDAPS"),
+        993 => Some("IMAPS"),
+        995 => Some("POP3S"),
         1194 => Some("OpenVPN"),
         3306 => Some("MySQL"),
         3389 => Some("RDP"),
@@ -311,27 +339,27 @@ fn port_service(port: u16) -> Option<&'static str> {
         8443 => Some("HTTPS-Alt"),
         9200 => Some("Elasticsearch"),
         27017 => Some("MongoDB"),
-        _    => None,
+        _ => None,
     }
 }
 
 fn icmp_info(icmp_type: u8, code: u8) -> String {
     match icmp_type {
-        0  => "Echo Reply".to_string(),
-        3  => match code {
+        0 => "Echo Reply".to_string(),
+        3 => match code {
             0 => "Dest Unreachable: Net".to_string(),
             1 => "Dest Unreachable: Host".to_string(),
             2 => "Dest Unreachable: Protocol".to_string(),
             3 => "Dest Unreachable: Port".to_string(),
             _ => format!("Dest Unreachable (code {code})"),
         },
-        8  => "Echo Request".to_string(),
+        8 => "Echo Request".to_string(),
         11 => match code {
             0 => "TTL Exceeded in Transit".to_string(),
             1 => "Fragment Reassembly Timeout".to_string(),
             _ => format!("Time Exceeded (code {code})"),
         },
-        _  => format!("ICMP Type {icmp_type} Code {code}"),
+        _ => format!("ICMP Type {icmp_type} Code {code}"),
     }
 }
 
@@ -342,4 +370,3 @@ fn format_mac(bytes: &[u8; 6]) -> String {
         .collect::<Vec<_>>()
         .join(":")
 }
-

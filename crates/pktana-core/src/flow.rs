@@ -18,7 +18,11 @@ impl fmt::Display for FlowKey {
         write!(
             f,
             "{}:{} -> {}:{} ({})",
-            self.source_ip, self.source_port, self.destination_ip, self.destination_port, self.protocol
+            self.source_ip,
+            self.source_port,
+            self.destination_ip,
+            self.destination_port,
+            self.protocol
         )
     }
 }
@@ -85,4 +89,3 @@ impl FlowTable {
         self.records.is_empty()
     }
 }
-

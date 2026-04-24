@@ -6,28 +6,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use pktana_core::{
-    analyze_bytes,
-    analyze_hex,
-    analyze_hex_file,
-    build_flow_table,
-    format_bytes,
-    get_ethtool_report,
-    get_nic_dataplane,
-    get_nic_info,
-    hex_dump,
-    inspect,
-    list_connections,
-    list_nics,
-    list_routes,
-    routes_for_iface,
-    sample_packets,
-    CaptureConfig,
-    CaptureError,
-    LinuxCaptureEngine,
-    NicInfo,
-    ParsedPacket,
-    ParseError,
-    TransportHeader,
+    analyze_bytes, analyze_hex, analyze_hex_file, build_flow_table, format_bytes,
+    get_ethtool_report, get_nic_dataplane, get_nic_info, hex_dump, inspect, list_connections,
+    list_nics, list_routes, routes_for_iface, sample_packets, CaptureConfig, CaptureError,
+    LinuxCaptureEngine, NicInfo, ParseError, ParsedPacket, TransportHeader,
 };
 
 // ─── error type ─────────────────────────────────────────────────────────────
@@ -43,17 +25,29 @@ enum CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Parse(e)   => write!(f, "{e}"),
+            Self::Parse(e) => write!(f, "{e}"),
             Self::Capture(e) => write!(f, "{e}"),
-            Self::Io(e)      => write!(f, "io error: {e}"),
-            Self::Usage(m)   => write!(f, "{m}"),
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::Usage(m) => write!(f, "{m}"),
         }
     }
 }
 
-impl From<ParseError>     for CliError { fn from(e: ParseError)     -> Self { Self::Parse(e) } }
-impl From<CaptureError>   for CliError { fn from(e: CaptureError)   -> Self { Self::Capture(e) } }
-impl From<std::io::Error> for CliError { fn from(e: std::io::Error) -> Self { Self::Io(e) } }
+impl From<ParseError> for CliError {
+    fn from(e: ParseError) -> Self {
+        Self::Parse(e)
+    }
+}
+impl From<CaptureError> for CliError {
+    fn from(e: CaptureError) -> Self {
+        Self::Capture(e)
+    }
+}
+impl From<std::io::Error> for CliError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
 
 // ─── entry point ─────────────────────────────────────────────────────────────
 
@@ -75,9 +69,11 @@ fn run() -> Result<(), CliError> {
     match args[1].as_str() {
         // ── version ───────────────────────────────────────────────────────────
         "--version" | "-V" | "version" => {
-            println!("pktana {}  ({})",
+            println!(
+                "pktana {}  ({})",
                 env!("CARGO_PKG_VERSION"),
-                env!("CARGO_PKG_DESCRIPTION"));
+                env!("CARGO_PKG_DESCRIPTION")
+            );
             println!("license  : Apache-2.0");
             println!("repo     : {}", env!("CARGO_PKG_REPOSITORY"));
             return Ok(());
@@ -132,12 +128,13 @@ fn run() -> Result<(), CliError> {
         // ── NIC auto-refresh (replaces watch ip -s) ───────────────────────────
         "watch" => run_watch(&args[2..]),
 
-        "help" | "--help" | "-h" | "-?" => {
-            match args.get(2).map(|s| s.as_str()) {
-                Some(topic) => print_doc(topic),
-                None        => { print_usage(); Ok(()) }
+        "help" | "--help" | "-h" | "-?" => match args.get(2).map(|s| s.as_str()) {
+            Some(topic) => print_doc(topic),
+            None => {
+                print_usage();
+                Ok(())
             }
-        }
+        },
 
         // ── shorthand: pktana <interface> [count] [filter] ───────────────────
         _ => run_capture(&args[1..]),
@@ -159,14 +156,22 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         None => (0, None),
         Some(second) => match second.parse::<usize>() {
             Ok(n) => {
-                let f = if args.len() > 2 { Some(args[2..].join(" ")) } else { None };
+                let f = if args.len() > 2 {
+                    Some(args[2..].join(" "))
+                } else {
+                    None
+                };
                 (n, f)
             }
             Err(_) => (0, Some(args[1..].join(" "))),
         },
     };
 
-    let count_label  = if max_packets == 0 { "unlimited".to_string() } else { max_packets.to_string() };
+    let count_label = if max_packets == 0 {
+        "unlimited".to_string()
+    } else {
+        max_packets.to_string()
+    };
     let filter_label = filter.as_deref().unwrap_or("none");
 
     println!(
@@ -184,7 +189,11 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     let config = CaptureConfig {
         interface: interface.clone(),
-        max_packets: if max_packets == 0 { usize::MAX } else { max_packets },
+        max_packets: if max_packets == 0 {
+            usize::MAX
+        } else {
+            max_packets
+        },
         promiscuous: true,
         snapshot_len: 65_535,
         filter,
@@ -195,7 +204,7 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     let stats = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
         pkt_num += 1;
-        let ts    = format_timestamp(pkt.timestamp_sec, pkt.timestamp_usec);
+        let ts = format_timestamp(pkt.timestamp_sec, pkt.timestamp_usec);
         let bytes = pkt.data.len();
         total_bytes += bytes as u64;
 
@@ -204,7 +213,9 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
                 let s = &parsed.summary;
                 println!(
                     "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  {}",
-                    pkt_num, ts, bytes,
+                    pkt_num,
+                    ts,
+                    bytes,
                     s.proto_label(),
                     trunc(&s.src_str(), 26),
                     trunc(&s.dst_str(), 26),
@@ -212,7 +223,10 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
                 );
             }
             Err(_) => {
-                println!("{:>5}  {:<17}  {:>7}  {:<5}  {}", pkt_num, ts, bytes, "?", "[parse error]");
+                println!(
+                    "{:>5}  {:<17}  {:>7}  {:<5}  {}",
+                    pkt_num, ts, bytes, "?", "[parse error]"
+                );
             }
         }
         let _ = std::io::stdout().flush();
@@ -238,7 +252,11 @@ fn print_capture_interfaces() -> Result<(), CliError> {
     }
     println!("Capture interfaces ({}):\n", ifaces.len());
     for iface in &ifaces {
-        let kind = if iface.loopback { "loopback" } else { "network " };
+        let kind = if iface.loopback {
+            "loopback"
+        } else {
+            "network "
+        };
         let addrs = if iface.addresses.is_empty() {
             "—".to_string()
         } else {
@@ -267,7 +285,7 @@ fn run_nic(args: &[String]) -> Result<(), CliError> {
             for nic in &nics {
                 let state = if nic.is_up() { "UP" } else { "down" };
                 let speed = nic.speed_label();
-                let ips   = if nic.ip_addresses.is_empty() {
+                let ips = if nic.ip_addresses.is_empty() {
                     "—".to_string()
                 } else {
                     nic.ip_addresses.join(", ")
@@ -295,8 +313,11 @@ fn run_nic(args: &[String]) -> Result<(), CliError> {
                 println!("Addresses : —");
             } else {
                 for (i, addr) in nic.ip_addresses.iter().enumerate() {
-                    if i == 0 { println!("Addresses : {addr}"); }
-                    else       { println!("            {addr}"); }
+                    if i == 0 {
+                        println!("Addresses : {addr}");
+                    } else {
+                        println!("            {addr}");
+                    }
                 }
             }
             println!();
@@ -322,9 +343,12 @@ fn run_inspect(args: &[String]) -> Result<(), CliError> {
     // pktana inspect <HEX>
     // pktana inspect -f <FILE>
     let raw: Vec<u8> = if args.first().map(|s| s.as_str()) == Some("-f") {
-        let path = args.get(1).ok_or_else(|| CliError::Usage("usage: pktana inspect -f <FILE>".into()))?;
+        let path = args
+            .get(1)
+            .ok_or_else(|| CliError::Usage("usage: pktana inspect -f <FILE>".into()))?;
         let text = std::fs::read_to_string(path)?;
-        let hex: String = text.lines()
+        let hex: String = text
+            .lines()
             .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
             .unwrap_or("")
             .split_whitespace()
@@ -351,18 +375,21 @@ fn decode_hex_str(hex: &str) -> Result<Vec<u8>, CliError> {
     }
     (0..hex.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i+2], 16).map_err(|_| CliError::Usage("Invalid hex".into())))
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|_| CliError::Usage("Invalid hex".into()))
+        })
         .collect()
 }
 
 fn print_deep_packet(dp: &pktana_core::DeepPacket) {
-    let bar  = "═".repeat(64);
+    let bar = "═".repeat(64);
     let thin = "─".repeat(48);
 
     // ANSI color codes (work on any xterm-compatible terminal)
-    const BOLD:  &str = "\x1b[1m";
-    const CYAN:  &str = "\x1b[1;36m";
-    const RED:   &str = "\x1b[1;31m";
+    const BOLD: &str = "\x1b[1m";
+    const CYAN: &str = "\x1b[1;36m";
+    const RED: &str = "\x1b[1;31m";
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
 
@@ -385,19 +412,30 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
     println!("{bar}");
     println!("  LAYER 2 — ETHERNET");
     println!("  {thin}");
-    let src_vendor = dp.eth_vendor_src.map(|v| format!("  [{v}]")).unwrap_or_default();
-    let dst_vendor = dp.eth_vendor_dst.map(|v| format!("  [{v}]")).unwrap_or_default();
+    let src_vendor = dp
+        .eth_vendor_src
+        .map(|v| format!("  [{v}]"))
+        .unwrap_or_default();
+    let dst_vendor = dp
+        .eth_vendor_dst
+        .map(|v| format!("  [{v}]"))
+        .unwrap_or_default();
     println!("  Dst MAC    : {}{}", dp.eth_dst, dst_vendor);
     println!("  Src MAC    : {}{}", dp.eth_src, src_vendor);
 
     if !dp.vlan_tags.is_empty() {
-        let vlan_desc: Vec<String> = dp.vlan_tags.iter().map(|t| {
-            format!("VLAN {} (PCP={} DEI={})", t.id, t.pcp, t.dei as u8)
-        }).collect();
+        let vlan_desc: Vec<String> = dp
+            .vlan_tags
+            .iter()
+            .map(|t| format!("VLAN {} (PCP={} DEI={})", t.id, t.pcp, t.dei as u8))
+            .collect();
         println!("  VLAN       : {}", vlan_desc.join("  →  "));
     }
 
-    println!("  EtherType  : 0x{:04x}  ({})", dp.ether_type, dp.ether_type_name);
+    println!(
+        "  EtherType  : 0x{:04x}  ({})",
+        dp.ether_type, dp.ether_type_name
+    );
 
     // ── ARP ───────────────────────────────────────────────────────────────────
     if let Some(arp) = &dp.arp {
@@ -418,24 +456,46 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
         println!("{bar}");
         println!("  LAYER 3 — IPv4");
         println!("  {thin}");
-        println!("  Src IP     : {}", dp.ip_src.map(|a| a.to_string()).unwrap_or_else(|| "—".into()));
-        println!("  Dst IP     : {}", dp.ip_dst.map(|a| a.to_string()).unwrap_or_else(|| "—".into()));
-        println!("  Protocol   : {}  ({})",
+        println!(
+            "  Src IP     : {}",
+            dp.ip_src
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "—".into())
+        );
+        println!(
+            "  Dst IP     : {}",
+            dp.ip_dst
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| "—".into())
+        );
+        println!(
+            "  Protocol   : {}  ({})",
             dp.ip_proto.unwrap_or(0),
-            dp.ip_proto_name.unwrap_or("?"));
-        println!("  TTL        : {}    ID: 0x{:04x}    Len: {}",
+            dp.ip_proto_name.unwrap_or("?")
+        );
+        println!(
+            "  TTL        : {}    ID: 0x{:04x}    Len: {}",
             dp.ip_ttl.unwrap_or(0),
             dp.ip_id.unwrap_or(0),
-            dp.ip_total_len.unwrap_or(0));
-        let flags_str = format!("{}{}",
+            dp.ip_total_len.unwrap_or(0)
+        );
+        let flags_str = format!(
+            "{}{}",
             if dp.ip_flag_df { "DF " } else { "" },
-            if dp.ip_flag_mf { "MF " } else { "" });
-        let flags_str = if flags_str.is_empty() { "none".to_string() } else { flags_str.trim().to_string() };
-        println!("  DSCP: {}  ECN: {}  Flags: {}  Frag offset: {}",
+            if dp.ip_flag_mf { "MF " } else { "" }
+        );
+        let flags_str = if flags_str.is_empty() {
+            "none".to_string()
+        } else {
+            flags_str.trim().to_string()
+        };
+        println!(
+            "  DSCP: {}  ECN: {}  Flags: {}  Frag offset: {}",
             dp.ip_dscp.unwrap_or(0),
             dp.ip_ecn.unwrap_or(0),
             flags_str,
-            dp.ip_fragment.unwrap_or(0));
+            dp.ip_fragment.unwrap_or(0)
+        );
         println!("  Hdr length : {} bytes", dp.ip_hdr_len.unwrap_or(0));
     }
 
@@ -443,33 +503,66 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
     if dp.tcp_src_port.is_some() {
         println!();
         println!("{bar}");
-        let dst_svc = dp.tcp_dst_port.map(|p| {
-            let s = port_service_name(p);
-            if s != "?" { format!(" [{s}]") } else { String::new() }
-        }).unwrap_or_default();
-        let src_svc = dp.tcp_src_port.map(|p| {
-            let s = port_service_name(p);
-            if s != "?" { format!(" [{s}]") } else { String::new() }
-        }).unwrap_or_default();
+        let dst_svc = dp
+            .tcp_dst_port
+            .map(|p| {
+                let s = port_service_name(p);
+                if s != "?" {
+                    format!(" [{s}]")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        let src_svc = dp
+            .tcp_src_port
+            .map(|p| {
+                let s = port_service_name(p);
+                if s != "?" {
+                    format!(" [{s}]")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
         println!("  LAYER 4 — TCP");
         println!("  {thin}");
         println!("  Src port   : {}{}", dp.tcp_src_port.unwrap_or(0), src_svc);
         println!("  Dst port   : {}{}", dp.tcp_dst_port.unwrap_or(0), dst_svc);
-        println!("  Seq        : {:10}   Ack: {}",
-            dp.tcp_seq.unwrap_or(0), dp.tcp_ack.unwrap_or(0));
-        println!("  Window     : {}   Urgent: {}   Hdr: {} bytes",
-            dp.tcp_window.unwrap_or(0), dp.tcp_urgent.unwrap_or(0), dp.tcp_hdr_len.unwrap_or(0));
-        println!("  Flags      : {}",
-            dp.tcp_flags_str.as_deref().unwrap_or("[none]"));
+        println!(
+            "  Seq        : {:10}   Ack: {}",
+            dp.tcp_seq.unwrap_or(0),
+            dp.tcp_ack.unwrap_or(0)
+        );
+        println!(
+            "  Window     : {}   Urgent: {}   Hdr: {} bytes",
+            dp.tcp_window.unwrap_or(0),
+            dp.tcp_urgent.unwrap_or(0),
+            dp.tcp_hdr_len.unwrap_or(0)
+        );
+        println!(
+            "  Flags      : {}",
+            dp.tcp_flags_str.as_deref().unwrap_or("[none]")
+        );
 
         // TCP options
         let mut opts = Vec::new();
-        if let Some(mss) = dp.tcp_mss         { opts.push(format!("MSS={mss}")); }
-        if let Some(ws)  = dp.tcp_window_scale { opts.push(format!("WScale={ws}")); }
-        if dp.tcp_sack_permitted               { opts.push("SACK_OK".into()); }
-        if let Some((tsv, tse)) = dp.tcp_timestamp { opts.push(format!("TS={tsv}/{tse}")); }
+        if let Some(mss) = dp.tcp_mss {
+            opts.push(format!("MSS={mss}"));
+        }
+        if let Some(ws) = dp.tcp_window_scale {
+            opts.push(format!("WScale={ws}"));
+        }
+        if dp.tcp_sack_permitted {
+            opts.push("SACK_OK".into());
+        }
+        if let Some((tsv, tse)) = dp.tcp_timestamp {
+            opts.push(format!("TS={tsv}/{tse}"));
+        }
         if !dp.tcp_sack_blocks.is_empty() {
-            for (l, r) in &dp.tcp_sack_blocks { opts.push(format!("SACK({l}-{r})")); }
+            for (l, r) in &dp.tcp_sack_blocks {
+                opts.push(format!("SACK({l}-{r})"));
+            }
         }
         if !opts.is_empty() {
             println!("  Options    : {}", opts.join("  "));
@@ -484,18 +577,35 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
         println!("{bar}");
         println!("  LAYER 4 — UDP");
         println!("  {thin}");
-        let dst_svc = dp.udp_dst_port.map(|p| {
-            let s = port_service_name(p);
-            if s != "?" { format!(" [{s}]") } else { String::new() }
-        }).unwrap_or_default();
-        let src_svc = dp.udp_src_port.map(|p| {
-            let s = port_service_name(p);
-            if s != "?" { format!(" [{s}]") } else { String::new() }
-        }).unwrap_or_default();
+        let dst_svc = dp
+            .udp_dst_port
+            .map(|p| {
+                let s = port_service_name(p);
+                if s != "?" {
+                    format!(" [{s}]")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        let src_svc = dp
+            .udp_src_port
+            .map(|p| {
+                let s = port_service_name(p);
+                if s != "?" {
+                    format!(" [{s}]")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
         println!("  Src port   : {}{}", dp.udp_src_port.unwrap_or(0), src_svc);
         println!("  Dst port   : {}{}", dp.udp_dst_port.unwrap_or(0), dst_svc);
-        println!("  Length     : {}   Checksum: 0x{:04x}",
-            dp.udp_len.unwrap_or(0), dp.udp_checksum.unwrap_or(0));
+        println!(
+            "  Length     : {}   Checksum: 0x{:04x}",
+            dp.udp_len.unwrap_or(0),
+            dp.udp_checksum.unwrap_or(0)
+        );
         println!("  Payload    : {} bytes", dp.udp_payload_len);
     }
 
@@ -505,12 +615,19 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
         println!("{bar}");
         println!("  LAYER 4 — ICMP");
         println!("  {thin}");
-        println!("  Type/Code  : {}/{}  —  {}",
-            dp.icmp_type.unwrap_or(0), dp.icmp_code.unwrap_or(0),
-            dp.icmp_type_str.as_deref().unwrap_or("?"));
+        println!(
+            "  Type/Code  : {}/{}  —  {}",
+            dp.icmp_type.unwrap_or(0),
+            dp.icmp_code.unwrap_or(0),
+            dp.icmp_type_str.as_deref().unwrap_or("?")
+        );
         println!("  Checksum   : 0x{:04x}", dp.icmp_checksum.unwrap_or(0));
-        if let Some(id) = dp.icmp_id  { println!("  ID         : {id}"); }
-        if let Some(sq) = dp.icmp_seq { println!("  Sequence   : {sq}"); }
+        if let Some(id) = dp.icmp_id {
+            println!("  ID         : {id}");
+        }
+        if let Some(sq) = dp.icmp_seq {
+            println!("  Sequence   : {sq}");
+        }
     }
 
     // ── Application layer ─────────────────────────────────────────────────────
@@ -554,19 +671,50 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
 /// Compact port → service name for the inspect display.
 fn port_service_name(port: u16) -> &'static str {
     match port {
-        20=>"FTP-data", 21=>"FTP", 22=>"SSH", 23=>"Telnet", 25=>"SMTP",
-        53=>"DNS", 67=>"DHCP-srv", 68=>"DHCP-cli", 69=>"TFTP",
-        80=>"HTTP", 110=>"POP3", 123=>"NTP", 143=>"IMAP",
-        161=>"SNMP", 179=>"BGP", 389=>"LDAP", 443=>"HTTPS",
-        465=>"SMTPS", 514=>"Syslog", 515=>"LPD",
-        587=>"SMTP-sub", 636=>"LDAPS", 993=>"IMAPS", 995=>"POP3S",
-        1194=>"OpenVPN", 1433=>"MSSQL", 1521=>"Oracle",
-        1900=>"SSDP", 2181=>"ZooKeeper", 2375=>"Docker",
-        3306=>"MySQL", 3389=>"RDP", 4789=>"VXLAN",
-        5432=>"PostgreSQL", 5672=>"AMQP", 5900=>"VNC",
-        6379=>"Redis", 6443=>"K8s API", 8080=>"HTTP-alt",
-        8443=>"HTTPS-alt", 9042=>"Cassandra", 9200=>"Elasticsearch",
-        27017=>"MongoDB", _=>"?",
+        20 => "FTP-data",
+        21 => "FTP",
+        22 => "SSH",
+        23 => "Telnet",
+        25 => "SMTP",
+        53 => "DNS",
+        67 => "DHCP-srv",
+        68 => "DHCP-cli",
+        69 => "TFTP",
+        80 => "HTTP",
+        110 => "POP3",
+        123 => "NTP",
+        143 => "IMAP",
+        161 => "SNMP",
+        179 => "BGP",
+        389 => "LDAP",
+        443 => "HTTPS",
+        465 => "SMTPS",
+        514 => "Syslog",
+        515 => "LPD",
+        587 => "SMTP-sub",
+        636 => "LDAPS",
+        993 => "IMAPS",
+        995 => "POP3S",
+        1194 => "OpenVPN",
+        1433 => "MSSQL",
+        1521 => "Oracle",
+        1900 => "SSDP",
+        2181 => "ZooKeeper",
+        2375 => "Docker",
+        3306 => "MySQL",
+        3389 => "RDP",
+        4789 => "VXLAN",
+        5432 => "PostgreSQL",
+        5672 => "AMQP",
+        5900 => "VNC",
+        6379 => "Redis",
+        6443 => "K8s API",
+        8080 => "HTTP-alt",
+        8443 => "HTTPS-alt",
+        9042 => "Cassandra",
+        9200 => "Elasticsearch",
+        27017 => "MongoDB",
+        _ => "?",
     }
 }
 
@@ -592,15 +740,21 @@ fn render_batch(packets: &[ParsedPacket], errors: &[String]) {
     for flow in flows.records() {
         println!(
             "  {}:{} → {}:{}  proto={}  pkts={}  bytes={}",
-            flow.key.source_ip, flow.key.source_port,
-            flow.key.destination_ip, flow.key.destination_port,
-            flow.key.protocol, flow.packets, flow.bytes,
+            flow.key.source_ip,
+            flow.key.source_port,
+            flow.key.destination_ip,
+            flow.key.destination_port,
+            flow.key.protocol,
+            flow.packets,
+            flow.bytes,
         );
     }
     if !errors.is_empty() {
         println!();
         println!("Errors: {}", errors.len());
-        for e in errors { println!("  {e}"); }
+        for e in errors {
+            println!("  {e}");
+        }
     }
 }
 
@@ -609,22 +763,25 @@ fn render_batch(packets: &[ParsedPacket], errors: &[String]) {
 fn format_timestamp(sec: i64, usec: i64) -> String {
     let h = (sec % 86_400) / 3_600;
     let m = (sec % 3_600) / 60;
-    let s =  sec % 60;
+    let s = sec % 60;
     format!("{h:02}:{m:02}:{s:02}.{usec:06}")
 }
 
 fn trunc(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}..", &s[..max.saturating_sub(2)]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}..", &s[..max.saturating_sub(2)])
+    }
 }
 
 // ─── usage ────────────────────────────────────────────────────────────────────
 
 fn print_usage() {
-    const B: &str = "\x1b[1m";         // bold
-    const C: &str = "\x1b[1;36m";      // cyan heading
-    const Y: &str = "\x1b[33m";        // yellow command
-    const R: &str = "\x1b[0m";         // reset
+    const B: &str = "\x1b[1m"; // bold
+    const C: &str = "\x1b[1;36m"; // cyan heading
+    const Y: &str = "\x1b[33m"; // yellow command
+    const R: &str = "\x1b[0m"; // reset
 
     println!("{B}pktana{R}  —  Linux packet analyser & network inspector");
     println!("        replaces: tcpdump  ethtool  ss  netstat  ip route  ip link  iftop");
@@ -645,14 +802,18 @@ fn print_usage() {
     println!("  {Y}pktana inspect <HEX>{R}            full layer-by-layer decode + auto-diagnosis");
     println!("  {Y}pktana inspect -f <FILE>{R}        inspect first hex packet from file");
     println!("  {Y}pktana hex <HEX>{R}                quick field table (shorter than inspect)");
-    println!("  {Y}pktana file <FILE>{R}              decode all hex packets in file (one per line)");
+    println!(
+        "  {Y}pktana file <FILE>{R}              decode all hex packets in file (one per line)"
+    );
     println!("  {Y}pktana demo{R}                     decode built-in sample packets");
     println!();
 
     println!("{C}INTERFACE & NIC INFO  (reads sysfs/procfs — no external tools){R}");
     println!("  {Y}pktana nic{R}                      list all NICs: state / MAC / IP / speed");
     println!("  {Y}pktana nic <IFACE>{R}              full NIC detail + RX/TX counters");
-    println!("  {Y}pktana ethtool <IFACE>{R}          driver · link · offloads · queues · IRQ affinity");
+    println!(
+        "  {Y}pktana ethtool <IFACE>{R}          driver · link · offloads · queues · IRQ affinity"
+    );
     println!("  {Y}pktana dp <IFACE>{R}               dataplane: XDP · AF_XDP · DPDK · SR-IOV · offloads");
     println!("  {Y}pktana route{R}                    full routing table (IPv4 + IPv6)");
     println!("  {Y}pktana route <IFACE>{R}            routes and nexthops for one interface");
@@ -682,11 +843,11 @@ fn print_usage() {
 // ─── Per-command documentation ────────────────────────────────────────────────
 
 fn print_doc(cmd: &str) -> Result<(), CliError> {
-    const B:  &str = "\x1b[1m";
-    const C:  &str = "\x1b[1;36m";
-    const Y:  &str = "\x1b[33m";
+    const B: &str = "\x1b[1m";
+    const C: &str = "\x1b[1;36m";
+    const Y: &str = "\x1b[33m";
     const DIM: &str = "\x1b[2m";
-    const R:  &str = "\x1b[0m";
+    const R: &str = "\x1b[0m";
 
     let bar = format!("{C}{}{R}", "═".repeat(68));
 
@@ -714,8 +875,12 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!();
             println!("{B}ARGUMENTS{R}");
             println!("  {Y}IFACE{R}        Network interface name (eth0, ens3, bond0, etc.)");
-            println!("  {Y}COUNT{R}        Number of packets to capture then exit. Omit for unlimited.");
-            println!("  {Y}BPF_FILTER{R}   Berkeley Packet Filter expression (same syntax as tcpdump).");
+            println!(
+                "  {Y}COUNT{R}        Number of packets to capture then exit. Omit for unlimited."
+            );
+            println!(
+                "  {Y}BPF_FILTER{R}   Berkeley Packet Filter expression (same syntax as tcpdump)."
+            );
             println!("               Quotes required for multi-word filters.");
             println!();
             println!("{B}BPF FILTER EXAMPLES{R}");
@@ -764,11 +929,19 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("  1. {B}PACKET SUMMARY{R}  — one-line description + auto-diagnosis");
             println!("  2. {B}LAYER 2 — ETHERNET{R}  — MAC addresses, VLAN tags, EtherType");
             println!("  3. {B}ARP{R}  — sender/target MAC+IP, operation (request/reply)");
-            println!("  4. {B}LAYER 3 — IPv4{R}  — IPs, TTL, DSCP, ECN, DF/MF flags, fragment offset");
-            println!("  5. {B}LAYER 4 — TCP/UDP/ICMP{R}  — ports, flags, window, options, checksum");
-            println!("  6. {B}APPLICATION{R}  — HTTP method/status, TLS version + SNI, DNS query/rcode,");
+            println!(
+                "  4. {B}LAYER 3 — IPv4{R}  — IPs, TTL, DSCP, ECN, DF/MF flags, fragment offset"
+            );
+            println!(
+                "  5. {B}LAYER 4 — TCP/UDP/ICMP{R}  — ports, flags, window, options, checksum"
+            );
+            println!(
+                "  6. {B}APPLICATION{R}  — HTTP method/status, TLS version + SNI, DNS query/rcode,"
+            );
             println!("                    DHCP message type, and 15+ other protocols");
-            println!("  7. {B}PAYLOAD HEX DUMP{R}  — Wireshark-style hex + ASCII (up to 256 bytes)");
+            println!(
+                "  7. {B}PAYLOAD HEX DUMP{R}  — Wireshark-style hex + ASCII (up to 256 bytes)"
+            );
             println!("  8. {B}ANOMALIES{R}  — malformed headers, scan patterns, flag conflicts");
             println!();
             println!("{B}DIAGNOSIS ENGINE{R}");
@@ -861,7 +1034,9 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!();
             println!("{B}OUTPUT SECTIONS{R}");
             println!("  {B}DRIVER INFO{R}    — driver name, PCI bus address, firmware version, IRQ number");
-            println!("  {B}LINK SETTINGS{R}   — speed, duplex, autoneg, operstate, TX queue length");
+            println!(
+                "  {B}LINK SETTINGS{R}   — speed, duplex, autoneg, operstate, TX queue length"
+            );
             println!("  {B}PCIe LINK{R}       — PCIe generation and lane width (e.g. Gen3 x8)");
             println!("  {B}CARRIER EVENTS{R}  — link-up/down event counts since boot");
             println!("  {B}CHANNELS/QUEUES{R} — number of RX, TX, and combined queues");
@@ -894,12 +1069,16 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("  flow through the normal Linux kernel network stack or bypass it.");
             println!();
             println!("{B}DETECTED MODES{R}");
-            println!("  {B}KernelStack{R}     — normal path; packets processed by kernel tcp/ip stack");
+            println!(
+                "  {B}KernelStack{R}     — normal path; packets processed by kernel tcp/ip stack"
+            );
             println!("  {B}XDP{R}             — eBPF XDP program attached at driver level; can drop/redirect");
             println!("                    before sk_buff allocation (faster than iptables)");
             println!("  {B}AF_XDP{R}          — zero-copy path; packets DMA'd directly to userspace rings,");
             println!("                    bypassing kernel socket layer entirely");
-            println!("  {B}DpdkUserspace{R}   — NIC bound to vfio-pci or uio_pci_generic; kernel sees");
+            println!(
+                "  {B}DpdkUserspace{R}   — NIC bound to vfio-pci or uio_pci_generic; kernel sees"
+            );
             println!("                    no traffic at all; pktana capture will not work");
             println!("  {B}Hybrid{R}          — XDP + AF_XDP active simultaneously");
             println!();
@@ -1111,7 +1290,9 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             eprintln!("pktana: no documentation found for '{other}'");
             eprintln!();
             eprintln!("Available topics:");
-            eprintln!("  capture  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo");
+            eprintln!(
+                "  capture  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo"
+            );
             return Err(CliError::Usage(format!("unknown help topic '{other}'")));
         }
     }
@@ -1123,7 +1304,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
 fn run_ethtool(args: &[String]) -> Result<(), CliError> {
     let name = match args.first() {
         Some(n) => n.as_str(),
-        None    => return Err(CliError::Usage("usage: pktana ethtool <INTERFACE>".into())),
+        None => return Err(CliError::Usage("usage: pktana ethtool <INTERFACE>".into())),
     };
 
     let r = get_ethtool_report(name)?;
@@ -1137,9 +1318,18 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
     println!("  ───────────────────────────────────────");
     println!("    driver      : {}", r.driver.as_deref().unwrap_or("—"));
     println!("    bus-info    : {}", r.bus_info.as_deref().unwrap_or("—"));
-    println!("    firmware    : {}", r.firmware_ver.as_deref().unwrap_or("n/a"));
-    println!("    pci-rev     : {}", r.pci_revision.as_deref().unwrap_or("—"));
-    println!("    irq         : {}", r.irq.map(|n| n.to_string()).as_deref().unwrap_or("—"));
+    println!(
+        "    firmware    : {}",
+        r.firmware_ver.as_deref().unwrap_or("n/a")
+    );
+    println!(
+        "    pci-rev     : {}",
+        r.pci_revision.as_deref().unwrap_or("—")
+    );
+    println!(
+        "    irq         : {}",
+        r.irq.map(|n| n.to_string()).as_deref().unwrap_or("—")
+    );
 
     // ── Link settings (-s equivalent) ─────────────────────────────────────────
     println!();
@@ -1147,34 +1337,72 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
     println!("  ───────────────────────────────────────");
     let speed_str = match r.speed_mbps {
         Some(s) if s >= 1000 => format!("{}G", s / 1000),
-        Some(s)              => format!("{s}M"),
-        None                 => "unknown".into(),
+        Some(s) => format!("{s}M"),
+        None => "unknown".into(),
     };
     println!("    speed       : {speed_str}");
     println!("    duplex      : {}", r.duplex.as_deref().unwrap_or("—"));
     println!("    auto-neg    : {}", r.autoneg.as_deref().unwrap_or("—"));
     println!("    state       : {}", r.operstate);
-    println!("    carrier     : {}",
-        match r.carrier { Some(1) => "UP", Some(0) => "DOWN", _ => "—" });
-    println!("    tx-queue-len: {}", r.tx_queue_len.map(|n| n.to_string()).as_deref().unwrap_or("—"));
+    println!(
+        "    carrier     : {}",
+        match r.carrier {
+            Some(1) => "UP",
+            Some(0) => "DOWN",
+            _ => "—",
+        }
+    );
+    println!(
+        "    tx-queue-len: {}",
+        r.tx_queue_len
+            .map(|n| n.to_string())
+            .as_deref()
+            .unwrap_or("—")
+    );
 
     // ── PCIe link ─────────────────────────────────────────────────────────────
     if r.pcie_speed.is_some() || r.pcie_width.is_some() {
         println!();
         println!("  PCIe LINK");
         println!("  ───────────────────────────────────────");
-        println!("    speed       : {}", r.pcie_speed.as_deref().unwrap_or("—"));
-        println!("    width       : {}",
-            r.pcie_width.map(|w| format!("x{w}")).as_deref().unwrap_or("—"));
+        println!(
+            "    speed       : {}",
+            r.pcie_speed.as_deref().unwrap_or("—")
+        );
+        println!(
+            "    width       : {}",
+            r.pcie_width
+                .map(|w| format!("x{w}"))
+                .as_deref()
+                .unwrap_or("—")
+        );
     }
 
     // ── Carrier events ────────────────────────────────────────────────────────
     println!();
     println!("  CARRIER EVENTS");
     println!("  ───────────────────────────────────────");
-    println!("    up          : {}", r.carrier_up.map(|n| n.to_string()).as_deref().unwrap_or("—"));
-    println!("    down        : {}", r.carrier_down.map(|n| n.to_string()).as_deref().unwrap_or("—"));
-    println!("    changes     : {}", r.carrier_changes.map(|n| n.to_string()).as_deref().unwrap_or("—"));
+    println!(
+        "    up          : {}",
+        r.carrier_up
+            .map(|n| n.to_string())
+            .as_deref()
+            .unwrap_or("—")
+    );
+    println!(
+        "    down        : {}",
+        r.carrier_down
+            .map(|n| n.to_string())
+            .as_deref()
+            .unwrap_or("—")
+    );
+    println!(
+        "    changes     : {}",
+        r.carrier_changes
+            .map(|n| n.to_string())
+            .as_deref()
+            .unwrap_or("—")
+    );
 
     // ── Channels / queues (-l) ────────────────────────────────────────────────
     println!();
@@ -1191,8 +1419,18 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
     if r.features.is_empty() {
         println!("    — not available");
     } else {
-        let on:  Vec<&str> = r.features.iter().filter(|(_, v)| v.as_str() == "on" ).map(|(k, _)| k.as_str()).collect();
-        let off: Vec<&str> = r.features.iter().filter(|(_, v)| v.as_str() == "off").map(|(k, _)| k.as_str()).collect();
+        let on: Vec<&str> = r
+            .features
+            .iter()
+            .filter(|(_, v)| v.as_str() == "on")
+            .map(|(k, _)| k.as_str())
+            .collect();
+        let off: Vec<&str> = r
+            .features
+            .iter()
+            .filter(|(_, v)| v.as_str() == "off")
+            .map(|(k, _)| k.as_str())
+            .collect();
         println!("    ON  ({}):", on.len());
         for chunk in on.chunks(4) {
             println!("      {}", chunk.join("    "));
@@ -1210,13 +1448,24 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
         println!();
         println!("  IRQ / CPU AFFINITY  (per queue)");
         println!("  ───────────────────────────────────────");
-        println!("    {:<32}  {:<6}  {:<14}  {}",
-            "Queue", "IRQ", "SMP mask", "CPU list");
+        println!(
+            "    {:<32}  {:<6}  {:<14}  {}",
+            "Queue", "IRQ", "SMP mask", "CPU list"
+        );
         println!("    {}", "─".repeat(70));
         for q in &r.queue_irq_affinities {
-            let irq_s = if q.irq == 0 { "—".to_string() } else { q.irq.to_string() };
-            println!("    {:<32}  {:<6}  {:<14}  {}",
-                trunc(&q.queue_name, 32), irq_s, q.cpu_mask, q.cpu_list);
+            let irq_s = if q.irq == 0 {
+                "—".to_string()
+            } else {
+                q.irq.to_string()
+            };
+            println!(
+                "    {:<32}  {:<6}  {:<14}  {}",
+                trunc(&q.queue_name, 32),
+                irq_s,
+                q.cpu_mask,
+                q.cpu_list
+            );
         }
     }
 
@@ -1231,10 +1480,10 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
         let stats: Vec<(&String, &u64)> = r.stats.iter().collect();
         for pair in stats.chunks(2) {
             match pair {
-                [(k1, v1), (k2, v2)] =>
-                    println!("    {:<32}  {:>12}    {:<32}  {:>12}", k1, v1, k2, v2),
-                [(k1, v1)] =>
-                    println!("    {:<32}  {:>12}", k1, v1),
+                [(k1, v1), (k2, v2)] => {
+                    println!("    {:<32}  {:>12}    {:<32}  {:>12}", k1, v1, k2, v2)
+                }
+                [(k1, v1)] => println!("    {:<32}  {:>12}", k1, v1),
                 _ => {}
             }
         }
@@ -1249,7 +1498,7 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
 fn run_dataplane(args: &[String]) -> Result<(), CliError> {
     let name = match args.first() {
         Some(n) => n.as_str(),
-        None    => return Err(CliError::Usage("usage: pktana dp <INTERFACE>".into())),
+        None => return Err(CliError::Usage("usage: pktana dp <INTERFACE>".into())),
     };
 
     let dp = get_nic_dataplane(name)?;
@@ -1267,14 +1516,20 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         println!("  XDP            : not attached");
     } else {
         let ids: Vec<String> = dp.xdp_prog_ids.iter().map(|id| id.to_string()).collect();
-        println!("  XDP            : ATTACHED  (prog IDs: {})", ids.join(", "));
+        println!(
+            "  XDP            : ATTACHED  (prog IDs: {})",
+            ids.join(", ")
+        );
     }
 
     // ── AF_XDP ───────────────────────────────────────────────────────────────
     if dp.afxdp_sockets == 0 {
         println!("  AF_XDP sockets : none");
     } else {
-        println!("  AF_XDP sockets : {}  ← zero-copy userspace rings active", dp.afxdp_sockets);
+        println!(
+            "  AF_XDP sockets : {}  ← zero-copy userspace rings active",
+            dp.afxdp_sockets
+        );
     }
 
     // ── DPDK / userspace PMD ─────────────────────────────────────────────────
@@ -1317,11 +1572,25 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
 
     // ── PCI identity ──────────────────────────────────────────────────────────
     println!("  PCI");
-    println!("    Address      : {}", dp.pci_address.as_deref().unwrap_or("—"));
-    println!("    Vendor ID    : {}", dp.pci_vendor_id.as_deref().unwrap_or("—"));
-    println!("    Device ID    : {}", dp.pci_device_id.as_deref().unwrap_or("—"));
-    println!("    NUMA node    : {}",
-        dp.numa_node.map(|n| n.to_string()).as_deref().unwrap_or("—"));
+    println!(
+        "    Address      : {}",
+        dp.pci_address.as_deref().unwrap_or("—")
+    );
+    println!(
+        "    Vendor ID    : {}",
+        dp.pci_vendor_id.as_deref().unwrap_or("—")
+    );
+    println!(
+        "    Device ID    : {}",
+        dp.pci_device_id.as_deref().unwrap_or("—")
+    );
+    println!(
+        "    NUMA node    : {}",
+        dp.numa_node
+            .map(|n| n.to_string())
+            .as_deref()
+            .unwrap_or("—")
+    );
 
     println!();
 
@@ -1437,20 +1706,25 @@ fn run_connections() -> Result<(), CliError> {
     );
     println!("{}", "─".repeat(100));
     for c in &conns {
-        let local  = format!("{}:{}", c.local_ip,  c.local_port);
+        let local = format!("{}:{}", c.local_ip, c.local_port);
         let remote = if c.remote_port == 0 {
             "—".to_string()
         } else {
             format!("{}:{}", c.remote_ip, c.remote_port)
         };
-        let pid_s  = c.pid.map(|p| p.to_string()).unwrap_or_else(|| "—".to_string());
+        let pid_s = c
+            .pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "—".to_string());
         let proc_s = c.process.as_deref().unwrap_or("—");
         println!(
             "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {}",
             c.proto,
             trunc(&local, 28),
             trunc(&remote, 28),
-            c.state, pid_s, proc_s,
+            c.state,
+            pid_s,
+            proc_s,
         );
     }
     Ok(())
@@ -1459,54 +1733,58 @@ fn run_connections() -> Result<(), CliError> {
 // ─── live stats dashboard ─────────────────────────────────────────────────────
 
 struct LiveStats {
-    interface:   String,
-    start:       Instant,
-    last_tick:   Instant,
-    total_pkts:  u64,
+    interface: String,
+    start: Instant,
+    last_tick: Instant,
+    total_pkts: u64,
     total_bytes: u64,
-    win_pkts:    u64,
-    win_bytes:   u64,
-    proto:       HashMap<String, (u64, u64)>,   // proto  -> (pkts, bytes)
-    talkers:     HashMap<String, (u64, u64)>,   // src_ip -> (pkts, bytes)
+    win_pkts: u64,
+    win_bytes: u64,
+    proto: HashMap<String, (u64, u64)>, // proto  -> (pkts, bytes)
+    talkers: HashMap<String, (u64, u64)>, // src_ip -> (pkts, bytes)
 }
 
 impl LiveStats {
     fn new(interface: &str) -> Self {
         let now = Instant::now();
         Self {
-            interface:   interface.to_string(),
-            start:       now,
-            last_tick:   now,
-            total_pkts:  0,
+            interface: interface.to_string(),
+            start: now,
+            last_tick: now,
+            total_pkts: 0,
             total_bytes: 0,
-            win_pkts:    0,
-            win_bytes:   0,
-            proto:       HashMap::new(),
-            talkers:     HashMap::new(),
+            win_pkts: 0,
+            win_bytes: 0,
+            proto: HashMap::new(),
+            talkers: HashMap::new(),
         }
     }
 
     fn ingest(&mut self, src_ip: &str, proto: &str, bytes: usize) {
         let b = bytes as u64;
-        self.total_pkts  += 1;
+        self.total_pkts += 1;
         self.total_bytes += b;
-        self.win_pkts    += 1;
-        self.win_bytes   += b;
+        self.win_pkts += 1;
+        self.win_bytes += b;
         let pe = self.proto.entry(proto.to_string()).or_insert((0, 0));
-        pe.0 += 1; pe.1 += b;
+        pe.0 += 1;
+        pe.1 += b;
         // cap talkers map at 5 000 unique IPs
         if self.talkers.len() < 5_000 || self.talkers.contains_key(src_ip) {
             let te = self.talkers.entry(src_ip.to_string()).or_insert((0, 0));
-            te.0 += 1; te.1 += b;
+            te.0 += 1;
+            te.1 += b;
         }
     }
 
     fn tick_and_render(&mut self) {
         let elapsed = self.last_tick.elapsed();
-        if elapsed < Duration::from_millis(950) { return; }
-        let secs      = elapsed.as_secs_f64();
-        let pps       = self.win_pkts  as f64 / secs;
-        let bps       = self.win_bytes as f64 / secs;
+        if elapsed < Duration::from_millis(950) {
+            return;
+        }
+        let secs = elapsed.as_secs_f64();
+        let pps = self.win_pkts as f64 / secs;
+        let bps = self.win_bytes as f64 / secs;
         let total_sec = self.start.elapsed().as_secs();
 
         // clear screen, start at top
@@ -1521,44 +1799,62 @@ impl LiveStats {
         );
         println!("{}", "═".repeat(72));
         println!();
-        println!("  Rate (last {}s)  :  {:>8.0} pkt/s   {}/s",
-            elapsed.as_secs().max(1), pps, format_bytes(bps as u64));
-        println!("  Total           :  {:>8} pkts    {}",
-            self.total_pkts, format_bytes(self.total_bytes));
+        println!(
+            "  Rate (last {}s)  :  {:>8.0} pkt/s   {}/s",
+            elapsed.as_secs().max(1),
+            pps,
+            format_bytes(bps as u64)
+        );
+        println!(
+            "  Total           :  {:>8} pkts    {}",
+            self.total_pkts,
+            format_bytes(self.total_bytes)
+        );
         println!();
 
         // Protocol breakdown
         println!("  Protocol Breakdown:");
         let total = self.total_pkts.max(1);
         let mut protos: Vec<(&String, &(u64, u64))> = self.proto.iter().collect();
-        protos.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        protos.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
         for (name, (pkts, bytes)) in protos.iter().take(6) {
             let pct = *pkts as f64 / total as f64 * 100.0;
-            println!("    {:6}  {}  {:5.1}%  {:>8} pkts  {}",
-                name, ascii_bar(pct, 28), pct, pkts, format_bytes(*bytes));
+            println!(
+                "    {:6}  {}  {:5.1}%  {:>8} pkts  {}",
+                name,
+                ascii_bar(pct, 28),
+                pct,
+                pkts,
+                format_bytes(*bytes)
+            );
         }
         println!();
 
         // Top talkers
         println!("  Top Talkers (by packets):");
         let mut talkers: Vec<(&String, &(u64, u64))> = self.talkers.iter().collect();
-        talkers.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        talkers.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
         for (i, (ip, (pkts, bytes))) in talkers.iter().take(10).enumerate() {
-            println!("    {:>2}.  {:<26}  {:>8} pkts   {}",
-                i + 1, ip, pkts, format_bytes(*bytes));
+            println!(
+                "    {:>2}.  {:<26}  {:>8} pkts   {}",
+                i + 1,
+                ip,
+                pkts,
+                format_bytes(*bytes)
+            );
         }
 
         let _ = std::io::stdout().flush();
 
         // reset window counters
-        self.win_pkts  = 0;
+        self.win_pkts = 0;
         self.win_bytes = 0;
         self.last_tick = Instant::now();
 
         // trim talkers if huge
         if self.talkers.len() > 5_000 {
             let mut v: Vec<(String, (u64, u64))> = self.talkers.drain().collect();
-            v.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+            v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
             v.truncate(1_000);
             self.talkers = v.into_iter().collect();
         }
@@ -1567,14 +1863,20 @@ impl LiveStats {
 
 fn run_stats(args: &[String]) -> Result<(), CliError> {
     if args.is_empty() {
-        return Err(CliError::Usage("usage: pktana stats <INTERFACE> [BPF_FILTER]".into()));
+        return Err(CliError::Usage(
+            "usage: pktana stats <INTERFACE> [BPF_FILTER]".into(),
+        ));
     }
     let interface = &args[0];
-    let filter = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
+    let filter = if args.len() > 1 {
+        Some(args[1..].join(" "))
+    } else {
+        None
+    };
     let config = CaptureConfig {
-        interface:    interface.clone(),
-        max_packets:  usize::MAX,
-        promiscuous:  true,
+        interface: interface.clone(),
+        max_packets: usize::MAX,
+        promiscuous: true,
         snapshot_len: 65_535,
         filter,
     };
@@ -1583,8 +1885,10 @@ fn run_stats(args: &[String]) -> Result<(), CliError> {
     print!("\x1b[2J");
     LinuxCaptureEngine::capture_streaming(&config, |pkt| {
         if let Ok(parsed) = analyze_bytes(&pkt.data) {
-            let s   = &parsed.summary;
-            let src = s.ipv4.as_ref()
+            let s = &parsed.summary;
+            let src = s
+                .ipv4
+                .as_ref()
                 .map(|ip| ip.source.to_string())
                 .unwrap_or_else(|| s.ethernet.source_mac());
             live.ingest(&src, s.proto_label(), pkt.data.len());
@@ -1605,15 +1909,17 @@ fn ascii_bar(pct: f64, width: usize) -> String {
 
 fn run_watch(args: &[String]) -> Result<(), CliError> {
     if args.is_empty() {
-        return Err(CliError::Usage("usage: pktana watch <INTERFACE> [INTERVAL_SECS]".into()));
+        return Err(CliError::Usage(
+            "usage: pktana watch <INTERFACE> [INTERVAL_SECS]".into(),
+        ));
     }
-    let name     = &args[0];
+    let name = &args[0];
     let interval = args.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(2);
     loop {
         print!("\x1b[H\x1b[J");
         match get_nic_info(name) {
             Ok(nic) => print_nic_watch(&nic, interval),
-            Err(e)  => println!("Error reading {name}: {e}"),
+            Err(e) => println!("Error reading {name}: {e}"),
         }
         let _ = std::io::stdout().flush();
         thread::sleep(Duration::from_secs(interval));
@@ -1621,25 +1927,46 @@ fn run_watch(args: &[String]) -> Result<(), CliError> {
 }
 
 fn print_nic_watch(nic: &NicInfo, interval: u64) {
-    println!("pktana watch — {}   (every {}s, Ctrl+C to stop)", nic.name, interval);
+    println!(
+        "pktana watch — {}   (every {}s, Ctrl+C to stop)",
+        nic.name, interval
+    );
     println!("{}", "─".repeat(52));
     println!();
-    println!("  Interface : {}",  nic.name);
-    println!("  State     : {}",  if nic.is_up() { "UP" } else { "down" });
-    println!("  MAC       : {}",  nic.mac);
-    println!("  MTU       : {}",  nic.mtu);
-    println!("  Speed     : {} / {}", nic.speed_label(), nic.duplex.as_deref().unwrap_or("?"));
+    println!("  Interface : {}", nic.name);
+    println!("  State     : {}", if nic.is_up() { "UP" } else { "down" });
+    println!("  MAC       : {}", nic.mac);
+    println!("  MTU       : {}", nic.mtu);
+    println!(
+        "  Speed     : {} / {}",
+        nic.speed_label(),
+        nic.duplex.as_deref().unwrap_or("?")
+    );
     if !nic.ip_addresses.is_empty() {
         println!("  Addresses : {}", nic.ip_addresses.join(", "));
     }
     println!();
-    println!("  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
-        "", "Packets", "Bytes", "Errors", "Dropped");
+    println!(
+        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "", "Packets", "Bytes", "Errors", "Dropped"
+    );
     println!("  {}", "─".repeat(55));
-    println!("  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
-        "RX", nic.rx_packets, format_bytes(nic.rx_bytes), nic.rx_errors, nic.rx_dropped);
-    println!("  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
-        "TX", nic.tx_packets, format_bytes(nic.tx_bytes), nic.tx_errors, nic.tx_dropped);
+    println!(
+        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "RX",
+        nic.rx_packets,
+        format_bytes(nic.rx_bytes),
+        nic.rx_errors,
+        nic.rx_dropped
+    );
+    println!(
+        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "TX",
+        nic.tx_packets,
+        format_bytes(nic.tx_bytes),
+        nic.tx_errors,
+        nic.tx_dropped
+    );
 }
 
 // ─── DNS decode ───────────────────────────────────────────────────────────────
@@ -1649,54 +1976,72 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
 fn dns_decode(pkt: &ParsedPacket) -> Option<String> {
     let ip = pkt.summary.ipv4.as_ref()?;
     let (src_port, dst_port) = match &pkt.summary.transport {
-        Some(TransportHeader::Udp { source_port, destination_port, .. }) =>
-            (*source_port, *destination_port),
+        Some(TransportHeader::Udp {
+            source_port,
+            destination_port,
+            ..
+        }) => (*source_port, *destination_port),
         _ => return None,
     };
-    if src_port != 53 && dst_port != 53 { return None; }
+    if src_port != 53 && dst_port != 53 {
+        return None;
+    }
 
     // DNS payload starts after: 14 (eth) + ip_header + 8 (udp header)
     let dns_start = 14 + ip.header_length + 8;
     let data = pkt.raw.get(dns_start..)?;
-    if data.len() < 12 { return None; }
+    if data.len() < 12 {
+        return None;
+    }
 
-    let flags    = u16::from_be_bytes([data[2], data[3]]);
-    let is_resp  = (flags & 0x8000) != 0;
-    let qdcount  = u16::from_be_bytes([data[4], data[5]]);
-    if qdcount == 0 { return None; }
+    let flags = u16::from_be_bytes([data[2], data[3]]);
+    let is_resp = (flags & 0x8000) != 0;
+    let qdcount = u16::from_be_bytes([data[4], data[5]]);
+    if qdcount == 0 {
+        return None;
+    }
 
     let name = dns_parse_name(data, 12)?;
-    if name.is_empty() { return None; }
+    if name.is_empty() {
+        return None;
+    }
 
     // QTYPE is right after the name
     let name_end = 12 + dns_name_len(data, 12);
-    let qtype    = u16::from_be_bytes([
-        *data.get(name_end)?,
-        *data.get(name_end + 1)?,
-    ]);
+    let qtype = u16::from_be_bytes([*data.get(name_end)?, *data.get(name_end + 1)?]);
     let type_str = dns_type_str(qtype);
-    let verb     = if is_resp { "Reply" } else { "Query" };
+    let verb = if is_resp { "Reply" } else { "Query" };
 
     // Rcode for replies
     let rcode_str = if is_resp {
         let rcode = flags & 0x000F;
-        if rcode == 3 { " [NXDOMAIN]" } else { "" }
-    } else { "" };
+        if rcode == 3 {
+            " [NXDOMAIN]"
+        } else {
+            ""
+        }
+    } else {
+        ""
+    };
 
     Some(format!("DNS {verb}: {name} {type_str}{rcode_str}"))
 }
 
 fn dns_parse_name(data: &[u8], mut pos: usize) -> Option<String> {
     let mut labels = Vec::new();
-    let mut hops   = 0;
+    let mut hops = 0;
     loop {
-        if hops > 20 { return None; }
+        if hops > 20 {
+            return None;
+        }
         let len = *data.get(pos)? as usize;
-        if len == 0 { break; }
+        if len == 0 {
+            break;
+        }
         if len & 0xC0 == 0xC0 {
             // Compression pointer
             let ptr = ((len & 0x3F) << 8) | (*data.get(pos + 1)? as usize);
-            pos  = ptr;
+            pos = ptr;
             hops += 1;
             continue;
         }
@@ -1712,9 +2057,18 @@ fn dns_parse_name(data: &[u8], mut pos: usize) -> Option<String> {
 fn dns_name_len(data: &[u8], mut pos: usize) -> usize {
     let start = pos;
     loop {
-        let len = match data.get(pos) { Some(&l) => l as usize, None => break };
-        if len == 0 { pos += 1; break; }
-        if len & 0xC0 == 0xC0 { pos += 2; break; }
+        let len = match data.get(pos) {
+            Some(&l) => l as usize,
+            None => break,
+        };
+        if len == 0 {
+            pos += 1;
+            break;
+        }
+        if len & 0xC0 == 0xC0 {
+            pos += 2;
+            break;
+        }
         pos += 1 + len;
     }
     pos - start
@@ -1722,17 +2076,16 @@ fn dns_name_len(data: &[u8], mut pos: usize) -> usize {
 
 fn dns_type_str(t: u16) -> &'static str {
     match t {
-        1   => "A",
-        2   => "NS",
-        5   => "CNAME",
-        6   => "SOA",
-        12  => "PTR",
-        15  => "MX",
-        16  => "TXT",
-        28  => "AAAA",
-        33  => "SRV",
+        1 => "A",
+        2 => "NS",
+        5 => "CNAME",
+        6 => "SOA",
+        12 => "PTR",
+        15 => "MX",
+        16 => "TXT",
+        28 => "AAAA",
+        33 => "SRV",
         255 => "ANY",
-        _   => "?",
+        _ => "?",
     }
 }
-
