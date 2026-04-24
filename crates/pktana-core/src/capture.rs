@@ -157,8 +157,8 @@ where
                 stats.packets_seen += 1;
                 stats.bytes_seen += data.len();
                 let cp = CapturePacket {
-                    timestamp_sec: packet.header.ts.tv_sec as i64,
-                    timestamp_usec: packet.header.ts.tv_usec as i64,
+                    timestamp_sec: packet.header.ts.tv_sec,
+                    timestamp_usec: packet.header.ts.tv_usec,
                     data,
                 };
                 if !on_packet(cp) {
@@ -220,8 +220,8 @@ fn capture_impl(
                 stats.packets_seen += 1;
                 stats.bytes_seen += packet_data.len();
                 packets.push(CapturePacket {
-                    timestamp_sec: packet.header.ts.tv_sec as i64,
-                    timestamp_usec: packet.header.ts.tv_usec as i64,
+                    timestamp_sec: packet.header.ts.tv_sec,
+                    timestamp_usec: packet.header.ts.tv_usec,
                     data: packet_data,
                 });
             }
