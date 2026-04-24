@@ -1,3 +1,6 @@
+// Copyright 2026 Omprakash (omnayak27199@gmail.com)
+// SPDX-License-Identifier: Apache-2.0
+
 //! Deep Packet Inspection engine.
 //! Parses every byte of a raw frame: Ethernet → VLAN → ARP/IPv4 → TCP/UDP/ICMP → Application.
 //! All parsing is pure Rust — no libpcap, no external tools.
