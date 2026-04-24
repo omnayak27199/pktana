@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -40,7 +40,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo registry + build
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -84,13 +84,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -119,17 +119,21 @@ jobs:
             OS_TYPE="el9"
 
       - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
           GPG_ID=$(gpg --list-secret-keys --keyid-format LONG | grep '^sec' | awk '{print $2}' | cut -d/ -f2)
           echo "GPG_ID=${GPG_ID}" >> $GITHUB_ENV
 
       - name: Sign RPM
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
           echo "%_gpg_name  ${GPG_ID}" >> ~/.rpmmacros
           echo "%__gpg_sign_cmd  %{__gpg} gpg --batch --no-armor --passphrase-fd 3 --pinentry-mode loopback -u \"%{_gpg_name}\" -sbo %{__signature_filename} %{__plaintext_filename}" >> ~/.rpmmacros
           RPM_PATH=$(ls dist/rpmbuild/RPMS/x86_64/pktana-*.rpm)
-          echo "${{ secrets.GPG_PASSPHRASE }}" | \
+          printf '%s' "$GPG_PASSPHRASE" | \
             rpmsign --addsign --passphrase-fd=0 "${RPM_PATH}"
 
       - name: Generate SHA256 checksums
@@ -175,7 +179,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
