@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "crates/pktana-core",
+    "crates/pktana-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+license     = "Apache-2.0"
+authors     = ["Omprakash <omprakash@pktana.io>"]
+description = "Linux packet analyser & network inspector — replaces tcpdump, ethtool, ss, ip route"
+repository  = "https://github.com/omnayak27199/pktana"
+homepage    = "https://github.com/omnayak27199/pktana"
+documentation = "https://github.com/omnayak27199/pktana/blob/main/README.md"
+readme      = "README.md"
+keywords    = ["networking", "packet", "pcap", "sniffer", "analyzer"]
+categories  = ["network-programming", "command-line-utilities"]
+

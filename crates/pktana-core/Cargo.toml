@@ -1,0 +1,22 @@
+[package]
+name        = "pktana-core"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+description = "Core packet parsing and NIC inspection library for pktana"
+repository.workspace  = true
+readme.workspace      = true
+keywords.workspace    = true
+categories.workspace  = true
+
+[features]
+default = []
+pcap = ["dep:pcap"]
+
+[dependencies]
+pcap = { version = "2", optional = true }
+
+[lib]
+name = "pktana_core"
+path = "src/lib.rs"

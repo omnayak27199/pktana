@@ -1,0 +1,22 @@
+[package]
+name        = "pktana-cli"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+description = "CLI binary for pktana — Linux packet analyser & network inspector"
+repository.workspace  = true
+readme.workspace      = true
+keywords.workspace    = true
+categories.workspace  = true
+
+[features]
+default = []
+pcap = ["pktana-core/pcap"]
+
+[dependencies]
+pktana-core = { path = "../pktana-core" }
+
+[[bin]]
+name = "pktana"
+path = "src/main.rs"
