@@ -532,10 +532,8 @@ fn detect_app_tcp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
         }
         _ => {
             // Heuristic fallback: try HTTP/TLS regardless of non-standard port
-            if payload.len() >= 4 {
-                if !detect_http(payload, dp) {
-                    detect_tls(payload, dp);
-                }
+            if payload.len() >= 4 && !detect_http(payload, dp) {
+                detect_tls(payload, dp);
             }
         }
     }
@@ -944,7 +942,7 @@ fn decode_tcp_flags(flags: u16) -> String {
 
 fn icmp_describe(t: u8, code: u8) -> String {
     match t {
-        0 => format!("Echo Reply (id/seq via fields)"),
+        0 => "Echo Reply (id/seq via fields)".to_string(),
         3 => format!(
             "Dest Unreachable — {}",
             match code {
@@ -1266,7 +1264,7 @@ impl DeepPacket {
             self.app_detail
                 .iter()
                 .find(|l| l.trim_start().starts_with(key))
-                .and_then(|l| l.splitn(2, ':').nth(1))
+                .and_then(|l| l.split_once(':').map(|x| x.1))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
         };
