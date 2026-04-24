@@ -132,15 +132,10 @@ jobs:
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          # Write passphrase to a temp file — Ubuntu's rpmsign lacks --passphrase-fd
           printf '%s' "$GPG_PASSPHRASE" > /tmp/gpg-pass
           chmod 600 /tmp/gpg-pass
-
-          cat >> ~/.rpmmacros << 'MACROS'
-%_gpg_name ${GPG_ID}
-%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-pass -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
-MACROS
-
+          echo "%_gpg_name ${GPG_ID}" >> ~/.rpmmacros
+          echo '%__gpg_sign_cmd %{__gpg} gpg --batch --no-armor --pinentry-mode loopback --passphrase-file /tmp/gpg-pass -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}' >> ~/.rpmmacros
           RPM_PATH=$(ls dist/rpmbuild/RPMS/x86_64/pktana-*.rpm)
           rpmsign --addsign "${RPM_PATH}"
           rm -f /tmp/gpg-pass
