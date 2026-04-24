@@ -167,7 +167,7 @@ jobs:
           body_path: /tmp/release_notes.md
           files: |
             dist/rpmbuild/RPMS/x86_64/pktana-*.rpm
-            dist/rpmbuild/SRPMS/pktana-*.src.rpm
+            # dist/rpmbuild/SRPMS/pktana-*.src.rpm   # source RPM — not public; contact maintainer
             dist/rpmbuild/RPMS/x86_64/pktana-*.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
