@@ -175,44 +175,45 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   # Job 3: Publish pktana-core to crates.io  (tags only, after release)
   # ────────────────────────────────────────────────────────────────────────────
-  publish-crate:
-    name: Publish to crates.io
-    needs: release
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4.2.2
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install libpcap-dev
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-
-      - name: Publish pktana-core
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: |
-          out=$(cargo publish -p pktana-core --token "$CRATES_IO_TOKEN" 2>&1) || {
-            if echo "$out" | grep -q "already exists"; then
-              echo "pktana-core already published — skipping"
-            else
-              echo "$out" >&2; exit 1
-            fi
-          }
-
-      - name: Publish pktana-cli
-        # pktana-cli depends on pktana-core; wait for index propagation
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: |
-          sleep 30
-          out=$(cargo publish -p pktana-cli --features pcap --token "$CRATES_IO_TOKEN" 2>&1) || {
-            if echo "$out" | grep -q "already exists"; then
-              echo "pktana-cli already published — skipping"
-            else
-              echo "$out" >&2; exit 1
-            fi
-          }
+  # DISABLED: Add CRATES_IO_TOKEN secret to enable publishing
+  # publish-crate:
+  #   name: Publish to crates.io
+  #   needs: release
+  #   if: startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4.2.2
+  #
+  #     - name: Install Rust stable
+  #       uses: dtolnay/rust-toolchain@stable
+  #
+  #     - name: Install libpcap-dev
+  #       run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+  #
+  #     - name: Publish pktana-core
+  #       env:
+  #         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+  #       run: |
+  #         out=$(cargo publish -p pktana-core --token "$CRATES_IO_TOKEN" 2>&1) || {
+  #           if echo "$out" | grep -q "already exists"; then
+  #             echo "pktana-core already published — skipping"
+  #           else
+  #             echo "$out" >&2; exit 1
+  #           fi
+  #         }
+  #
+  #     - name: Publish pktana-cli
+  #       # pktana-cli depends on pktana-core; wait for index propagation
+  #       env:
+  #         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+  #       run: |
+  #         sleep 30
+  #         out=$(cargo publish -p pktana-cli --features pcap --token "$CRATES_IO_TOKEN" 2>&1) || {
+  #           if echo "$out" | grep -q "already exists"; then
+  #             echo "pktana-cli already published — skipping"
+  #           else
+  #             echo "$out" >&2; exit 1
+  #           fi
+  #         }
