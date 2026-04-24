@@ -1,177 +1,204 @@
 # pktana
 
-`pktana` is a Linux-first packet analyzer workspace written in Rust.
+**A high-performance, zero-dependency network inspection toolkit for Linux — written in Rust.**
 
-Important deployment note:
+> Replaces `tcpdump`, `ethtool`, `ss`, `ip route`, and `iftop` with a single binary.  
+> Built for production infrastructure, network security, and cloud-native environments.
 
-- End users on CentOS do not need Rust or Cargo installed.
-- Rust/Cargo are only needed on the build machine.
-- The intended deployment model is to ship a compiled `pktana` binary or RPM/tarball.
-- If you build with the current optional `pcap` feature, the target machine may also need `libpcap`.
-- If you want zero extra runtime dependencies for live capture, the next step is replacing the current `pcap` capture path with native Linux `AF_PACKET`.
+[![CI](https://github.com/omnayak27199/pktana/actions/workflows/ci.yml/badge.svg)](https://github.com/omnayak27199/pktana/actions)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.1.0)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky-lightgrey.svg)]()
 
-This initial scaffold is designed as a serious MVP foundation:
+---
 
-- `pktana-core`: packet models, basic protocol parsing, flow tracking, and summaries
-- `pktana-cli`: command-line interface for demo traffic, single-packet decoding, batch file analysis, and optional live capture
+## Why pktana?
 
-## Current MVP capabilities
+Modern infrastructure teams need deep network visibility without installing 5 separate tools. pktana is a **single signed RPM** that gives you:
 
-- Parse raw Ethernet frames from hex
-- Parse live packets through optional `pcap` support
-- Decode:
-  - Ethernet II
-  - IPv4
-  - TCP
-  - UDP
-- Produce human-readable packet summaries
-- Build simple flow records from decoded packets
-- Analyze packets from:
-  - inline hex input
-  - text files with one hex packet per line
-  - built-in demo samples
-  - Linux capture interfaces when built with the `pcap` feature
+| What you need | Old way | pktana |
+|---|---|---|
+| Packet capture & decode | `tcpdump` + Wireshark | `pktana capture eth0` |
+| NIC stats & offloads | `ethtool` | `pktana ethtool eth0` |
+| Active connections | `ss -tulnp` | `pktana conn` |
+| Routing table | `ip route` | `pktana route` |
+| Dataplane / XDP / DPDK info | custom scripts | `pktana dp eth0` |
+| Deep packet inspection | Wireshark + manual analysis | `pktana inspect` |
+| Live bandwidth dashboard | `iftop` | `pktana stats eth0` |
 
-## Planned next steps
+---
 
-- Linux live capture with `AF_PACKET` and `libpcap`
-- BPF-style filter expressions
-- PCAP/PCAPNG ingestion
-- DNS, TLS, and HTTP metadata extraction
-- Stream reassembly
-- REST API and web dashboard
+## Features
 
-## Workspace layout
+### Deep Packet Inspection (L2–L7)
+- Full decode: Ethernet → VLAN/QinQ → IPv4/IPv6 → TCP/UDP/ICMP
+- Application detection: HTTP, TLS+SNI, DNS, DHCP, SSH, SMTP, RDP, MySQL, PostgreSQL, Redis, MongoDB, BGP, NTP, SNMP, VXLAN, Geneve
+- Anomaly detection: SYN+FIN, NULL scan, zero-window, TTL=0, broadcast source, malformed headers
+- OS fingerprinting via TCP options (MSS, WSCALE, SACK)
+- DSCP/QoS classification, ICMP traceroute detection, TLS version deprecation warnings
 
-```text
+### NIC & Dataplane Inspection
+- XDP eBPF program detection, AF_XDP zero-copy socket detection
+- DPDK binding / userspace driver detection
+- SR-IOV VF/PF topology
+- Per-queue IRQ affinity, CPU NUMA mapping
+- Hardware offloads: checksum, TSO, LRO, RSS
+
+### Connection & Route Tables
+- TCP/UDP/UDP6/TCP6 connection state with PID → process name resolution
+- IPv4 + IPv6 routing table from `/proc/net/route` and `/proc/net/ipv6_route`
+
+### Live Capture & Stats
+- Packet capture with BPF filter support
+- Real-time bandwidth dashboard with per-protocol breakdown and top talkers
+- DNS query decode inline in capture output
+- Watch mode for continuous monitoring
+
+---
+
+## Installation
+
+### RHEL / Rocky Linux / CentOS 9
+
+```bash
+sudo dnf install https://github.com/omnayak27199/pktana/releases/download/v0.1.0/pktana-0.1.0-1.el9.x86_64.rpm
+```
+
+`libpcap` is installed automatically as a dependency.
+
+### Verify the RPM signature
+
+```bash
+rpm --checksig pktana-0.1.0-1.el9.x86_64.rpm
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/omnayak27199/pktana
+cd pktana
+cargo build --release --features pcap
+./target/release/pktana --version
+```
+
+---
+
+## Usage
+
+```bash
+# Live packet capture
+pktana capture eth0
+
+# Deep packet inspection (hex input)
+pktana inspect 450000...
+
+# NIC information
+pktana nic eth0
+
+# Dataplane / XDP / DPDK
+pktana dp eth0
+
+# ethtool equivalent
+pktana ethtool eth0
+
+# Active connections (like ss -tulnp)
+pktana conn
+
+# Routing table (like ip route)
+pktana route
+
+# Live stats dashboard
+pktana stats eth0
+
+# Watch mode (refresh every N seconds)
+pktana watch eth0 5
+
+# Decode a hex packet file
+pktana file packets.txt
+
+# Full help
+pktana help
+pktana help <command>
+```
+
+---
+
+## Architecture
+
+```
 pktana/
-├── Cargo.toml
-├── README.md
-├── docs/
-│   └── architecture.md
-└── crates/
-    ├── pktana-core/
-    └── pktana-cli/
+├── crates/
+│   ├── pktana-core/        # Library: parser, DPI engine, NIC/route/conn inspection
+│   │   └── src/
+│   │       ├── dpi.rs      # L2–L7 deep packet inspection engine
+│   │       ├── capture.rs  # Live capture (libpcap)
+│   │       ├── nic.rs      # NIC info + XDP/DPDK/SR-IOV detection
+│   │       ├── ethtool.rs  # Driver, offload, IRQ, queue info
+│   │       ├── connections.rs  # TCP/UDP connection table
+│   │       ├── routes.rs   # IPv4/IPv6 routing table
+│   │       ├── parser.rs   # Ethernet frame parser
+│   │       └── packet.rs   # Packet data model
+│   └── pktana-cli/         # Binary: command dispatcher + output rendering
+├── deploy/centos/          # RPM spec + install script
+└── .github/workflows/      # CI: fmt, clippy, build, sign RPM, publish
 ```
 
-## Build
+See [docs/architecture.md](docs/architecture.md) for detailed design notes.
+
+---
+
+## Performance
+
+- **Zero heap allocation** in the hot packet path
+- **Memory safe** — written in Rust with no `unsafe` blocks in the core library
+- Reads NIC/connection/route data directly from `sysfs`/`procfs` — no external commands
+- Single static binary, minimal runtime footprint
+
+---
+
+## Embedding pktana-core in your project
+
+```toml
+[dependencies]
+pktana-core = "0.1.0"
+```
+
+```rust
+use pktana_core::inspect;
+
+let pkt = inspect(&raw_bytes);
+println!("{}", pkt.one_liner());
+for diagnosis in pkt.diagnose() {
+    println!("  {diagnosis}");
+}
+```
+
+---
+
+## Commercial Use
+
+pktana is licensed under **Apache 2.0** — free for personal and open-source use.
+
+For **commercial licensing**, OEM embedding, support contracts, or custom feature development:
+
+📧 **omnayak27199@gmail.com**
+
+---
+
+## Contributing
+
+Issues and PRs welcome. Please run before submitting:
 
 ```bash
-cd pktana
-cargo build
-cargo run -p pktana-cli -- demo
-cargo run -p pktana-cli -- hex 00112233445566778899aabb08004500002800010000400666cd0a0000010a00000201bb303900000001000000005002faf090b00000
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
 ```
 
-## CentOS deployment
+---
 
-For CentOS, the recommended model is:
+## License
 
-1. Build on a compatible Linux build machine
-2. Package the compiled binary
-3. Copy the package to the CentOS server
-4. Install the binary into `/usr/local/bin` or package it as an RPM
+Copyright 2026 Omprakash (omnayak27199@gmail.com)  
+Licensed under the [Apache License 2.0](LICENSE).
 
-That means the CentOS server only receives the final executable, not the Rust source toolchain.
-
-### Build a release binary
-
-```bash
-cd pktana
-./scripts/build-release.sh
-```
-
-### Package a tarball for transfer
-
-```bash
-cd pktana
-./scripts/package-centos.sh
-```
-
-This creates a distributable archive in `dist/`.
-
-### Build an RPM
-
-On a CentOS/RHEL build machine with `rpm-build` installed:
-
-```bash
-cd pktana
-./scripts/build-rpm.sh
-```
-
-Prerequisite on the RPM build machine:
-
-```bash
-sudo yum install -y rpm-build
-```
-
-The resulting RPM will be placed under `dist/rpmbuild/RPMS/`.
-
-### Install on CentOS
-
-After copying the tarball to CentOS:
-
-```bash
-tar -xzf pktana-linux-amd64.tar.gz
-cd pktana-linux-amd64
-sudo ./install.sh
-pktana --help
-```
-
-Install from RPM:
-
-```bash
-sudo rpm -ivh pktana-0.1.0-1.el*.x86_64.rpm
-pktana --help
-```
-
-## Runtime dependency model
-
-### No Rust/Cargo on target
-
-This is already achievable:
-
-- build the binary once
-- ship only the binary and support files
-- do not compile on the target server
-
-### No extra shared libraries on target
-
-This depends on capture mode:
-
-- current default parser/demo/file mode can be shipped as a normal compiled binary
-- current `pcap` live-capture mode may require `libpcap` on the target
-- planned native `AF_PACKET` mode is the right path for a CentOS-friendly live sniffer with no `libpcap` dependency
-
-## Live Linux capture
-
-Live capture is feature-gated so the project can still build in environments without `libpcap`.
-
-Example:
-
-```bash
-cd pktana
-cargo run -p pktana-cli --features pcap -- interfaces
-cargo run -p pktana-cli --features pcap -- capture eth0 25 tcp
-```
-
-Typical Linux packages you may need:
-
-```bash
-sudo yum install -y libpcap libpcap-devel
-```
-
-## File mode
-
-Create a text file with one packet hex string per line:
-
-```text
-00112233445566778899aabb08004500002800010000400666cd0a0000010a00000201bb303900000001000000005002faf090b00000
-00112233445566778899aabb08004500001c00010000401166da0a00000108080808003500350008ad77
-```
-
-Then run:
-
-```bash
-cargo run -p pktana-cli -- file packets.txt
-```
