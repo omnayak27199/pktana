@@ -38,7 +38,7 @@ pub fn analyze_hex(input: &str) -> Result<ParsedPacket, ParseError> {
 }
 
 pub fn analyze_bytes(bytes: &[u8]) -> Result<ParsedPacket, ParseError> {
-    parse_ethernet_frame(&bytes)
+    parse_ethernet_frame(bytes)
 }
 
 pub fn analyze_many_hex_lines(input: &str) -> (Vec<ParsedPacket>, Vec<String>) {
@@ -224,7 +224,7 @@ fn parse_icmp(payload: &[u8]) -> Result<(Option<TransportHeader>, usize), ParseE
 
 fn decode_hex(input: &str) -> Result<Vec<u8>, ParseError> {
     let cleaned: String = input.chars().filter(|c| !c.is_whitespace()).collect();
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err(ParseError::InvalidHex("odd-length hex string".to_string()));
     }
 
