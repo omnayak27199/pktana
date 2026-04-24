@@ -279,7 +279,9 @@ fn read_queue_irqs(name: &str, base: &str) -> Vec<QueueIrq> {
             .trim()
             .to_string();
 
-        irq_info.entry(irq_num).or_insert_with(|| (cpu_mask.clone(), cpu_list.clone()));
+        irq_info
+            .entry(irq_num)
+            .or_insert_with(|| (cpu_mask.clone(), cpu_list.clone()));
 
         result.push(QueueIrq {
             queue_name,
