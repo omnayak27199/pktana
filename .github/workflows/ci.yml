@@ -1,14 +1,14 @@
 # ─── pktana CI/CD pipeline ───────────────────────────────────────────────────
 #
 # Triggered on:
-#   • every push/PR to main  →  build + test only
-#   • any tag v*.*.*          →  build + test + sign RPM + create GitHub Release
-#   • manual workflow         →  build + optional crates.io publish
+#   • every push/PR to main        →  build + test only
+#   • any tag v*.*.*               →  build + test + sign RPM + GitHub Release (mandatory)
+#   • manual workflow on tag       →  also publish to crates.io (optional)
 #
 # Secrets required (set in GitHub repo → Settings → Secrets → Actions):
 #   GPG_PRIVATE_KEY   — ASCII-armored GPG private key  (gpg --armor --export-secret-keys <ID>)
 #   GPG_PASSPHRASE    — passphrase for that key
-#   CRATES_IO_TOKEN   — API token for crates.io publish  (optional; only on tags)
+#   CRATES_IO_TOKEN   — API token for crates.io publish  (optional)
 
 name: CI
 
@@ -21,12 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_to_crates_io:
-        description: 'Publish to crates.io'
-        required: false
-        type: boolean
-        default: false
-      create_github_release:
-        description: 'Create GitHub Release'
+        description: 'Publish to crates.io (only works on tagged releases)'
         required: false
         type: boolean
         default: false
@@ -87,12 +82,12 @@ jobs:
         run: cargo run -p pktana-cli --features pcap -- --version
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: RPM build + GPG sign + GitHub Release  (tags or manual)
+  # Job 2: RPM build + GPG sign + GitHub Release  (ONLY on tags - MANDATORY)
   # ────────────────────────────────────────────────────────────────────────────
   release:
     name: Release RPM
     needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_github_release)
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     container:
       image: rockylinux:9
@@ -184,12 +179,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 3: Publish to crates.io (manual workflow or if explicitly enabled)
+  # Job 3: Publish to crates.io (OPTIONAL - only on tags via manual workflow)
   # ────────────────────────────────────────────────────────────────────────────
   publish-crate:
     name: Publish to crates.io
-    needs: build-and-test
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_to_crates_io
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'workflow_dispatch' && inputs.publish_to_crates_io
     runs-on: ubuntu-latest
 
     steps:
