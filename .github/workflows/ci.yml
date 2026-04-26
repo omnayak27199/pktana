@@ -92,6 +92,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          dnf install -y epel-release
+          dnf config-manager --set-enabled crb
           dnf install -y gcc libpcap-devel rpm-build rpm-sign gnupg2 git python3
 
       - name: Install Rust stable
