@@ -131,6 +131,30 @@ jobs:
                       </div>
                   </div>
 
+                  <h2>🎉 What's New in v0.3.0</h2>
+                  <div class="features">
+                      <div class="feature">
+                          <h3>🔍 Process Tracking</h3>
+                          <p>See which processes own network connections via /proc scanning</p>
+                      </div>
+                      <div class="feature">
+                          <h3>💾 PCAP Export</h3>
+                          <p>Save captured packets to PCAP files for Wireshark analysis</p>
+                      </div>
+                      <div class="feature">
+                          <h3>🚀 Advanced TUI</h3>
+                          <p>Sortable columns, filtering, mouse support, historic connections</p>
+                      </div>
+                      <div class="feature">
+                          <h3>🌍 GeoIP Integration</h3>
+                          <p>Country code display for all remote IP addresses</p>
+                      </div>
+                  </div>
+                  <div class="buttons">
+                      <a href="https://github.com/omnayak27199/pktana/blob/main/NEW_FEATURES.md" class="btn">📋 Full Feature List</a>
+                      <a href="https://github.com/omnayak27199/pktana/blob/main/CHANGELOG.md" class="btn btn-secondary">📝 Changelog</a>
+                  </div>
+
                   <h2>Quick Start</h2>
                   <div class="install-box">
                       pktana --help<br>
