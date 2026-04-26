@@ -3,199 +3,389 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>pktana - Linux Packet Analyzer & Network Inspector</title>
+    <title>pktana | Modern Linux Packet Analyzer</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #7c3aed;
+            --accent: #06b6d4;
+            --success: #10b981;
+            --dark: #0f172a;
+            --dark-light: #1e293b;
+            --gray: #64748b;
+            --gray-light: #f8fafc;
+            --border: #e2e8f0;
+            --white: #ffffff;
+            --shadow: 0 20px 50px rgba(15, 23, 42, 0.15);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: 'Inter', sans-serif;
+            color: var(--dark);
+            line-height: 1.7;
+            background:
+                radial-gradient(circle at top left, #2563eb 0%, transparent 30%),
+                radial-gradient(circle at top right, #7c3aed 0%, transparent 25%),
+                linear-gradient(135deg, #020617 0%, #0f172a 100%);
             min-height: 100vh;
-            padding: 20px;
+            padding: 30px 20px;
         }
+
         .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 10px;
-            padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1250px;
+            margin: auto;
+            background: rgba(255,255,255,0.98);
+            backdrop-filter: blur(20px);
+            border-radius: 28px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
         }
-        h1 { color: #667eea; margin-bottom: 10px; font-size: 2.5em; }
-        h2 { color: #764ba2; margin: 30px 0 15px 0; border-bottom: 2px solid #667eea; padding-bottom: 5px; }
-        .tagline { color: #666; font-size: 1.2em; margin-bottom: 30px; }
-        .version-badge {
-            display: inline-block;
-            background: #28a745;
+
+        .hero {
+            padding: 80px 60px;
+            background:
+                linear-gradient(135deg, rgba(37,99,235,0.96), rgba(124,58,237,0.96)),
+                url('https://images.unsplash.com/photo-1558494949-ef010cbdcc31');
+            background-size: cover;
+            background-position: center;
             color: white;
-            padding: 5px 15px;
-            border-radius: 15px;
-            font-size: 0.9em;
-            font-weight: bold;
-            margin-left: 10px;
+            text-align: center;
         }
-        .install-box {
-            background: #f5f5f5;
-            border-left: 4px solid #667eea;
-            padding: 20px;
-            margin: 20px 0;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
-            overflow-x: auto;
-            font-size: 0.95em;
+
+        .version {
+            display: inline-block;
+            padding: 8px 18px;
+            background: rgba(255,255,255,0.18);
+            border: 1px solid rgba(255,255,255,0.25);
+            border-radius: 999px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            margin-bottom: 24px;
         }
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin: 30px 0;
+
+        h1 {
+            font-size: 4rem;
+            font-weight: 800;
+            letter-spacing: -2px;
+            margin-bottom: 20px;
         }
-        .feature {
-            padding: 20px;
-            background: #f9f9f9;
-            border-radius: 8px;
-            border: 1px solid #e0e0e0;
-            transition: transform 0.2s, box-shadow 0.2s;
+
+        .subtitle {
+            max-width: 850px;
+            margin: auto;
+            font-size: 1.35rem;
+            opacity: 0.95;
         }
-        .feature:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+
+        .buttons {
+            margin-top: 40px;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 16px;
         }
-        .feature h3 { color: #667eea; margin-bottom: 10px; font-size: 1.1em; }
-        .feature p { color: #555; font-size: 0.95em; }
-        .buttons { margin: 30px 0; display: flex; flex-wrap: wrap; gap: 10px; }
+
         .btn {
             display: inline-block;
-            padding: 12px 24px;
-            background: #667eea;
-            color: white;
+            padding: 16px 30px;
+            border-radius: 14px;
             text-decoration: none;
-            border-radius: 5px;
-            font-weight: bold;
-            transition: background 0.3s;
+            font-weight: 700;
+            transition: all 0.25s ease;
         }
-        .btn:hover { background: #5568d3; }
-        .btn-secondary { background: #764ba2; }
-        .btn-secondary:hover { background: #653d8a; }
-        .btn-success { background: #28a745; }
-        .btn-success:hover { background: #218838; }
-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
-        .highlight { background: #fff3cd; padding: 15px; border-left: 3px solid #ffc107; margin: 20px 0; border-radius: 5px; }
+
+        .btn-primary {
+            background: white;
+            color: var(--primary);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+        }
+
+        .btn-secondary {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.25);
+        }
+
+        section {
+            padding: 70px 60px;
+        }
+
+        h2 {
+            font-size: 2.5rem;
+            margin-bottom: 25px;
+            color: var(--dark);
+            letter-spacing: -1px;
+        }
+
+        .lead {
+            font-size: 1.15rem;
+            color: var(--gray);
+            max-width: 900px;
+            margin-bottom: 40px;
+        }
+
+        .install-box {
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 28px;
+            border-radius: 18px;
+            font-family: monospace;
+            font-size: 1rem;
+            overflow-x: auto;
+            margin-top: 30px;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 28px;
+            margin-top: 50px;
+        }
+
+        .card {
+            padding: 32px;
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 22px;
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 45px rgba(37,99,235,0.12);
+            border-color: #bfdbfe;
+        }
+
+        .card h3 {
+            font-size: 1.35rem;
+            margin-bottom: 15px;
+        }
+
+        .card p {
+            color: var(--gray);
+        }
+
+        .highlight {
+            background: linear-gradient(135deg, #ecfeff, #eff6ff);
+            border: 1px solid #bfdbfe;
+            padding: 35px;
+            border-radius: 22px;
+            margin-top: 40px;
+        }
+
+        .footer {
+            background: var(--dark);
+            color: #cbd5e1;
+            text-align: center;
+            padding: 50px 20px;
+        }
+
+        .footer a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+
+        @media (max-width: 768px) {
+            .hero,
+            section {
+                padding: 50px 25px;
+            }
+
+            h1 {
+                font-size: 2.8rem;
+            }
+
+            h2 {
+                font-size: 2rem;
+            }
+
+            .subtitle {
+                font-size: 1.1rem;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🔍 pktana <span class="version-badge">v0.3.0</span></h1>
-        <p class="tagline">Modern Linux packet analyzer & network inspector — replaces tcpdump, ethtool, ss, and ip route</p>
-        
+
+<div class="container">
+
+    <header class="hero">
+        <div class="version">v0.3.0 • Production Ready</div>
+
+        <h1>pktana</h1>
+
+        <p class="subtitle">
+            High-performance packet analysis, deep network inspection, and Linux dataplane diagnostics —
+            all in a single Rust binary.
+        </p>
+
         <div class="buttons">
-            <a href="https://github.com/omnayak27199/pktana" class="btn">📂 View on GitHub</a>
-            <a href="https://github.com/omnayak27199/pktana/releases/tag/v0.3.0" class="btn btn-secondary">⬇️ Download v0.3.0</a>
-            <a href="https://github.com/omnayak27199/pktana/blob/main/NEW_FEATURES.md" class="btn btn-success">🎉 What's New</a>
+            <a class="btn btn-primary" href="https://github.com/omnayak27199/pktana">
+                View on GitHub
+            </a>
+
+            <a class="btn btn-secondary"
+               href="https://github.com/omnayak27199/pktana/releases/latest">
+                Download Latest Release
+            </a>
         </div>
+    </header>
 
-        <h2>📦 Installation (RHEL/CentOS/Rocky Linux 9)</h2>
-        <div class="install-box">sudo dnf install https://github.com/omnayak27199/pktana/releases/download/v0.3.0/pktana-0.3.0-1.el9.x86_64.rpm</div>
+    <section>
+        <h2>About pktana</h2>
 
-        <div class="highlight">
-            <strong>✨ New in v0.3.0:</strong> Process tracking, PCAP export, advanced TUI dashboard, and GeoIP integration!
-        </div>
+        <p class="lead">
+            pktana is a modern Linux network inspection toolkit built for engineers,
+            SREs, security analysts, and infrastructure teams. It unifies packet capture,
+            protocol analysis, NIC diagnostics, routing inspection, connection tracking,
+            and dataplane visibility into a single production-grade executable.
+        </p>
 
-        <h2>🎉 What's New in v0.3.0</h2>
-        <div class="features">
-            <div class="feature">
-                <h3>🔍 Process Tracking</h3>
-                <p>Maps network connections to process names and PIDs by scanning <code>/proc</code>. See which processes own each connection in the TUI dashboard.</p>
-            </div>
-            <div class="feature">
-                <h3>💾 PCAP Export</h3>
-                <p>Save captured packets to PCAP files for offline analysis with Wireshark. Full libpcap savefile support with proper timestamps.</p>
-            </div>
-            <div class="feature">
-                <h3>🚀 Advanced TUI Dashboard</h3>
-                <p>Sortable columns, real-time filtering, mouse support, historic connections tracking, and multi-tab interface with keyboard shortcuts.</p>
-            </div>
-            <div class="feature">
-                <h3>🌍 GeoIP Integration</h3>
-                <p>Offline IP geolocation using MaxMind GeoLite2 database. Country codes displayed for all remote addresses in the TUI.</p>
-            </div>
-            <div class="feature">
-                <h3>🎮 Enhanced Controls</h3>
-                <p>Press <code>s</code> to sort, <code>/</code> to filter, <code>t</code> to toggle historic, <code>Tab</code> to switch tabs. Full mouse support with click and scroll.</p>
-            </div>
-            <div class="feature">
-                <h3>📊 Traffic Statistics</h3>
-                <p>Per-protocol breakdown, connection tracking, byte/packet counters, and traffic rate calculations in real-time.</p>
-            </div>
-        </div>
+        <p class="lead">
+            Instead of juggling multiple tools like <code>tcpdump</code>,
+            <code>ethtool</code>, <code>ss</code>, <code>ip route</code>,
+            and <code>iftop</code>, pktana delivers a consistent,
+            high-performance interface designed for modern cloud-native infrastructure.
+        </p>
+    </section>
 
-        <h2>🚀 Quick Start</h2>
+    <section style="background:#f8fafc;">
+        <h2>Install in Seconds</h2>
+
+        <p class="lead">
+            Optimized for RHEL, Rocky Linux, and CentOS Stream.
+        </p>
+
         <div class="install-box">
-# Start TUI dashboard (requires root for packet capture)
+sudo dnf install \
+https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.0-1.el9.x86_64.rpm
+        </div>
+    </section>
+
+    <section>
+        <h2>Why Engineers Choose pktana</h2>
+
+        <div class="grid">
+            <div class="card">
+                <h3>Deep Packet Inspection</h3>
+                <p>
+                    Full L2-L7 protocol decoding including TCP, UDP, TLS, DNS,
+                    HTTP, VXLAN, Geneve, BGP, and more.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>Advanced TUI Dashboard</h3>
+                <p>
+                    Real-time connections, process tracking, GeoIP, filtering,
+                    sorting, and historic flow analysis.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>Dataplane Intelligence</h3>
+                <p>
+                    Detect XDP, AF_XDP, DPDK, SR-IOV, hardware offloads,
+                    queue mappings, and IRQ affinity.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>PCAP Export</h3>
+                <p>
+                    Capture live traffic and export standard PCAP files
+                    for offline Wireshark analysis.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>Zero External Dependencies</h3>
+                <p>
+                    Single native binary with minimal runtime requirements.
+                    Built entirely in Rust.
+                </p>
+            </div>
+
+            <div class="card">
+                <h3>Production Ready</h3>
+                <p>
+                    Designed for data centers, cloud platforms,
+                    network security, and carrier-grade infrastructure.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section style="background:#f8fafc;">
+        <h2>Quick Start</h2>
+
+        <div class="install-box">
+# Launch interactive dashboard
 sudo pktana tui eth0
 
-# Capture packets to file
-sudo pktana capture eth0 --count 100
+# Capture packets
+sudo pktana capture eth0
 
-# Query GeoIP database
-pktana geoip 8.8.8.8
+# Display active connections
+pktana conn
 
-# Show NIC hardware details (ethtool equivalent)
+# Inspect NIC hardware
 pktana ethtool eth0
 
-# Deep packet inspection from hex
-pktana inspect "4500003c..."
+# Analyze dataplane
+pktana dp eth0
+
+# Query GeoIP
+pktana geoip 8.8.8.8
         </div>
+    </section>
 
-        <h2>✨ Core Features</h2>
-        <div class="features">
-            <div class="feature">
-                <h3>📊 TUI Dashboard</h3>
-                <p>Real-time terminal UI with connection tracking, process mapping, and GeoIP lookups.</p>
-            </div>
-            <div class="feature">
-                <h3>📦 Packet Capture</h3>
-                <p>Live capture with BPF filters, DNS decode, and colorized output.</p>
-            </div>
-            <div class="feature">
-                <h3>🔬 Deep Inspection</h3>
-                <p>Layer-by-layer packet decode: Ethernet, ARP, IPv4, TCP/UDP/ICMP, TLS, HTTP, DNS.</p>
-            </div>
-            <div class="feature">
-                <h3>🤖 Auto-Diagnosis</h3>
-                <p>Rule-based findings: TCP handshake state, zero-window, OS fingerprints, anomaly detection.</p>
-            </div>
-            <div class="feature">
-                <h3>🔧 NIC Information</h3>
-                <p>Interface details from sysfs: state, MAC, MTU, speed, IP addresses, RX/TX counters.</p>
-            </div>
-            <div class="feature">
-                <h3>⚡ ethtool Equivalent</h3>
-                <p>Driver info, PCI bus, firmware version, link speed, IRQ affinities, queue stats.</p>
-            </div>
+    <section>
+        <h2>Built for Modern Infrastructure</h2>
+
+        <div class="highlight">
+            <strong>pktana replaces multiple Linux networking tools with one unified workflow.</strong>
+            <br><br>
+            Packet capture, DPI, routing, connection tables, NIC telemetry,
+            XDP/eBPF visibility, DPDK detection, GeoIP, and live traffic analysis—
+            delivered through a consistent, operator-friendly interface.
         </div>
+    </section>
 
-        <h2>📚 Documentation</h2>
-        <div class="buttons">
-            <a href="https://github.com/omnayak27199/pktana/blob/main/README.md" class="btn">📖 Full README</a>
-            <a href="https://github.com/omnayak27199/pktana/blob/main/NEW_FEATURES.md" class="btn btn-secondary">🎉 Feature Guide</a>
-            <a href="https://github.com/omnayak27199/pktana/blob/main/CHANGELOG.md" class="btn btn-success">📝 Changelog</a>
-        </div>
+    <footer class="footer">
+        <p>
+            Built with Rust by Omprakash • Licensed under Apache 2.0
+        </p>
+        <p style="margin-top:12px;">
+            <a href="https://github.com/omnayak27199">GitHub Profile</a>
+        </p>
+    </footer>
 
-        <h2>🛠️ Build from Source</h2>
-        <div class="install-box">
-git clone https://github.com/omnayak27199/pktana
-cd pktana
-make pktana    # Builds and runs all checks
+</div>
 
-# Or manually:
-cargo build --release --features pcap,tui
-sudo ./target/release/pktana tui eth0
-        </div>
-
-        <h2>📄 License</h2>
-        <p style="margin: 20px 0;">Apache-2.0 • Created by <a href="https://github.com/omnayak27199" style="color: #667eea;">Omprakash</a></p>
-    </div>
 </body>
 </html>
