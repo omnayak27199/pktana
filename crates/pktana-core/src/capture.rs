@@ -177,9 +177,10 @@ where
                 let data = packet.data.to_vec();
                 stats.packets_seen += 1;
                 stats.bytes_seen += data.len();
+                #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
                 let cp = CapturePacket {
                     timestamp_sec: packet.header.ts.tv_sec,
-                    timestamp_usec: packet.header.ts.tv_usec,
+                    timestamp_usec: packet.header.ts.tv_usec as i64,
                     data,
                 };
                 if !on_packet(cp) {
@@ -240,11 +241,13 @@ fn capture_impl(
                 let packet_data = packet.data.to_vec();
                 stats.packets_seen += 1;
                 stats.bytes_seen += packet_data.len();
-                packets.push(CapturePacket {
+                #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
+                let pkt = CapturePacket {
                     timestamp_sec: packet.header.ts.tv_sec,
-                    timestamp_usec: packet.header.ts.tv_usec,
+                    timestamp_usec: packet.header.ts.tv_usec as i64,
                     data: packet_data,
-                });
+                };
+                packets.push(pkt);
             }
             Err(pcap::Error::TimeoutExpired) => continue,
             Err(err) => return Err(CaptureError::Read(err.to_string())),
