@@ -1,4 +1,4 @@
-# 🎉 pktana v0.1.0 - NEW FEATURES
+# 🎉 pktana v0.3.0 - NEW FEATURES
 
 ## ✅ IMPLEMENTED 
 
