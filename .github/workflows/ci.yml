@@ -3,6 +3,7 @@
 # Triggered on:
 #   • every push/PR to main  →  build + test only
 #   • any tag v*.*.*          →  build + test + sign RPM + create GitHub Release
+#   • manual workflow         →  build + optional crates.io publish
 #
 # Secrets required (set in GitHub repo → Settings → Secrets → Actions):
 #   GPG_PRIVATE_KEY   — ASCII-armored GPG private key  (gpg --armor --export-secret-keys <ID>)
@@ -17,6 +18,18 @@ on:
     tags:     ["v*.*.*"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_to_crates_io:
+        description: 'Publish to crates.io'
+        required: false
+        type: boolean
+        default: false
+      create_github_release:
+        description: 'Create GitHub Release'
+        required: false
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -74,12 +87,12 @@ jobs:
         run: cargo run -p pktana-cli --features pcap -- --version
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: RPM build + GPG sign + GitHub Release  (tags only)
+  # Job 2: RPM build + GPG sign + GitHub Release  (tags or manual)
   # ────────────────────────────────────────────────────────────────────────────
   release:
     name: Release RPM
     needs: build-and-test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_github_release)
     runs-on: ubuntu-latest
     container:
       image: rockylinux:9
@@ -171,47 +184,48 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ────────────────────────────────────────────────────────────────────────────
-  # Job 3: Publish pktana-core to crates.io  (tags only, after release)
+  # Job 3: Publish to crates.io (manual workflow or if explicitly enabled)
   # ────────────────────────────────────────────────────────────────────────────
-  # DISABLED: Add CRATES_IO_TOKEN secret to enable publishing
-  # publish-crate:
-  #   name: Publish to crates.io
-  #   needs: release
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   runs-on: ubuntu-latest
-  #
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4.2.2
-  #
-  #     - name: Install Rust stable
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Install libpcap-dev
-  #       run: sudo apt-get update && sudo apt-get install -y libpcap-dev
-  #
-  #     - name: Publish pktana-core
-  #       env:
-  #         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-  #       run: |
-  #         out=$(cargo publish -p pktana-core --token "$CRATES_IO_TOKEN" 2>&1) || {
-  #           if echo "$out" | grep -q "already exists"; then
-  #             echo "pktana-core already published — skipping"
-  #           else
-  #             echo "$out" >&2; exit 1
-  #           fi
-  #         }
-  #
-  #     - name: Publish pktana-cli
-  #       # pktana-cli depends on pktana-core; wait for index propagation
-  #       env:
-  #         CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-  #       run: |
-  #         sleep 30
-  #         out=$(cargo publish -p pktana-cli --features pcap --token "$CRATES_IO_TOKEN" 2>&1) || {
-  #           if echo "$out" | grep -q "already exists"; then
-  #             echo "pktana-cli already published — skipping"
-  #           else
-  #             echo "$out" >&2; exit 1
-  #           fi
-  #         }
+  publish-crate:
+    name: Publish to crates.io
+    needs: build-and-test
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_to_crates_io
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libpcap-dev
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Publish pktana-core
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          cargo login "$CRATES_IO_TOKEN"
+          out=$(cargo publish -p pktana-core 2>&1) || {
+            if echo "$out" | grep -q "already exists"; then
+              echo "✅ pktana-core already published — skipping"
+            else
+              echo "$out" >&2; exit 1
+            fi
+          }
+
+      - name: Wait for crates.io index propagation
+        run: sleep 30
+
+      - name: Publish pktana-cli
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          out=$(cargo publish -p pktana-cli --features pcap 2>&1) || {
+            if echo "$out" | grep -q "already exists"; then
+              echo "✅ pktana-cli already published — skipping"
+            else
+              echo "$out" >&2; exit 1
+            fi
+          }
