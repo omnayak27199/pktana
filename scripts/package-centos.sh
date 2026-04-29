@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 PACKAGE_DIR="${DIST_DIR}/pktana-linux-amd64"
-VERSION="0.3.0"
+VERSION="0.3.1"
 
 cd "${ROOT_DIR}"
 
