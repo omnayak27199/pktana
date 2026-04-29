@@ -107,16 +107,25 @@
     }
 
     .shell {
-      max-width: var(--max);
-      margin: 0 auto;
-      background: var(--paper);
-      backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.75);
-      border-radius: 34px;
-      overflow: hidden;
-      box-shadow: var(--shadow);
-    }
+  max-width: 100%;
+  width: 100%;
+  margin: 0;
+  background: var(--paper);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 0;
+  overflow: hidden;
+  box-shadow: none;
+}
 
+@media (min-width: 1240px) {
+  .shell {
+    max-width: var(--max);
+    margin: 0 auto;
+    border-radius: 34px;
+    box-shadow: var(--shadow);
+  }
+}
     .topbar {
       position: sticky;
       top: 0;
@@ -818,51 +827,143 @@
     }
 
     @media (max-width: 860px) {
-      body {
-        padding: 12px;
-      }
+  body {
+    padding: 8px;
+  }
 
-      .topbar,
-      section,
-      .hero,
-      .footer {
-        padding-left: 24px;
-        padding-right: 24px;
-      }
+  .shell {
+    border-radius: 8px;
+  }
 
-      .topbar {
-        flex-direction: column;
-        align-items: flex-start;
-      }
+  .topbar {
+    padding: 12px 16px;
+    flex-direction: column;
+    align-items: flex-start;
+  }
 
-      .nav {
-        justify-content: flex-start;
-      }
+  .nav {
+    width: 100%;
+    justify-content: flex-start;
+  }
 
-      .review-form-row {
-        grid-template-columns: 1fr;
-      }
-    }
+  .topbar,
+  section,
+  .hero,
+  .footer {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 
+  .hero {
+    padding: 50px 16px;
+  }
+
+  section {
+    padding: 40px 16px;
+  }
+
+  .pktana-logo-box {
+    min-width: 240px;
+    min-height: 100px;
+  }
+
+  .pktana-logo-box .short {
+    font-size: 4rem;
+  }
+
+  .pktana-logo-box .full {
+    font-size: 2.5rem;
+  }
+
+  .review-form-row {
+    grid-template-columns: 1fr;
+  }
+}
     @media (max-width: 640px) {
-      .stats,
-      .hero-meta {
-        grid-template-columns: 1fr;
-      }
+  .stats,
+  .hero-meta {
+    grid-template-columns: 1fr;
+  }
 
-      .hero {
-        padding-top: 88px;
-      }
+  .hero {
+    padding: 40px 12px 50px;
+  }
 
-      .hero-copy p {
-        font-size: 1.06rem;
-      }
+  .hero-copy p {
+    font-size: 1.06rem;
+  }
 
-      .button,
-      .ghost-button {
-        width: 100%;
-      }
-    }
+  .button,
+  .ghost-button {
+    width: 100%;
+  }
+
+  section {
+    padding: 30px 12px;
+  }
+
+  .topbar {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .brand-text {
+    display: none;
+  }
+
+  .nav {
+    gap: 8px;
+    font-size: 0.8rem;
+  }
+
+  .pill {
+    padding: 8px 12px;
+    font-size: 0.75rem;
+  }
+
+  .button,
+  .ghost-button {
+    padding: 12px 16px;
+    font-size: 0.85rem;
+  }
+
+  .pktana-logo-box {
+    min-width: 180px;
+    min-height: 80px;
+  }
+
+  .pktana-logo-box .short {
+    font-size: 2.5rem;
+  }
+
+  .pktana-logo-box .full {
+    font-size: 1.5rem;
+  }
+
+  .footer {
+    padding: 20px 12px;
+  }
+}
+
+@media (max-width: 360px) {
+  body {
+    padding: 4px;
+  }
+
+  .shell {
+    border-radius: 0;
+  }
+
+  .topbar {
+    padding: 8px;
+  }
+
+  section,
+  .hero,
+  .footer {
+    padding: 20px 8px;
+  }
+}
   </style>
 </head>
 <body>
