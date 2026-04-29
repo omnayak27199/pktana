@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
-VERSION="0.3.0"
+VERSION="0.3.1"
 RPMROOT="${DIST_DIR}/rpmbuild"
 SPEC_FILE="${ROOT_DIR}/deploy/centos/pktana.spec"
 SOURCE_TARBALL="${DIST_DIR}/pktana-${VERSION}.tar.gz"

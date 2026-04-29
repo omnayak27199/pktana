@@ -97,6 +97,11 @@ pub mod inner {
         last_tcp_seq: Option<u32>,
         anomalies: Vec<String>,
         recent_raw: VecDeque<Vec<u8>>,
+        // Live DPI fields — updated with each new packet for this flow
+        app_proto: Option<String>,
+        tls_sni: Option<String>,
+        risk_score: u8,
+        app_category: Option<String>,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -330,6 +335,21 @@ pub mod inner {
                     conn.recent_raw.pop_front();
                 }
                 conn.recent_raw.push_back(pkt.data.clone());
+                // Update live DPI fields from most recent packet
+                let dp = inspect(&pkt.data);
+                if dp.app_proto.is_some() {
+                    conn.app_proto = dp.app_proto.clone();
+                }
+                let sni = sni_from_deep(&dp);
+                if sni.is_some() {
+                    conn.tls_sni = sni;
+                }
+                if dp.risk_score > 0 {
+                    conn.risk_score = dp.risk_score;
+                }
+                if dp.app_category.is_some() {
+                    conn.app_category = dp.app_category.clone();
+                }
             } else {
                 let geo = geoip_lookup_str(&dst_ip);
                 let process = if let (Ok(li), Ok(ri)) =
@@ -342,6 +362,7 @@ pub mod inner {
                 };
                 let mut rr = VecDeque::new();
                 rr.push_back(pkt.data.clone());
+                let dp = inspect(&pkt.data);
                 self.connections.push(Connection {
                     id: self.next_conn_id,
                     protocol: protocol.clone(),
@@ -363,6 +384,10 @@ pub mod inner {
                     last_tcp_seq: None,
                     anomalies: Vec::new(),
                     recent_raw: rr,
+                    app_proto: dp.app_proto.clone(),
+                    tls_sni: sni_from_deep(&dp),
+                    risk_score: dp.risk_score,
+                    app_category: dp.app_category.clone(),
                 });
                 self.next_conn_id += 1;
             }
@@ -522,6 +547,16 @@ pub mod inner {
     // ═══════════════════════════════════════════════════════════════════════════
     //  Helpers
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Extract SNI from a DeepPacket's app_detail lines (e.g. "SNI      : example.com").
+    fn sni_from_deep(dp: &pktana_core::DeepPacket) -> Option<String> {
+        dp.app_detail
+            .iter()
+            .find(|l| l.contains("SNI"))
+            .and_then(|l| l.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
 
     fn extract_tuple(s: &pktana_core::PacketSummary) -> Option<(String, u16, String, u16)> {
         let (sp, dp) = match &s.transport {
@@ -1047,10 +1082,11 @@ pub mod inner {
             "Local Address",
             "Remote Address",
             "State",
-            "Svc",
+            "App / SNI",
             "Process(PID)",
             "Geo",
             "⚠",
+            "Risk",
             "Pkts↕",
             "Bytes↕",
             "Age",
@@ -1067,9 +1103,15 @@ pub mod inner {
             .map(|c| {
                 let local = format!("{}:{}", c.local_ip, c.local_port);
                 let remote = format!("{}:{}", c.remote_ip, c.remote_port);
-                let svc = svc_name(c.remote_port)
+                // Show SNI if TLS, otherwise app_proto, otherwise service name
+                let app_sni = c
+                    .tls_sni
+                    .as_deref()
+                    .or(c.app_proto.as_deref())
+                    .or_else(|| svc_name(c.remote_port))
                     .or_else(|| svc_name(c.local_port))
-                    .unwrap_or("-");
+                    .unwrap_or("-")
+                    .to_string();
                 let proc = c
                     .process
                     .as_ref()
@@ -1085,15 +1127,20 @@ pub mod inner {
                 } else {
                     format!("⚠{}", c.anomalies.len())
                 };
+                let risk = if c.risk_score == 0 {
+                    "-".into()
+                } else {
+                    format!("{}", c.risk_score)
+                };
                 let pkts = format!("{}↑{}↓", c.packets_sent, c.packets_recv);
                 let bytes = fmt_bytes(c.bytes_sent + c.bytes_recv);
                 let age = fmt_dur(c.first_seen.elapsed());
 
                 let style = if !c.active {
                     Style::default().fg(Color::DarkGray)
-                } else if !c.anomalies.is_empty() {
+                } else if c.risk_score >= 70 || !c.anomalies.is_empty() {
                     Style::default().fg(Color::LightRed)
-                } else if c.bytes_sent + c.bytes_recv > 10_000_000 {
+                } else if c.risk_score >= 40 || c.bytes_sent + c.bytes_recv > 10_000_000 {
                     Style::default().fg(Color::LightYellow)
                 } else {
                     Style::default().fg(proto_color(&c.protocol))
@@ -1104,10 +1151,11 @@ pub mod inner {
                     local,
                     remote,
                     c.state.clone(),
-                    svc.to_string(),
+                    app_sni,
                     proc,
                     geo,
                     badge,
+                    risk,
                     pkts,
                     bytes,
                     age,
@@ -1131,11 +1179,12 @@ pub mod inner {
                 Constraint::Length(22),
                 Constraint::Length(22),
                 Constraint::Length(11),
-                Constraint::Length(8),
-                Constraint::Length(18),
+                Constraint::Length(16),
+                Constraint::Length(16),
                 Constraint::Length(4),
                 Constraint::Length(4),
-                Constraint::Length(12),
+                Constraint::Length(5),
+                Constraint::Length(10),
                 Constraint::Length(8),
                 Constraint::Length(9),
             ],
@@ -1396,6 +1445,39 @@ pub mod inner {
                 if c.active { "Active ●" } else { "Idle ○" }
             ),
         ];
+        // ── Live DPI ─────────────────────────────────────────────────────────
+        if c.app_proto.is_some()
+            || c.tls_sni.is_some()
+            || c.risk_score > 0
+            || c.app_category.is_some()
+        {
+            lines.push(String::new());
+            lines.push("  ── Live DPI ─────────────────────────────────────────────────".into());
+            if let Some(ref sni) = c.tls_sni {
+                lines.push(format!("  SNI / Host   : {sni}"));
+            }
+            if let Some(ref ap) = c.app_proto {
+                lines.push(format!("  App Protocol : {ap}"));
+            }
+            if let Some(ref cat) = c.app_category {
+                lines.push(format!("  Category     : {cat}"));
+            }
+            if c.risk_score > 0 {
+                let label = if c.risk_score >= 70 {
+                    "HIGH"
+                } else if c.risk_score >= 40 {
+                    "MEDIUM"
+                } else {
+                    "LOW"
+                };
+                let bar_len = (c.risk_score as usize * 20) / 100;
+                let bar = "█".repeat(bar_len) + &"░".repeat(20 - bar_len);
+                lines.push(format!(
+                    "  Risk Score   : {} [{}] {}",
+                    c.risk_score, bar, label
+                ));
+            }
+        }
         if !c.anomalies.is_empty() {
             lines.push(String::new());
             lines.push("  ── Expert Info / Anomalies ──────────────────────────────────".into());

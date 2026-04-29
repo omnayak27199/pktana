@@ -1,819 +1,1327 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>pktana | Modern Linux Packet Analyzer</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-
-    <style>
-        :root {
-            --primary: #ea580c;
-            --primary-dark: #c2410c;
-            --secondary: #fb923c;
-            --accent: #ffedd5;
-            --dark: #111827;
-            --dark-light: #1f2937;
-            --gray: #6b7280;
-            --gray-light: #f9fafb;
-            --border: #e5e7eb;
-            --white: #ffffff;
-            --shadow: 0 25px 60px rgba(0, 0, 0, 0.12);
-            --radius: 24px;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html {
-            scroll-behavior: smooth;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            background:
-                radial-gradient(circle at top left, rgba(234,88,12,0.15), transparent 30%),
-                radial-gradient(circle at top right, rgba(251,146,60,0.12), transparent 25%),
-                linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
-            color: var(--dark);
-            line-height: 1.7;
-            padding: 24px;
-        }
-
-        .container {
-            max-width: 1280px;
-            margin: auto;
-            background: rgba(255,255,255,0.96);
-            backdrop-filter: blur(18px);
-            border-radius: 32px;
-            overflow: hidden;
-            box-shadow: var(--shadow);
-            border: 1px solid rgba(255,255,255,0.8);
-        }
-        /* Replace your existing .hero styles */
-
-.hero {
-    position: relative;
-    padding: 120px 60px;
-    text-align: center;
-    color: white;
-    overflow: hidden;
-    background:
-        linear-gradient(
-            135deg,
-            rgba(234,88,12,0.88),
-            rgba(194,65,12,0.82)
-        ),
-        url('https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=2200&q=90');
-    background-size: cover;
-    background-position: center center;
-    background-attachment: fixed;
-}
-
-/* Additional overlay for better readability */
-.hero-overlay {
-    position: absolute;
-    inset: 0;
-    background:
-        radial-gradient(circle at 20% 20%, rgba(255,255,255,0.10), transparent 25%),
-        radial-gradient(circle at 80% 30%, rgba(255,255,255,0.08), transparent 20%),
-        radial-gradient(circle at 50% 80%, rgba(255,255,255,0.06), transparent 30%);
-    z-index: 1;
-}
-
-/* Content always above effects */
-.hero-content {
-    position: relative;
-    z-index: 3;
-}
-
-/* Animated network particles */
-.hero-particles {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    pointer-events: none;
-}
-
-.hero-particles span {
-    position: absolute;
-    width: 10px;
-    height: 10px;
-    background: rgba(255,255,255,0.8);
-    border-radius: 50%;
-    box-shadow: 0 0 20px rgba(255,255,255,0.8);
-    animation: floatPacket 12s infinite linear;
-}
-
-.hero-particles span:nth-child(1) {
-    left: 8%;
-    top: 20%;
-    animation-delay: 0s;
-}
-
-.hero-particles span:nth-child(2) {
-    left: 22%;
-    top: 75%;
-    animation-delay: 2s;
-}
-
-.hero-particles span:nth-child(3) {
-    left: 45%;
-    top: 30%;
-    animation-delay: 4s;
-}
-
-.hero-particles span:nth-child(4) {
-    left: 68%;
-    top: 65%;
-    animation-delay: 6s;
-}
-
-.hero-particles span:nth-child(5) {
-    left: 82%;
-    top: 25%;
-    animation-delay: 8s;
-}
-
-.hero-particles span:nth-child(6) {
-    left: 92%;
-    top: 70%;
-    animation-delay: 10s;
-}
-
-@keyframes floatPacket {
-    0% {
-        transform: translateY(0) scale(1);
-        opacity: 0;
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pktana | Linux Packet Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #fff8f2;
+      --paper: rgba(255, 255, 255, 0.88);
+      --panel: #ffffff;
+      --primary: #ea580c;
+      --primary-dark: #c2410c;
+      --secondary: #fb923c;
+      --accent: #fff1e6;
+      --dark: #101828;
+      --dark-soft: #1f2937;
+      --text: #334155;
+      --muted: #64748b;
+      --line: rgba(148, 163, 184, 0.18);
+      --shadow: 0 30px 60px rgba(15, 23, 42, 0.12);
+      --shadow-soft: 0 16px 40px rgba(15, 23, 42, 0.08);
+      --radius-xl: 30px;
+      --radius-lg: 22px;
+      --radius-md: 16px;
+      --max: 1240px;
     }
-    10% {
-        opacity: 1;
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
     }
-    50% {
-        transform: translateY(-40px) scale(1.3);
-        opacity: 1;
+
+    html {
+      scroll-behavior: smooth;
     }
-    100% {
-        transform: translateY(-80px) scale(0.8);
-        opacity: 0;
+
+    body {
+      font-family: "Inter", sans-serif;
+      color: var(--dark);
+      background:
+        radial-gradient(circle at 0% 0%, rgba(234, 88, 12, 0.15), transparent 26%),
+        radial-gradient(circle at 100% 0%, rgba(251, 146, 60, 0.14), transparent 24%),
+        linear-gradient(135deg, #fff7ed 0%, #fffdfb 50%, #ffffff 100%);
+      line-height: 1.7;
+      padding: 22px;
     }
-}
 
-        .version {
-            display: inline-block;
-            padding: 10px 22px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.16);
-            border: 1px solid rgba(255,255,255,0.28);
-            font-size: 0.95rem;
-            font-weight: 800;
-            margin-bottom: 28px;
-        }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    .pktana-logo-box {
+      position: relative;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      min-width: 320px;
+      min-height: 140px;
+      border-radius: 28px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.35s ease;
+      background: transparent;
+    }
 
-        h1 {
-            font-size: 5rem;
-            font-weight: 900;
-            letter-spacing: -3px;
-            margin-bottom: 20px;
-        }
+    .pktana-logo-box .short,
+    .pktana-logo-box .full {
+      position: absolute;
+      font-family: 'Inter', sans-serif;
+      font-weight: 900;
+      letter-spacing: -0.05em;
+      transition: all 0.35s ease;
+    }
 
-        .subtitle {
-            max-width: 900px;
-            margin: auto;
-            font-size: 1.4rem;
-            opacity: 0.96;
-        }
+    .pktana-logo-box .short {
+      font-size: 7rem;
+      color: white;
+      opacity: 1;
+      transform: scale(1);
+    }
 
-        .buttons {
-            margin-top: 42px;
-            display: flex;
-            justify-content: center;
-            flex-wrap: wrap;
-            gap: 18px;
-        }
+    .pktana-logo-box .full {
+      font-size: 4.6rem;
+      color: #ea580c;
+      opacity: 0;
+      transform: scale(0.9);
+    }
 
-        .btn {
-            display: inline-block;
-            padding: 18px 34px;
-            border-radius: 16px;
-            text-decoration: none;
-            font-weight: 800;
-            transition: all 0.3s ease;
-        }
+    .pktana-logo-box:hover {
+      background: rgba(255,255,255,0.14);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.18);
+    }
 
-        .btn-primary {
-            background: white;
-            color: var(--primary);
-        }
+    .pktana-logo-box:hover .short {
+      opacity: 0;
+      transform: scale(0.8);
+    }
 
-        .btn-primary:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 18px 35px rgba(0,0,0,0.18);
-        }
+    .pktana-logo-box:hover .full {
+      opacity: 1;
+      transform: scale(1);
+    }
 
-        .btn-secondary {
-            color: white;
-            border: 1px solid rgba(255,255,255,0.35);
-            background: rgba(255,255,255,0.12);
-        }
+    .shell {
+      max-width: var(--max);
+      margin: 0 auto;
+      background: var(--paper);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.75);
+      border-radius: 34px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
 
-        .btn-secondary:hover {
-            background: rgba(255,255,255,0.22);
-        }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px 34px;
+      background: rgba(255, 255, 255, 0.86);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    }
 
-        section {
-            padding: 85px 60px;
-        }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 900;
+      color: var(--dark);
+      letter-spacing: -0.03em;
+    }
 
-        h2 {
-            font-size: 3rem;
-            font-weight: 900;
-            margin-bottom: 24px;
-            letter-spacing: -1.5px;
-        }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 14px;
+      color: white;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      box-shadow: 0 14px 26px rgba(234, 88, 12, 0.26);
+    }
 
-        .lead {
-            font-size: 1.18rem;
-            color: var(--gray);
-            max-width: 920px;
-            margin-bottom: 28px;
-        }
+    .brand-text {
+      font-size: 1.15rem;
+    }
 
-        .install-box {
-            background: #111827;
-            color: #f9fafb;
-            padding: 32px;
-            border-radius: var(--radius);
-            font-family: monospace;
-            font-size: 1rem;
-            overflow-x: auto;
-            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
-        }
+    .nav {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 18px;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 30px;
-            margin-top: 50px;
-        }
+    .nav a:hover {
+      color: var(--primary-dark);
+    }
 
-        .card {
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 34px;
-            transition: all 0.35s ease;
-        }
+    .top-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
 
-        .card:hover {
-            transform: translateY(-10px);
-            box-shadow: 0 24px 50px rgba(234,88,12,0.14);
-            border-color: #fdba74;
-        }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      color: white;
+      font-weight: 800;
+      font-size: 0.92rem;
+    }
 
-        .card h3 {
-            font-size: 1.45rem;
-            margin-bottom: 16px;
-        }
+    .button,
+    .ghost-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 15px 24px;
+      border-radius: 16px;
+      font-weight: 800;
+      transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+    }
 
-        .card p {
-            color: var(--gray);
-        }
+    .button {
+      color: white;
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      box-shadow: 0 16px 30px rgba(234, 88, 12, 0.22);
+    }
 
-        .highlight {
-            padding: 42px;
-            border-radius: var(--radius);
-            background: linear-gradient(135deg, #fff7ed, #ffffff);
-            border: 1px solid #fed7aa;
-            font-size: 1.15rem;
-        }
+    .button:hover,
+    .ghost-button:hover {
+      transform: translateY(-3px);
+    }
 
-        .contact-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 28px;
-            margin-top: 40px;
-        }
+    .ghost-button {
+      color: var(--primary-dark);
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(234, 88, 12, 0.16);
+    }
 
-        .contact-card {
-            padding: 34px;
-            background: white;
-            border-radius: var(--radius);
-            border: 1px solid var(--border);
-            text-align: center;
-        }
+    .hero {
+      position: relative;
+      isolation: isolate;
+      padding: 110px 56px 74px;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(116, 46, 16, 0.78), rgba(194, 65, 12, 0.72)),
+        url("https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=2200&q=80") center/cover no-repeat;
+      color: white;
+    }
 
-        .contact-card h3 {
-            margin-bottom: 12px;
-            color: var(--primary);
-        }
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 15% 20%, rgba(255,255,255,0.16), transparent 20%),
+        radial-gradient(circle at 82% 25%, rgba(255,255,255,0.13), transparent 22%),
+        radial-gradient(circle at 55% 80%, rgba(255,255,255,0.07), transparent 24%);
+      z-index: -1;
+    }
 
-        .contact-card a {
-            color: var(--dark);
-            text-decoration: none;
-            font-weight: 700;
-        }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 38px;
+      align-items: center;
+    }
 
-        .footer {
-            background: var(--dark);
-            color: #d1d5db;
-            text-align: center;
-            padding: 60px 20px;
-        }
+    .hero-copy h1 {
+      font-size: clamp(3.1rem, 7vw, 5.4rem);
+      line-height: 0.94;
+      letter-spacing: -0.06em;
+      margin: 18px 0 20px;
+      font-weight: 900;
+    }
 
-        .footer a {
-            color: #fdba74;
-            text-decoration: none;
-        }
+    .hero-copy p {
+      max-width: 780px;
+      font-size: 1.2rem;
+      color: rgba(255, 255, 255, 0.92);
+    }
 
-        /* ── Review Section ─────────────────────────────── */
-        #reviews .review-form-wrap {
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 40px;
-            margin-top: 50px;
-        }
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 34px;
+    }
 
-        #reviews .review-form-wrap h3 {
-            font-size: 1.6rem;
-            margin-bottom: 28px;
-        }
+    .hero-actions .button {
+      background: white;
+      color: var(--primary-dark);
+    }
 
-        .review-form {
-            display: grid;
-            gap: 18px;
-        }
+    .hero-actions .ghost-button {
+      background: rgba(255, 255, 255, 0.14);
+      color: white;
+      border-color: rgba(255, 255, 255, 0.26);
+    }
 
-        .review-form .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 18px;
-        }
+    .hero-meta {
+      margin-top: 34px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
 
-        .review-form input,
-        .review-form textarea,
-        .review-form select {
-            width: 100%;
-            padding: 14px 18px;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            font-family: 'Inter', sans-serif;
-            font-size: 0.97rem;
-            outline: none;
-            transition: border-color 0.2s;
-        }
+    .meta-card {
+      padding: 18px 18px 16px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 18px;
+    }
 
-        .review-form input:focus,
-        .review-form textarea:focus,
-        .review-form select:focus {
-            border-color: var(--primary);
-        }
+    .meta-card strong {
+      display: block;
+      font-size: 1.4rem;
+      font-weight: 900;
+      margin-bottom: 6px;
+    }
 
-        .review-form textarea {
-            min-height: 120px;
-            resize: vertical;
-        }
+    .meta-card span {
+      color: rgba(255,255,255,0.82);
+      font-size: 0.95rem;
+    }
 
-        .star-picker {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
+    .hero-panel {
+      padding: 26px;
+      border-radius: 26px;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.16);
+      box-shadow: var(--shadow-soft);
+    }
 
-        .star-picker label {
-            font-size: 1.6rem;
-            cursor: pointer;
-            color: #d1d5db;
-            transition: color 0.15s;
-            line-height: 1;
-        }
+    .terminal {
+      padding: 22px;
+      border-radius: 22px;
+      background: rgba(12, 18, 31, 0.92);
+      color: #f8fafc;
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    }
 
-        .star-picker input[type="radio"] {
-            display: none;
-        }
+    .terminal-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
 
-        .star-picker label:hover,
-        .star-picker label:hover ~ label,
-        .star-picker input[type="radio"]:checked ~ label {
-            color: #f59e0b;
-        }
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #f87171;
+    }
 
-        .star-picker {
-            direction: rtl;
-            display: inline-flex;
-        }
+    .terminal-dot:nth-child(2) {
+      background: #fbbf24;
+    }
 
-        .star-picker label:hover,
-        .star-picker label:hover ~ label {
-            color: #f59e0b;
-        }
+    .terminal-dot:nth-child(3) {
+      background: #34d399;
+    }
 
-        .btn-submit-review {
-            display: inline-block;
-            padding: 14px 32px;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-family: 'Inter', sans-serif;
-            font-size: 1rem;
-            font-weight: 700;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
+    .terminal code,
+    .code-block code {
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+      color: inherit;
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+    }
 
-        .btn-submit-review:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-        }
+    section {
+      padding: 74px 56px;
+    }
 
-        .user-reviews-list {
-            margin-top: 50px;
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-            gap: 28px;
-        }
+    .section-tag {
+      display: inline-block;
+      margin-bottom: 14px;
+      font-size: 0.86rem;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--primary);
+    }
 
-        .user-review-card {
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 30px;
-            transition: all 0.3s ease;
-        }
+    h2 {
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 1.02;
+      letter-spacing: -0.05em;
+      margin-bottom: 18px;
+      color: var(--dark);
+    }
 
-        .user-review-card:hover {
-            transform: translateY(-6px);
-            box-shadow: 0 20px 40px rgba(234,88,12,0.1);
-            border-color: #fdba74;
-        }
+    .section-lead {
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
 
-        .user-review-card .stars {
-            font-size: 1.2rem;
-            margin-bottom: 12px;
-        }
+    .story {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+      gap: 28px;
+      margin-top: 34px;
+    }
 
-        .user-review-card blockquote {
-            font-size: 1rem;
-            color: var(--dark);
-            margin-bottom: 16px;
-            font-style: italic;
-        }
+    .story-card,
+    .info-card,
+    .feature-card,
+    .review-card,
+    .contact-card,
+    .roadmap-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-soft);
+    }
 
-        .user-review-card .reviewer-meta {
-            font-weight: 700;
-            color: var(--primary);
-            font-size: 0.95rem;
-        }
+    .story-card {
+      padding: 30px;
+    }
 
-        .user-review-card .reviewer-meta span {
-            font-weight: 400;
-            color: var(--gray);
-        }
+    .story-card p + p {
+      margin-top: 16px;
+    }
 
-        .form-star-row {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
+    .info-card {
+      padding: 24px;
+      background: linear-gradient(135deg, #fff8f1, #ffffff);
+    }
 
-        .form-star-row label.star-label {
-            font-size: 0.9rem;
-            color: var(--gray);
-            font-weight: 600;
-        }
+    .info-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 12px;
+    }
 
-        .review-success {
-            display: none;
-            padding: 14px 20px;
-            background: #ecfdf5;
-            border: 1px solid #6ee7b7;
-            border-radius: 12px;
-            color: #065f46;
-            font-weight: 600;
-        }
+    .info-list div {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(234, 88, 12, 0.06);
+      color: var(--dark-soft);
+      font-weight: 600;
+    }
 
-        @media (max-width: 768px) {
-            .review-form .form-row { grid-template-columns: 1fr; }
-        }
+    .install-panel {
+      margin-top: 34px;
+      padding: 28px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(135deg, #101828, #1f2937 70%);
+      color: white;
+      box-shadow: var(--shadow);
+    }
 
-        @media (max-width: 768px) {
-            .hero, section {
-                padding: 60px 28px;
-            }
+    .install-panel p {
+      color: rgba(255,255,255,0.76);
+      margin-bottom: 18px;
+    }
 
-            h1 {
-                font-size: 3.2rem;
-            }
+    .code-block {
+      padding: 22px;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow-x: auto;
+    }
 
-            h2 {
-                font-size: 2.2rem;
-            }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+      margin-top: 36px;
+    }
 
-            .subtitle {
-                font-size: 1.15rem;
-            }
-        }
-    </style>
+    .stat {
+      padding: 22px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, #fff, #fff8f2);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 1.8rem;
+      letter-spacing: -0.05em;
+      color: var(--dark);
+    }
+
+    .stat span {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.94rem;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 22px;
+      margin-top: 34px;
+    }
+
+    .feature-card {
+      padding: 26px;
+      transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
+    }
+
+    .feature-card:hover,
+    .review-card:hover,
+    .contact-card:hover,
+    .roadmap-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 24px 46px rgba(234, 88, 12, 0.14);
+      border-color: rgba(251, 146, 60, 0.46);
+    }
+
+    .feature-icon {
+      width: 54px;
+      height: 54px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      font-size: 1.4rem;
+      background: linear-gradient(135deg, rgba(234, 88, 12, 0.12), rgba(251, 146, 60, 0.18));
+      margin-bottom: 16px;
+    }
+
+    .feature-card h3 {
+      font-size: 1.2rem;
+      margin-bottom: 12px;
+    }
+
+    .feature-card p {
+      color: var(--muted);
+      font-size: 0.98rem;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 26px;
+      margin-top: 34px;
+    }
+
+    .panel {
+      padding: 28px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, #fff, #fffaf4);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .panel h3 {
+      font-size: 1.3rem;
+      margin-bottom: 14px;
+    }
+
+    .panel ul {
+      display: grid;
+      gap: 10px;
+      margin-left: 18px;
+      color: var(--text);
+    }
+
+    .panel li {
+      color: var(--text);
+    }
+
+    .command-grid {
+      display: grid;
+      gap: 18px;
+      margin-top: 26px;
+    }
+
+    .command-card {
+      padding: 20px 22px;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .command-card strong {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--dark);
+    }
+
+    .command-card code {
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      color: var(--primary-dark);
+      background: transparent;
+      padding: 0;
+    }
+
+    .roadmap-grid,
+    .reviews-grid,
+    .contact-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 22px;
+      margin-top: 32px;
+    }
+
+    .roadmap-card,
+    .review-card,
+    .contact-card {
+      padding: 26px;
+    }
+
+    .review-stars {
+      margin-bottom: 14px;
+      letter-spacing: 0.08em;
+      color: var(--primary);
+      font-size: 1.05rem;
+    }
+
+    .review-card p {
+      color: var(--muted);
+    }
+
+    .review-author {
+      margin-top: 18px;
+      color: var(--dark);
+      font-weight: 800;
+    }
+
+    .review-form-wrap {
+      margin-top: 28px;
+      padding: 30px;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, #fff, #fff9f5);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .review-form {
+      display: grid;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .review-form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .review-form input,
+    .review-form textarea {
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      font: inherit;
+      color: var(--dark);
+      background: #fff;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .review-form input:focus,
+    .review-form textarea:focus {
+      border-color: rgba(234, 88, 12, 0.55);
+      box-shadow: 0 0 0 4px rgba(234, 88, 12, 0.08);
+    }
+
+    .review-form textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .star-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .star-picker {
+      display: inline-flex;
+      direction: rtl;
+      gap: 6px;
+    }
+
+    .star-picker input {
+      display: none;
+    }
+
+    .star-picker label {
+      cursor: pointer;
+      font-size: 1.55rem;
+      color: #d1d5db;
+      transition: color 0.15s ease;
+      line-height: 1;
+    }
+
+    .star-picker label:hover,
+    .star-picker label:hover ~ label,
+    .star-picker input:checked ~ label {
+      color: #f59e0b;
+    }
+
+    .review-success {
+      display: none;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #ecfdf5;
+      border: 1px solid #86efac;
+      color: #166534;
+      font-weight: 700;
+    }
+
+    .donation-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 22px;
+      margin-top: 28px;
+    }
+
+    .donation-card {
+      padding: 26px;
+      border-radius: var(--radius-lg);
+      background: linear-gradient(180deg, #fff, #fff8f2);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .donation-card p {
+      color: var(--muted);
+      margin: 10px 0 18px;
+    }
+
+    .mini-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 18px;
+      border-radius: 14px;
+      font-weight: 800;
+      color: var(--primary-dark);
+      background: rgba(234, 88, 12, 0.08);
+      border: 1px solid rgba(234, 88, 12, 0.14);
+    }
+
+    .contact-card h3,
+    .roadmap-card h3 {
+      margin-bottom: 10px;
+    }
+
+    .contact-card p,
+    .roadmap-card p {
+      color: var(--muted);
+    }
+
+    .contact-card a {
+      color: var(--primary-dark);
+      font-weight: 700;
+      word-break: break-word;
+    }
+
+    .cta {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(135deg, rgba(234, 88, 12, 0.92), rgba(194, 65, 12, 0.95)),
+        url("https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=2200&q=80") center/cover no-repeat;
+      color: white;
+    }
+
+    .cta::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 20% 30%, rgba(255,255,255,0.12), transparent 22%),
+        radial-gradient(circle at 78% 70%, rgba(255,255,255,0.08), transparent 18%);
+      pointer-events: none;
+    }
+
+    .cta-content {
+      position: relative;
+      z-index: 1;
+      max-width: 860px;
+    }
+
+    .cta h2,
+    .cta .section-lead {
+      color: white;
+    }
+
+    .cta .section-lead {
+      opacity: 0.9;
+    }
+
+    .footer {
+      padding: 34px 56px 42px;
+      background: #0f172a;
+      color: #cbd5e1;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: center;
+    }
+
+    .footer strong {
+      color: white;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      color: #fdba74;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1080px) {
+      .hero-grid,
+      .story,
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .stats,
+      .hero-meta {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 860px) {
+      body {
+        padding: 12px;
+      }
+
+      .topbar,
+      section,
+      .hero,
+      .footer {
+        padding-left: 24px;
+        padding-right: 24px;
+      }
+
+      .topbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .nav {
+        justify-content: flex-start;
+      }
+
+      .review-form-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .stats,
+      .hero-meta {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        padding-top: 88px;
+      }
+
+      .hero-copy p {
+        font-size: 1.06rem;
+      }
+
+      .button,
+      .ghost-button {
+        width: 100%;
+      }
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-    <!-- Replace your current hero section with this enhanced version -->
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">p</div>
+        <div class="brand-text">pktana</div>
+      </div>
 
-<header class="hero">
-    <div class="hero-overlay"></div>
+      <nav class="nav">
+        <a href="#about">About</a>
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#reviews">Reviews</a>
+        <a href="#contact">Contact</a>
+      </nav>
 
-    <!-- Floating packet visualization -->
-    <div class="hero-particles">
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-    </div>
+      <div class="top-actions">
+        <a class="ghost-button" href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
+      </div>
+    </header>
 
-    <div class="hero-content">
-        <div class="version">v0.3.1 • Enterprise Ready</div>
+    <section class="hero">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <div class="pill">Current release v0.3.1</div>
+          <h1>See every packet with clarity.</h1>
+          <p>
+            pktana is a modern Linux packet analyzer built for network engineers, SREs, and infrastructure teams who need
+            fast packet inspection, clean protocol visibility, flow intelligence, and a practical path from debugging to production observability.
+          </p>
 
-        <h1>pktana</h1>
+          <div class="hero-actions">
+            <a class="button" href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">View Project</a>
+            <a class="ghost-button" href="#features">Explore Features</a>
+          </div>
 
-        <p class="subtitle">
-            High-performance Linux packet analysis. Full L2–L7 deep packet inspection with
-            TLS JA3 fingerprinting, QUIC/HTTP2/gRPC detection, tunnel decoding,
-            and Wireshark-like observability.
-        </p>
-
-        <div class="buttons">
-            <a class="btn btn-primary"
-               href="https://github.com/omnayak27199/pktana">
-               View on GitHub
-            </a>
-
-            <a class="btn btn-secondary"
-               href="https://github.com/omnayak27199/pktana/releases/latest">
-               Download Latest Release
-            </a>
+          <div class="hero-meta">
+            <div class="meta-card">
+              <strong>Rust</strong>
+              <span>memory-safe systems implementation</span>
+            </div>
+            <div class="meta-card">
+              <strong>L2-L7</strong>
+              <span>packet and flow visibility roadmap</span>
+            </div>
+            <div class="meta-card">
+              <strong>Linux</strong>
+              <span>built for real ops workflows</span>
+            </div>
+          </div>
         </div>
-    </div>
-</header>
-    <section>
-        <h2>About pktana</h2>
-        <p class="lead">
-            pktana is a next-generation Linux network analysis platform engineered for network developers,
-            SREs, security engineers, and infrastructure teams. It delivers packet capture, full L2–L7
-            protocol decoding, flow analysis, NIC introspection, routing visibility, and dataplane
-            intelligence in one unified tool.
-        </p>
-        <p class="lead">
-            Replace fragmented workflows built around tcpdump, ethtool, ss, iproute2, Wireshark, and
-            multiple ad-hoc scripts with a single high-performance Rust application — distributed as a
-            signed RPM — designed for production environments.
-        </p>
-    </section>
-
-    <section style="background:#fff7ed;">
-        <h2>Install Instantly</h2>
-        <p class="lead">Optimized for RHEL 9, Rocky Linux, AlmaLinux, and CentOS Stream 9.</p>
-        <div class="install-box">sudo dnf install \
-https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.0-1.el9.x86_64.rpm</div>
-    </section>
-
-    <section>
-        <h2>Why Engineers Choose pktana</h2>
-        <div class="grid">
-            <div class="card"><h3>🔬 Deep Packet Inspection</h3><p>Full L2–L7 decode: Ethernet, IPv4/IPv6, TCP full options, UDP, ICMP, TLS, QUIC, HTTP/2, gRPC, WebSocket, SSH, SIP, NTP, BGP, DNS, DHCP, VXLAN, GRE inner frames, and 20+ more protocols.</p></div>
-            <div class="card"><h3>🔑 TLS JA3 Fingerprinting</h3><p>Full ClientHello parsing — cipher suites, ALPN negotiation, elliptic curves, GREASE filtering. JA3 raw string ready for threat intel lookup. TLS 1.0/1.1 deprecation warnings inline.</p></div>
-            <div class="card"><h3>⚡ QUIC &amp; HTTP/2</h3><p>QUIC long/short header decode with version identification (RFC 9000, RFC 9369, gQUIC). HTTP/2 frame parsing with gRPC path extraction. WebSocket frame opcode decode.</p></div>
-            <div class="card"><h3>🛡️ Risk Scoring</h3><p>Composite 0–100 risk score aggregating: deprecated TLS, SSHv1, NTP amplification, DNS entropy spikes (DGA/tunneling), NULL scan, zero-window SYN, and tunnel anomalies.</p></div>
-            <div class="card"><h3>🌍 Tunnel Inner-Frame Decode</h3><p>VXLAN, GRE, and Geneve tunnels are re-inspected — inner IPv4 src/dst, proto, ports, and application protocol are decoded from the encapsulated frame.</p></div>
-            <div class="card"><h3>📊 DNS Entropy Analysis</h3><p>Shannon entropy computed on the longest DNS label per query. High entropy (>3.8 bits) flags potential DGA domain generation or DNS tunneling activity.</p></div>
-            <div class="card"><h3>🖥️ Wireshark-Like TUI</h3><p>5-tab live dashboard: Overview, Packets, Flows, Stats, Help. Detail popup with Original / Layers / Hex sub-tabs. All DPI fields — JA3, QUIC, tunnel, risk bar, app category — displayed in real time.</p></div>
-            <div class="card"><h3>🌐 GeoIP Everywhere</h3><p>Offline IP-to-country lookup in <code>pktana conn</code> (per connection), <code>pktana stats</code> (top talkers), and <code>pktana geoip</code>. No API keys. No internet required.</p></div>
-            <div class="card"><h3>⚙️ Dataplane Analytics</h3><p>Detect XDP eBPF programs, AF_XDP zero-copy sockets, DPDK/vfio-pci bindings, SR-IOV VF/PF topology, per-queue IRQ affinity, NUMA node, PCIe link width/speed, and hardware offloads.</p></div>
-            <div class="card"><h3>🔗 Active Connections</h3><p>Color-coded TCP state (ESTABLISHED, LISTEN, TIME_WAIT), GeoIP country per remote IP, service name resolution, PID → process name — all from procfs without root for most info.</p></div>
-            <div class="card"><h3>📦 Zero Dependencies</h3><p>Single native Rust binary. libpcap is the only runtime dependency (auto-installed by the RPM). No Python, no Java, no Node.js, no extra packages.</p></div>
-            <div class="card"><h3>🏭 Production Grade</h3><p>Built for cloud platforms, telecom networks, data centers, and carrier-grade infrastructure. Clean clippy (-D warnings), memory safe, no unsafe code in the parsing path.</p></div>
+        <div class="hero-panel">
+            <div class="terminal">
+              <div class="terminal-top">
+                <span class="terminal-dot"></span>
+                <span class="terminal-dot"></span>
+                <span class="terminal-dot"></span>
+              </div>
+          
+              <div style="padding: 40px; display: flex; justify-content: center; align-items: center; min-height: 260px;">
+                <div class="pktana-logo-box">
+                  <span class="short">P</span>
+                  <span class="full">pktana</span>
+                </div>
+              </div>
+            </div>
         </div>
+      </div>
     </section>
 
-    <section style="background:#fff7ed;">
-        <h2>Quick Start</h2>
-        <div class="install-box"># Wireshark-like TUI dashboard
-sudo pktana tui eth0
+    <section id="about">
+      <div class="section-tag">Product Story</div>
+      <h2>A cleaner way to inspect Linux network traffic.</h2>
+      <p class="section-lead">
+        pktana is designed to reduce the gap between low-level packet debugging and day-to-day operational visibility.
+        Instead of jumping between multiple command-line utilities and handwritten scripts, pktana aims to give developers and operators
+        a focused workspace for packet decoding, protocol summaries, capture workflows, and future dataplane observability.
+      </p>
 
-# Live capture — color-coded + DPI-enriched Info column
-sudo pktana eth0
-sudo pktana eth0 'port 443'        # BPF filter
+      <div class="story">
+        <div class="story-card">
+          <p>
+            The project is built in Rust because packet tooling needs both <strong>performance</strong> and <strong>safety</strong>.
+            Packet analyzers operate on untrusted inputs, and memory-safe parsing matters when the tool is expected to grow into a serious
+            production-grade platform.
+          </p>
+          <p>
+            Today, pktana already provides a strong MVP foundation with raw frame decoding, protocol parsing, flow summaries,
+            batch input modes, and optional live capture through feature-gated <code>pcap</code> support.
+          </p>
+          <p>
+            The long-term vision is larger: a Linux-native packet analysis platform with richer L2-L7 decoding, native capture paths,
+            better operational packaging, and a more complete observability experience for real infrastructure teams.
+          </p>
+        </div>
 
-# Deep packet inspection — all L2–L7 fields, risk score, JA3
-pktana inspect 450000280001400040060000c0a80001...
+        <aside class="info-card">
+          <h3>What pktana is built for</h3>
+          <div class="info-list">
+            <div>Packet inspection during debugging</div>
+            <div>Flow-level traffic understanding</div>
+            <div>Production-friendly Linux deployment</div>
+            <div>Future deep protocol and dataplane visibility</div>
+          </div>
+        </aside>
+      </div>
 
-# Active connections — GeoIP + state colors + service names
-pktana conn
-
-# Live stats dashboard — top talkers with GeoIP country
-sudo pktana stats eth0
-
-# NIC hardware / offloads / IRQ affinity
-pktana ethtool eth0
-
-# Dataplane: XDP / DPDK / SR-IOV / AF_XDP
-pktana dp eth0
-
-# Routing table (IPv4 + IPv6)
-pktana route
-
-# Offline GeoIP lookup (no API key needed)
-pktana geoip 8.8.8.8 1.1.1.1 9.9.9.9</div>
+      <div class="stats">
+        <div class="stat">
+          <strong>Rust</strong>
+          <span>safe parsing and systems-grade performance</span>
+        </div>
+        <div class="stat">
+          <strong>MVP</strong>
+          <span>working parser, flows, CLI, and packaging scripts</span>
+        </div>
+        <div class="stat">
+          <strong>Linux-first</strong>
+          <span>designed around real server and infrastructure usage</span>
+        </div>
+        <div class="stat">
+          <strong>Extensible</strong>
+          <span>clear path toward deeper protocol coverage</span>
+        </div>
+      </div>
     </section>
 
     <section>
-        <h2>Built for Modern Infrastructure</h2>
-        <div class="highlight">
-            <strong>One tool. Complete network visibility.</strong><br><br>
-            Full L2–L7 packet decode &bull; TLS JA3 fingerprinting &bull; QUIC / HTTP2 / gRPC detection &bull;
-            WebSocket &bull; SSH banner &bull; SIP / VoIP &bull; NTP amplification risk &bull;
-            BGP decode &bull; VXLAN / GRE tunnel inner-frame re-inspection &bull;
-            IPv6 &bull; DNS entropy (DGA / tunneling heuristic) &bull;
-            composite 0–100 risk score &bull; app category classification &bull;
-            Wireshark-like TUI &bull; GeoIP in connections &amp; stats &bull;
-            XDP / DPDK / SR-IOV / AF_XDP dataplane &bull; ethtool equivalent &bull;
-            routing table &bull; procfs connection tracking &bull;
-            color-coded live capture — all in a single signed RPM.
-        </div>
+      <div class="section-tag">Install</div>
+      <h2>Install instantly on your Linux system.</h2>
+      <p class="section-lead">
+        Current release: <strong>v0.3.1</strong>. Install pktana directly with a single RPM command on
+        RHEL 9, Rocky Linux, AlmaLinux, and CentOS Stream 9 compatible systems.
+      </p>
+
+      <div class="install-panel">
+        <p>Install with <code>dnf</code>:</p>
+        <div class="code-block"><code>sudo dnf install \
+https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.el9.x86_64.rpm</code></div>
+      </div>
     </section>
 
-    <section style="background:#fff7ed;">
-        <h2>Contact</h2>
-        <p class="lead">For support, collaborations, consulting, or enterprise inquiries, get in touch.</p>
+    <section id="features">
+      <div class="section-tag">Core Features</div>
+      <h2>Focused packet tooling with a clear architecture.</h2>
+      <p class="section-lead">
+        pktana is already useful as a serious MVP and is structured to grow cleanly. The current architecture splits responsibilities between
+        a reusable core parser crate and a CLI crate that drives workflows and output.
+      </p>
+
+      <div class="features-grid">
+        <article class="feature-card">
+          <div class="feature-icon">01</div>
+          <h3>Raw frame decoding</h3>
+          <p>Parse raw Ethernet frames from hex input and decode them into structured packet information for easier inspection.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">02</div>
+          <h3>Protocol parsing</h3>
+          <p>Current MVP coverage includes Ethernet II, IPv4, TCP, and UDP, with architecture planned to expand toward richer protocol layers.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">03</div>
+          <h3>Flow summaries</h3>
+          <p>Build simple flow records from parsed traffic and produce human-readable summaries useful for debugging and analysis.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">04</div>
+          <h3>Multiple input modes</h3>
+          <p>Analyze inline hex, files with packet lines, built-in demo samples, and optional Linux capture interfaces when built with pcap support.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">05</div>
+          <h3>Rust workspace design</h3>
+          <p>A clean split between <code>pktana-core</code> and <code>pktana-cli</code> keeps parsing logic reusable and interface logic independent.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">06</div>
+          <h3>Linux deployment focus</h3>
+          <p>Designed with CentOS and RHEL-style distribution in mind so operators can ship binaries or RPMs instead of source toolchains.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="workflow">
+      <div class="section-tag">How It Works</div>
+      <h2>From raw bytes to useful packet understanding.</h2>
+      <p class="section-lead">
+        pktana is structured like a serious analysis pipeline: ingest traffic, parse frames, extract protocol metadata,
+        summarize packets, and aggregate flow-level information for higher-level inspection.
+      </p>
+
+      <div class="split">
+        <div class="panel">
+          <h3>Current workflow</h3>
+          <ul>
+            <li>Accept packet input from demo, file, hex, or optional live capture</li>
+            <li>Decode raw frames into packet structures</li>
+            <li>Parse protocol headers layer by layer</li>
+            <li>Generate readable summaries for operators</li>
+            <li>Construct flow keys and aggregate packet counts and bytes</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <h3>Architecture direction</h3>
+          <ul>
+            <li>Native Linux capture through AF_PACKET and later eBPF or XDP paths</li>
+            <li>Expanded protocol parsing for IPv6, ICMP, ARP, DNS, TLS, HTTP, VXLAN, and GRE</li>
+            <li>Better session state, stream reassembly, and anomaly signals</li>
+            <li>Potential future API, indexed flow store, and central analysis workflows</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="section-tag">Roadmap</div>
+      <h2>Built as an MVP, shaped for something much bigger.</h2>
+      <p class="section-lead">
+        Your current README already tells a strong story: pktana is not just a one-off parser, it is a foundation.
+        This roadmap section makes that future visible to visitors.
+      </p>
+
+      <div class="roadmap-grid">
+        <article class="roadmap-card">
+          <h3>Capture Layer</h3>
+          <p>Move beyond feature-gated libpcap toward native Linux capture with AF_PACKET, and later broader dataplane options like eBPF and XDP.</p>
+        </article>
+        <article class="roadmap-card">
+          <h3>Parsing Layer</h3>
+          <p>Expand protocol support from the current Ethernet/IPv4/TCP/UDP stack into IPv6, ARP, ICMP, DNS, TLS, HTTP, VXLAN, and GRE.</p>
+        </article>
+        <article class="roadmap-card">
+          <h3>Flow Engine</h3>
+          <p>Add session state, timeouts, stream reassembly, and anomaly indicators so pktana becomes more useful for troubleshooting and observability.</p>
+        </article>
+        <article class="roadmap-card">
+          <h3>Platform Vision</h3>
+          <p>Grow toward indexed flow storage, richer control-plane features, and potentially a web dashboard or API for broader operational workflows.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="reviews">
+      <div class="section-tag">Reviews</div>
+      <h2>Share what you think about pktana.</h2>
+      <p class="section-lead">
+        Visitors can leave a review directly on the page. Reviews submitted here are published below immediately and stored in the browser for this site experience.
+      </p>
+
+      <div class="reviews-grid" id="userReviewsList">
+        <article class="review-card">
+          <div class="review-stars">★★★★★</div>
+          <p>pktana speaks directly to engineers who want clean Linux packet visibility without the usual fragmented workflow across too many tools.</p>
+          <div class="review-author">Early project impression</div>
+        </article>
+
+        <article class="review-card">
+          <div class="review-stars">★★★★★</div>
+          <p>The product story is strong because it combines packet analysis, flow summaries, Linux-first deployment, and a serious roadmap for deeper protocol support.</p>
+          <div class="review-author">Open-source viewer feedback</div>
+        </article>
+
+        <article class="review-card">
+          <div class="review-stars">★★★★★</div>
+          <p>The architecture feels intentional. A reusable core parser plus a CLI workflow makes pktana look like a strong foundation for a bigger observability platform.</p>
+          <div class="review-author">Systems engineering perspective</div>
+        </article>
+      </div>
+
+      <div class="review-form-wrap">
+        <h3>Post your review</h3>
+        <form class="review-form" id="reviewForm">
+          <div class="review-form-row">
+            <input id="reviewerName" type="text" placeholder="Your name" maxlength="80" required />
+            <input id="reviewerRole" type="text" placeholder="Your role (optional)" maxlength="100" />
+          </div>
+          <textarea id="reviewText" placeholder="Write your review about pktana..." minlength="20" maxlength="600" required></textarea>
+          <div class="star-row">
+            <span>Rating</span>
+            <div class="star-picker" aria-label="Review rating">
+              <input type="radio" name="rating" id="star5" value="5" checked /><label for="star5">★</label>
+              <input type="radio" name="rating" id="star4" value="4" /><label for="star4">★</label>
+              <input type="radio" name="rating" id="star3" value="3" /><label for="star3">★</label>
+              <input type="radio" name="rating" id="star2" value="2" /><label for="star2">★</label>
+              <input type="radio" name="rating" id="star1" value="1" /><label for="star1">★</label>
+            </div>
+          </div>
+          <div>
+            <button class="button" type="submit">Publish Review</button>
+          </div>
+          <div class="review-success" id="reviewSuccess">Review published successfully.</div>
+        </form>
+      </div>
+    </section>
+
+    <section id="donate">
+      <div class="section-tag">Support pktana</div>
+      <h2>Want to support or donate?</h2>
+      <p class="section-lead">
+        If pktana is useful to you and you want to support its development, you can help by sponsoring, sharing the project,
+        or reaching out directly for collaboration and support.
+      </p>
+
+      <div class="donation-grid">
+        <article class="donation-card">
+          <h3>Support on GitHub</h3>
+          <p>Visit the GitHub project and support the work by starring, sharing, or contributing to the project directly.</p>
+          <a class="mini-button" href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">Go to GitHub</a>
+        </article>
+
+        <article class="donation-card">
+          <h3>Direct sponsorship</h3>
+          <p>If you want to sponsor development, discuss enterprise use, or support the project directly, get in touch by email.</p>
+          <a class="mini-button" href="mailto:omnayak27199@gmail.com">Contact for Donation</a>
+        </article>
+
+        <article class="donation-card">
+          <h3>Help the project grow</h3>
+          <p>Share pktana with Linux, networking, SRE, and systems communities to help it reach the engineers who can benefit from it.</p>
+          <a class="mini-button" href="#contact">Share & Connect</a>
+        </article>
+      </div>
+    </section>
+
+    <section id="contact" class="cta">
+      <div class="cta-content">
+        <div class="section-tag" style="color: rgba(255,255,255,0.8);">Contact</div>
+        <h2>Build pktana into a real packet-analysis platform.</h2>
+        <p class="section-lead">
+          If you want feedback, collaboration, consulting help, or just a sharper open-source presentation for the project,
+          this page can be the start of a much more polished product presence.
+        </p>
 
         <div class="contact-grid">
-            <div class="contact-card">
-                <h3>Email</h3>
-                <a href="mailto:omnayak27199@gmail.com">omnayak27199@gmail.com</a>
-            </div>
-
-            <div class="contact-card">
-                <h3>Phone</h3>
-                <a href="tel:+918966902655">+91 8966902655</a>
-            </div>
-
-            <div class="contact-card">
-                <h3>GitHub</h3>
-                <a href="https://github.com/omnayak27199">github.com/omnayak27199</a>
-            </div>
+          <div class="contact-card">
+            <h3>Email</h3>
+            <p><a href="mailto:omnayak27199@gmail.com">omnayak27199@gmail.com</a></p>
+          </div>
+          <div class="contact-card">
+            <h3>Phone</h3>
+            <p><a href="tel:+918966902655">+91 8966902655</a></p>
+          </div>
+          <div class="contact-card">
+            <h3>GitHub</h3>
+            <p><a href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">github.com/omnayak27199/pktana</a></p>
+          </div>
         </div>
-    </section>
-
-    <!-- ── Reviews section ─────────────────────────────────── -->
-    <section id="reviews" style="background:#fff7ed;">
-        <h2 style="text-align:center; margin-bottom:14px;">What Engineers Say</h2>
-        <p class="lead" style="text-align:center; margin:0 auto 50px; max-width:800px;">
-            Trusted by network engineers, SREs, and infrastructure teams for deep packet inspection and Linux dataplane visibility.
-        </p>
-
-        <!-- Static featured reviews -->
-        <div class="grid">
-            <div class="card">
-                <div style="font-size:1.2rem; margin-bottom:12px;">⭐⭐⭐⭐⭐</div>
-                <h3>"A must-have for Linux networking"</h3>
-                <p>pktana dramatically reduced our troubleshooting time. The TUI is fast, intuitive, and incredibly powerful.</p>
-                <p style="margin-top:20px; font-weight:700; color:#ea580c;">— Senior Network Engineer</p>
-            </div>
-            <div class="card">
-                <div style="font-size:1.2rem; margin-bottom:12px;">⭐⭐⭐⭐⭐</div>
-                <h3>"Excellent visibility into the dataplane"</h3>
-                <p>XDP, DPDK, SR-IOV, and hardware offload detection in one tool. It has become part of our standard toolbox.</p>
-                <p style="margin-top:20px; font-weight:700; color:#ea580c;">— Cloud Infrastructure Architect</p>
-            </div>
-            <div class="card">
-                <div style="font-size:1.2rem; margin-bottom:12px;">⭐⭐⭐⭐⭐</div>
-                <h3>"Rust performance meets operational simplicity"</h3>
-                <p>Lightweight, reliable, and production-ready. pktana replaces several utilities we previously depended on.</p>
-                <p style="margin-top:20px; font-weight:700; color:#ea580c;">— Site Reliability Engineer</p>
-            </div>
-        </div>
-
-        <!-- User-submitted reviews rendered by JS -->
-        <div class="user-reviews-list" id="userReviewsList"></div>
-
-        <!-- Submit a review form -->
-        <div class="review-form-wrap">
-            <h3>Share Your Experience</h3>
-            <form class="review-form" id="reviewForm" onsubmit="submitReview(event)">
-                <div class="form-row">
-                    <input type="text" id="reviewerName" placeholder="Your name" required maxlength="80" />
-                    <input type="text" id="reviewerRole" placeholder="Your role (e.g. Network Engineer)" maxlength="100" />
-                </div>
-                <textarea id="reviewText" placeholder="Tell us about your experience with pktana…" required minlength="20" maxlength="600"></textarea>
-                <div class="form-star-row">
-                    <label class="star-label">Rating:</label>
-                    <div class="star-picker" id="starPicker" role="group" aria-label="Star rating">
-                        <input type="radio" name="rating" id="s5" value="5" /><label for="s5" title="5 stars">★</label>
-                        <input type="radio" name="rating" id="s4" value="4" /><label for="s4" title="4 stars">★</label>
-                        <input type="radio" name="rating" id="s3" value="3" /><label for="s3" title="3 stars">★</label>
-                        <input type="radio" name="rating" id="s2" value="2" /><label for="s2" title="2 stars">★</label>
-                        <input type="radio" name="rating" id="s1" value="1" /><label for="s1" title="1 star">★</label>
-                    </div>
-                </div>
-                <div>
-                    <button type="submit" class="btn-submit-review">Post Review</button>
-                </div>
-                <div class="review-success" id="reviewSuccess">✓ Thank you! Your review has been posted.</div>
-            </form>
-        </div>
+      </div>
     </section>
 
     <footer class="footer">
-        <p>Built with Rust by Omprakash Nayak</p>
-        <p style="margin-top:12px;">Licensed under Apache 2.0 • Open Source • Production Ready</p>
-        <p style="margin-top:12px;"><a href="https://pktana.online">pktana.online</a></p>
+      <div>
+        <strong>pktana</strong><br />
+        Linux-first packet analysis workspace written in Rust. Current release: v0.3.1.
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="README.md">README</a>
+        <a href="docs/architecture.md">Architecture</a>
+      </div>
     </footer>
-
-    <script>
+  </div>
+  <script>
     (function () {
-        'use strict';
+      const storageKey = "pktana_reviews_v1";
 
-        var STORAGE_KEY = 'pktana_reviews_v1';
+      function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+      }
 
-        function loadReviews() {
-            try {
-                return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-            } catch (_) {
-                return [];
-            }
+      function loadReviews() {
+        try {
+          return JSON.parse(localStorage.getItem(storageKey) || "[]");
+        } catch (e) {
+          return [];
         }
+      }
 
-        function saveReviews(reviews) {
-            try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(reviews));
-            } catch (_) {}
-        }
+      function saveReviews(reviews) {
+        localStorage.setItem(storageKey, JSON.stringify(reviews));
+      }
 
-        function starsHtml(n) {
-            return '★'.repeat(n) + '☆'.repeat(5 - n);
-        }
+      function stars(n) {
+        return "★".repeat(n) + "☆".repeat(5 - n);
+      }
 
-        function escapeHtml(text) {
-            var div = document.createElement('div');
-            div.appendChild(document.createTextNode(text));
-            return div.innerHTML;
-        }
+      function renderReviews() {
+        const container = document.getElementById("userReviewsList");
+        if (!container) return;
 
-        function renderUserReviews() {
-            var list = document.getElementById('userReviewsList');
-            if (!list) return;
-            var reviews = loadReviews();
-            if (reviews.length === 0) {
-                list.innerHTML = '';
-                return;
-            }
-            list.innerHTML = reviews.map(function (r) {
-                var roleHtml = r.role ? ' <span>· ' + escapeHtml(r.role) + '</span>' : '';
-                return '<div class="user-review-card">' +
-                    '<div class="stars" aria-label="' + r.stars + ' out of 5 stars">' + starsHtml(r.stars) + '</div>' +
-                    '<blockquote>"' + escapeHtml(r.text) + '"</blockquote>' +
-                    '<div class="reviewer-meta">' + escapeHtml(r.name) + roleHtml + '</div>' +
-                    '</div>';
-            }).join('');
-        }
+        const baseReviews = [
+        ];
 
-        window.submitReview = function (e) {
-            e.preventDefault();
-            var name = document.getElementById('reviewerName').value.trim();
-            var role = document.getElementById('reviewerRole').value.trim();
-            var text = document.getElementById('reviewText').value.trim();
-            var ratingInput = document.querySelector('input[name="rating"]:checked');
-            var stars = ratingInput ? parseInt(ratingInput.value, 10) : 5;
+        const userReviews = loadReviews().map(function (r) {
+          return {
+            stars: r.stars,
+            text: r.text,
+            author: r.name + (r.role ? " · " + r.role : "")
+          };
+        });
 
-            if (!name || text.length < 20) return;
+        const all = baseReviews.concat(userReviews);
+        container.innerHTML = all.map(function (review) {
+          return `
+            <article class="review-card">
+              <div class="review-stars">${stars(review.stars)}</div>
+              <p>${escapeHtml(review.text)}</p>
+              <div class="review-author">${escapeHtml(review.author)}</div>
+            </article>
+          `;
+        }).join("");
+      }
 
-            var reviews = loadReviews();
-            reviews.unshift({ name: name, role: role, text: text, stars: stars, ts: Date.now() });
-            // Keep most recent 50 reviews
-            reviews = reviews.slice(0, 50);
-            saveReviews(reviews);
+      const form = document.getElementById("reviewForm");
+      if (form) {
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          const name = document.getElementById("reviewerName").value.trim();
+          const role = document.getElementById("reviewerRole").value.trim();
+          const text = document.getElementById("reviewText").value.trim();
+          const selected = document.querySelector('input[name="rating"]:checked');
+          const rating = selected ? Number(selected.value) : 5;
 
-            // Reset form
-            document.getElementById('reviewForm').reset();
-            var successEl = document.getElementById('reviewSuccess');
-            successEl.style.display = 'block';
-            setTimeout(function () { successEl.style.display = 'none'; }, 3500);
+          if (!name || text.length < 20) return;
 
-            renderUserReviews();
-            document.getElementById('userReviewsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        };
+          const reviews = loadReviews();
+          reviews.unshift({
+            name: name,
+            role: role,
+            text: text,
+            stars: rating,
+            ts: Date.now()
+          });
+          saveReviews(reviews.slice(0, 50));
+          form.reset();
+          document.getElementById("star5").checked = true;
+          renderReviews();
+          const success = document.getElementById("reviewSuccess");
+          success.style.display = "block";
+          setTimeout(function () {
+            success.style.display = "none";
+          }, 3000);
+        });
+      }
 
-        renderUserReviews();
+      renderReviews();
     })();
-    </script>
-</div>
+  </script>
 </body>
 </html>
