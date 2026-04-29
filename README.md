@@ -7,8 +7,13 @@
 
 [![CI](https://github.com/omnayak27199/pktana/actions/workflows/ci.yml/badge.svg)](https://github.com/omnayak27199/pktana/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.3.0)
+[![Version](https://img.shields.io/badge/version-0.3.1-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.3.1)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky-lightgrey.svg)]()
+[![crates.io](https://img.shields.io/crates/v/pktana-cli.svg)](https://crates.io/crates/pktana-cli)
+[![Website](https://img.shields.io/badge/website-pktana.online-orange.svg)](https://pktana.online)
+
+🌐 **Website**: [pktana.online](https://pktana.online)  
+📦 **crates.io**: [pktana-cli](https://crates.io/crates/pktana-cli) · [pktana-core](https://crates.io/crates/pktana-core)
 
 ---
 
