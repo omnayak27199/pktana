@@ -458,6 +458,13 @@
       background: rgba(255,255,255,0.06);
       border: 1px solid rgba(255,255,255,0.08);
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .code-block code {
+      white-space: pre;
+      display: block;
+      min-width: max-content;
     }
 
     .stats {
@@ -815,155 +822,239 @@
 
     @media (max-width: 1080px) {
       .hero-grid,
-      .story,
+      .story {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-panel {
+        display: none; /* hide terminal panel on smaller screens to avoid overflow */
+      }
+
       .split {
         grid-template-columns: 1fr;
       }
 
-      .stats,
-      .hero-meta {
+      .stats {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .hero-meta {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      section {
+        padding: 56px 36px;
+      }
+
+      .hero {
+        padding: 80px 36px 60px;
+      }
+
+      .footer {
+        padding: 28px 36px;
       }
     }
 
     @media (max-width: 860px) {
-  body {
-    padding: 8px;
-  }
+      body {
+        padding: 0;
+      }
 
-  .shell {
-    border-radius: 8px;
-  }
+      .shell {
+        border-radius: 0;
+        box-shadow: none;
+      }
 
-  .topbar {
-    padding: 12px 16px;
-    flex-direction: column;
-    align-items: flex-start;
-  }
+      .topbar {
+        padding: 12px 20px;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
 
-  .nav {
-    width: 100%;
-    justify-content: flex-start;
-  }
+      .nav {
+        order: 3;
+        width: 100%;
+        gap: 10px;
+        font-size: 0.88rem;
+        justify-content: flex-start;
+      }
 
-  .topbar,
-  section,
-  .hero,
-  .footer {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
+      .top-actions {
+        margin-left: auto;
+      }
 
-  .hero {
-    padding: 50px 16px;
-  }
+      section {
+        padding: 44px 20px;
+      }
 
-  section {
-    padding: 40px 16px;
-  }
+      .hero {
+        padding: 60px 20px 50px;
+      }
 
-  .pktana-logo-box {
-    min-width: 240px;
-    min-height: 100px;
-  }
+      .footer {
+        padding: 24px 20px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+      }
 
-  .pktana-logo-box .short {
-    font-size: 4rem;
-  }
+      .stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
 
-  .pktana-logo-box .full {
-    font-size: 2.5rem;
-  }
+      .hero-meta {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
 
-  .review-form-row {
-    grid-template-columns: 1fr;
-  }
-}
+      .pktana-logo-box {
+        min-width: 200px;
+        min-height: 90px;
+      }
+
+      .pktana-logo-box .short {
+        font-size: 4rem;
+      }
+
+      .pktana-logo-box .full {
+        font-size: 2.4rem;
+      }
+
+      .review-form-row {
+        grid-template-columns: 1fr;
+      }
+
+      .install-panel {
+        padding: 20px;
+      }
+
+      .code-block {
+        padding: 14px;
+        font-size: 0.82rem;
+      }
+    }
+
     @media (max-width: 640px) {
-  .stats,
-  .hero-meta {
-    grid-template-columns: 1fr;
-  }
+      .stats,
+      .hero-meta {
+        grid-template-columns: 1fr;
+      }
 
-  .hero {
-    padding: 40px 12px 50px;
-  }
+      .hero {
+        padding: 48px 16px 44px;
+      }
 
-  .hero-copy p {
-    font-size: 1.06rem;
-  }
+      .hero-copy h1 {
+        font-size: clamp(2.2rem, 9vw, 3.2rem);
+      }
 
-  .button,
-  .ghost-button {
-    width: 100%;
-  }
+      .hero-copy p {
+        font-size: 1rem;
+      }
 
-  section {
-    padding: 30px 12px;
-  }
+      section {
+        padding: 36px 16px;
+      }
 
-  .topbar {
-    padding: 10px 12px;
-    gap: 10px;
-  }
+      .topbar {
+        padding: 10px 16px;
+        gap: 8px;
+      }
 
-  .brand-text {
-    display: none;
-  }
+      .nav {
+        gap: 8px;
+        font-size: 0.82rem;
+      }
 
-  .nav {
-    gap: 8px;
-    font-size: 0.8rem;
-  }
+      .brand-text {
+        display: none;
+      }
 
-  .pill {
-    padding: 8px 12px;
-    font-size: 0.75rem;
-  }
+      .pill {
+        padding: 7px 12px;
+        font-size: 0.76rem;
+      }
 
-  .button,
-  .ghost-button {
-    padding: 12px 16px;
-    font-size: 0.85rem;
-  }
+      .button,
+      .ghost-button {
+        width: 100%;
+        padding: 13px 16px;
+        font-size: 0.88rem;
+      }
 
-  .pktana-logo-box {
-    min-width: 180px;
-    min-height: 80px;
-  }
+      .hero-actions {
+        flex-direction: column;
+      }
 
-  .pktana-logo-box .short {
-    font-size: 2.5rem;
-  }
+      .features-grid {
+        grid-template-columns: 1fr;
+      }
 
-  .pktana-logo-box .full {
-    font-size: 1.5rem;
-  }
+      .roadmap-grid,
+      .reviews-grid,
+      .contact-grid,
+      .donation-grid {
+        grid-template-columns: 1fr;
+      }
 
-  .footer {
-    padding: 20px 12px;
-  }
-}
+      h2 {
+        font-size: clamp(1.7rem, 6vw, 2.4rem);
+      }
 
-@media (max-width: 360px) {
-  body {
-    padding: 4px;
-  }
+      .footer {
+        padding: 18px 16px;
+      }
 
-  .shell {
-    border-radius: 0;
-  }
+      .footer-links {
+        gap: 10px;
+        font-size: 0.9rem;
+      }
 
-  .topbar {
-    padding: 8px;
-  }
+      .install-panel {
+        padding: 16px;
+      }
 
-  section,
-  .hero,
-  .footer {
-    padding: 20px 8px;
-  }
-}
+      .code-block {
+        padding: 12px;
+        font-size: 0.78rem;
+        word-break: break-all;
+      }
+
+      .review-form-wrap {
+        padding: 20px 16px;
+      }
+    }
+
+    @media (max-width: 400px) {
+      .nav {
+        font-size: 0.76rem;
+        gap: 6px;
+      }
+
+      .brand-mark {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+      }
+
+      section {
+        padding: 28px 12px;
+      }
+
+      .hero {
+        padding: 38px 12px 36px;
+      }
+
+      .story-card,
+      .info-card,
+      .panel,
+      .feature-card,
+      .review-card,
+      .roadmap-card,
+      .contact-card,
+      .donation-card {
+        padding: 18px 14px;
+      }
+    }
   </style>
 </head>
 <body>
