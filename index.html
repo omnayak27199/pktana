@@ -1010,78 +1010,103 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
 
     <section id="features">
       <div class="section-tag">Core Features</div>
-      <h2>Focused packet tooling with a clear architecture.</h2>
+      <h2>Production-grade packet analysis, today.</h2>
       <p class="section-lead">
-        pktana is already useful as a serious MVP and is structured to grow cleanly. The current architecture splits responsibilities between
-        a reusable core parser crate and a CLI crate that drives workflows and output.
+        pktana v0.3.1 is a fully capable packet analysis platform. The core and CLI are split across two crates for reusability,
+        with deep protocol coverage, live DPI, risk scoring, and a Wireshark-style TUI — all in a single static binary.
       </p>
 
       <div class="features-grid">
         <article class="feature-card">
           <div class="feature-icon">01</div>
-          <h3>Raw frame decoding</h3>
-          <p>Parse raw Ethernet frames from hex input and decode them into structured packet information for easier inspection.</p>
+          <h3>Full L2–L7 DPI</h3>
+          <p>Ethernet, ARP, IPv4, IPv6, TCP, UDP, ICMP, TLS, HTTP, DNS, QUIC, HTTP/2, gRPC, WebSocket, SSH, SIP, NTP, BGP — decoded in one pass.</p>
         </article>
 
         <article class="feature-card">
           <div class="feature-icon">02</div>
-          <h3>Protocol parsing</h3>
-          <p>Current MVP coverage includes Ethernet II, IPv4, TCP, and UDP, with architecture planned to expand toward richer protocol layers.</p>
+          <h3>TLS Fingerprinting (JA3)</h3>
+          <p>Full ClientHello parse: cipher suites, extensions, elliptic curves, ALPN. JA3 raw string generated for every TLS handshake. GREASE values filtered automatically.</p>
         </article>
 
         <article class="feature-card">
           <div class="feature-icon">03</div>
-          <h3>Flow summaries</h3>
-          <p>Build simple flow records from parsed traffic and produce human-readable summaries useful for debugging and analysis.</p>
+          <h3>Tunnel inner-frame re-inspection</h3>
+          <p>VXLAN, GRE, and Geneve inner frames are fully re-decoded including inner IPs, ports, and application protocol — not just outer headers.</p>
         </article>
 
         <article class="feature-card">
           <div class="feature-icon">04</div>
-          <h3>Multiple input modes</h3>
-          <p>Analyze inline hex, files with packet lines, built-in demo samples, and optional Linux capture interfaces when built with pcap support.</p>
+          <h3>Risk scoring &amp; classification</h3>
+          <p>0–100 composite risk score per packet and per flow. Catches deprecated TLS, SSHv1, NTP amplification, high-entropy DNS (DGA detection), NULL scans, and more.</p>
         </article>
 
         <article class="feature-card">
           <div class="feature-icon">05</div>
-          <h3>Rust workspace design</h3>
-          <p>A clean split between <code>pktana-core</code> and <code>pktana-cli</code> keeps parsing logic reusable and interface logic independent.</p>
+          <h3>PCAP file support</h3>
+          <p>Record live traffic to a file, parse any .pcap / .pcapng / .cap file with full DPI, or browse it interactively in the TUI — no root needed for offline analysis.</p>
         </article>
 
         <article class="feature-card">
           <div class="feature-icon">06</div>
-          <h3>Linux deployment focus</h3>
-          <p>Designed with CentOS and RHEL-style distribution in mind so operators can ship binaries or RPMs instead of source toolchains.</p>
+          <h3>Wireshark-style TUI</h3>
+          <p>Full-screen terminal dashboard with live packet table, protocol breakdown, top-talker GeoIP, flow detail popup (layers + hex dump), and offline pcap browsing.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">07</div>
+          <h3>Replaces 8+ tools</h3>
+          <p>One binary covers tcpdump, ethtool, ss, netstat, ip route, ip link, iftop, and geoiplookup. Reads sysfs/procfs — no external binaries required.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">08</div>
+          <h3>XDP / DPDK / SR-IOV detection</h3>
+          <p>Probes the NIC dataplane path to detect XDP programs, AF_XDP zero-copy sockets, DPDK userspace bindings, SR-IOV PF/VF roles, and hardware offload status.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon">09</div>
+          <h3>GeoIP — offline, no API</h3>
+          <p>Country and continent lookup for every remote IP in live capture, TUI top-talker list, and connection table. No network call, no key required.</p>
         </article>
       </div>
     </section>
 
     <section id="workflow">
       <div class="section-tag">How It Works</div>
-      <h2>From raw bytes to useful packet understanding.</h2>
+      <h2>From raw bytes to deep packet intelligence.</h2>
       <p class="section-lead">
-        pktana is structured like a serious analysis pipeline: ingest traffic, parse frames, extract protocol metadata,
-        summarize packets, and aggregate flow-level information for higher-level inspection.
+        pktana ingests traffic from the wire or a pcap file, decodes every frame through a full L2–L7 pipeline,
+        enriches each packet with DPI, risk scoring, GeoIP, and tunnel re-inspection, then surfaces it in the CLI or TUI.
       </p>
 
       <div class="split">
         <div class="panel">
-          <h3>Current workflow</h3>
+          <h3>What pktana does today</h3>
           <ul>
-            <li>Accept packet input from demo, file, hex, or optional live capture</li>
-            <li>Decode raw frames into packet structures</li>
-            <li>Parse protocol headers layer by layer</li>
-            <li>Generate readable summaries for operators</li>
-            <li>Construct flow keys and aggregate packet counts and bytes</li>
+            <li>Live capture on any interface with BPF filter support</li>
+            <li>Full L2–L7 decode: Ethernet, ARP, IPv4, IPv6, TCP, UDP, ICMP, TLS, HTTP, DNS, QUIC, HTTP/2, gRPC, WebSocket, SSH, SIP, NTP, BGP</li>
+            <li>JA3 TLS fingerprinting, ALPN extraction, cipher suite listing</li>
+            <li>Tunnel inner-frame re-inspection: VXLAN, GRE, Geneve</li>
+            <li>Risk scoring (0–100) and app category classification per packet</li>
+            <li>Record live traffic to .pcap, analyse any pcap offline, browse in TUI</li>
+            <li>GeoIP country lookup — offline, no API key needed</li>
+            <li>XDP / DPDK / SR-IOV / AF_XDP dataplane detection</li>
+            <li>Replaces: tcpdump, ethtool, ss, netstat, ip route, ip link, iftop, geoiplookup</li>
           </ul>
         </div>
 
         <div class="panel">
-          <h3>Architecture direction</h3>
+          <h3>What's next</h3>
           <ul>
-            <li>Native Linux capture through AF_PACKET and later eBPF or XDP paths</li>
-            <li>Expanded protocol parsing for IPv6, ICMP, ARP, DNS, TLS, HTTP, VXLAN, and GRE</li>
-            <li>Better session state, stream reassembly, and anomaly signals</li>
-            <li>Potential future API, indexed flow store, and central analysis workflows</li>
+            <li>Stream reassembly and TCP session state tracking</li>
+            <li>eBPF / XDP native capture path (no libpcap dependency)</li>
+            <li>Indexed flow store with time-range queries</li>
+            <li>Web dashboard for remote packet analysis</li>
+            <li>REST API for integration with observability pipelines</li>
+            <li>PCAPNG metadata, comments, and interface blocks</li>
+            <li>Plugin architecture for custom protocol dissectors</li>
           </ul>
         </div>
       </div>
@@ -1089,28 +1114,28 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
 
     <section id="roadmap">
       <div class="section-tag">Roadmap</div>
-      <h2>Built as an MVP, shaped for something much bigger.</h2>
+      <h2>Strong foundation. Clear path forward.</h2>
       <p class="section-lead">
-        Your current README already tells a strong story: pktana is not just a one-off parser, it is a foundation.
-        This roadmap section makes that future visible to visitors.
+        v0.3.1 already delivers full L2–L7 DPI, JA3, tunnel re-inspection, risk scoring, TUI, and pcap support.
+        Here's what comes next.
       </p>
 
       <div class="roadmap-grid">
         <article class="roadmap-card">
-          <h3>Capture Layer</h3>
-          <p>Move beyond feature-gated libpcap toward native Linux capture with AF_PACKET, and later broader dataplane options like eBPF and XDP.</p>
+          <h3>Stream Reassembly</h3>
+          <p>TCP session state tracking, stream reassembly, and per-stream application-layer decode for HTTP, TLS, and other connection-oriented protocols.</p>
         </article>
         <article class="roadmap-card">
-          <h3>Parsing Layer</h3>
-          <p>Expand protocol support from the current Ethernet/IPv4/TCP/UDP stack into IPv6, ARP, ICMP, DNS, TLS, HTTP, VXLAN, and GRE.</p>
+          <h3>eBPF / XDP Capture</h3>
+          <p>Native Linux capture path using eBPF and XDP — no libpcap dependency, lower overhead, and the ability to attach at the driver level before sk_buff allocation.</p>
         </article>
         <article class="roadmap-card">
-          <h3>Flow Engine</h3>
-          <p>Add session state, timeouts, stream reassembly, and anomaly indicators so pktana becomes more useful for troubleshooting and observability.</p>
+          <h3>Indexed Flow Store</h3>
+          <p>Persistent flow storage with time-range queries, so operators can go back and inspect traffic from any point in time without replaying pcap files.</p>
         </article>
         <article class="roadmap-card">
-          <h3>Platform Vision</h3>
-          <p>Grow toward indexed flow storage, richer control-plane features, and potentially a web dashboard or API for broader operational workflows.</p>
+          <h3>Web Dashboard &amp; API</h3>
+          <p>A browser-based interface and REST API for remote packet analysis, team collaboration, and integration with existing observability and SIEM pipelines.</p>
         </article>
       </div>
     </section>
@@ -1230,8 +1255,8 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
       </div>
       <div class="footer-links">
         <a href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
-        <a href="README.md">README</a>
-        <a href="docs/architecture.md">Architecture</a>
+        <a href="https://github.com/omnayak27199/pktana#readme" target="_blank" rel="noreferrer">README</a>
+        <a href="https://github.com/omnayak27199/pktana/blob/main/docs/architecture.md" target="_blank" rel="noreferrer">Architecture</a>
       </div>
     </footer>
   </div>
@@ -1265,9 +1290,6 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
         const container = document.getElementById("userReviewsList");
         if (!container) return;
 
-        const baseReviews = [
-        ];
-
         const userReviews = loadReviews().map(function (r) {
           return {
             stars: r.stars,
@@ -1276,8 +1298,10 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
           };
         });
 
-        const all = baseReviews.concat(userReviews);
-        container.innerHTML = all.map(function (review) {
+        if (userReviews.length === 0) return; // keep static HTML cards intact
+
+        // Prepend user reviews before the static cards
+        const userHtml = userReviews.map(function (review) {
           return `
             <article class="review-card">
               <div class="review-stars">${stars(review.stars)}</div>
@@ -1286,6 +1310,7 @@ https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.3.1-1.e
             </article>
           `;
         }).join("");
+        container.insertAdjacentHTML("afterbegin", userHtml);
       }
 
       const form = document.getElementById("reviewForm");
