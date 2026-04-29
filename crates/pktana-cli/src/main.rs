@@ -15,7 +15,7 @@ use pktana_core::{
     analyze_bytes, analyze_hex, analyze_hex_file, build_flow_table, format_bytes,
     get_ethtool_report, get_nic_dataplane, get_nic_info, hex_dump, inspect, list_connections,
     list_nics, list_routes, routes_for_iface, sample_packets, CaptureConfig, CaptureError,
-    LinuxCaptureEngine, NicInfo, ParseError, ParsedPacket, TransportHeader,
+    LinuxCaptureEngine, NicInfo, ParseError, ParsedPacket,
 };
 
 // ─── error type ─────────────────────────────────────────────────────────────
@@ -90,6 +90,9 @@ fn run() -> Result<(), CliError> {
         // ── packet capture ────────────────────────────────────────────────────
         "capture" | "cap" => run_capture(&args[2..]),
 
+        // ── record live traffic to pcap file ──────────────────────────────────
+        "record" | "rec" => run_record(&args[2..]),
+
         // ── pcap interface list ───────────────────────────────────────────────
         "interfaces" | "ifaces" => print_capture_interfaces(),
 
@@ -104,6 +107,9 @@ fn run() -> Result<(), CliError> {
 
         // ── deep packet inspection ────────────────────────────────────────────
         "inspect" => run_inspect(&args[2..]),
+
+        // ── pcap file analysis ────────────────────────────────────────────────
+        "pcap" | "pkt" => run_pcap_file(&args[2..]),
 
         // ── offline decode ────────────────────────────────────────────────────
         "demo" => run_demo(),
@@ -138,8 +144,12 @@ fn run() -> Result<(), CliError> {
 
         // ── TUI live dashboard ────────────────────────────────────────────────
         "tui" => {
-            let iface = args.get(2).map(|s| s.as_str()).unwrap_or("eth0");
-            tui::inner::run_tui(iface).map_err(CliError::Io)
+            let arg = args.get(2).map(|s| s.as_str()).unwrap_or("eth0");
+            if is_pcap_path(arg) {
+                tui::inner::run_tui_pcap(arg).map_err(CliError::Io)
+            } else {
+                tui::inner::run_tui(arg).map_err(CliError::Io)
+            }
         }
 
         // ── GeoIP lookup ──────────────────────────────────────────────────────
@@ -154,8 +164,239 @@ fn run() -> Result<(), CliError> {
         },
 
         // ── shorthand: pktana <interface> [count] [filter] ───────────────────
-        _ => run_capture(&args[1..]),
+        _ => {
+            if is_pcap_path(&args[1]) {
+                run_pcap_file(&args[1..])
+            } else {
+                run_capture(&args[1..])
+            }
+        }
     }
+}
+
+// ─── DPI-enriched display helpers ────────────────────────────────────────────
+
+/// Derive a short protocol label from a `DeepPacket` (app-layer aware).
+fn dp_proto_label(dp: &pktana_core::DeepPacket) -> String {
+    if dp.quic_detected {
+        return "QUIC".to_string();
+    }
+    if dp.http2_detected {
+        return "HTTP2".to_string();
+    }
+    if let Some(proto) = &dp.app_proto {
+        return proto.to_uppercase();
+    }
+    if dp.tcp_src_port.is_some() {
+        return "TCP".to_string();
+    }
+    if dp.udp_src_port.is_some() {
+        return "UDP".to_string();
+    }
+    if dp.icmp_type.is_some() {
+        return "ICMP".to_string();
+    }
+    if dp.arp.is_some() {
+        return "ARP".to_string();
+    }
+    match dp.ether_type {
+        0x86dd => "IPv6".to_string(),
+        _ => "?".to_string(),
+    }
+}
+
+/// Wrap a pre-padded protocol label string with ANSI color codes.
+fn dp_proto_color(proto: &str, padded: &str) -> String {
+    match proto {
+        "TLS" | "HTTPS" | "SSL" => format!("\x1b[32m{padded}\x1b[0m"),
+        "HTTP" | "HTTP2" => format!("\x1b[34m{padded}\x1b[0m"),
+        "DNS" => format!("\x1b[36m{padded}\x1b[0m"),
+        "ICMP" => format!("\x1b[1;33m{padded}\x1b[0m"),
+        "ARP" => format!("\x1b[35m{padded}\x1b[0m"),
+        "QUIC" => format!("\x1b[1;32m{padded}\x1b[0m"),
+        "SSH" => format!("\x1b[1;34m{padded}\x1b[0m"),
+        "BGP" | "NTP" => format!("\x1b[31m{padded}\x1b[0m"),
+        "SIP" | "VOIP" => format!("\x1b[35m{padded}\x1b[0m"),
+        _ => padded.to_string(),
+    }
+}
+
+/// Source address string from a DeepPacket: "ip:port" or IPv6 or MAC.
+fn dp_src_str(dp: &pktana_core::DeepPacket) -> String {
+    if let Some(src) = dp.ip_src {
+        if let Some(p) = dp.tcp_src_port.or(dp.udp_src_port) {
+            return format!("{src}:{p}");
+        }
+        return src.to_string();
+    }
+    if let Some(src6) = &dp.ipv6_src {
+        return src6.clone();
+    }
+    dp.eth_src.clone()
+}
+
+/// Destination address string from a DeepPacket: "ip:port" or IPv6 or MAC.
+fn dp_dst_str(dp: &pktana_core::DeepPacket) -> String {
+    if let Some(dst) = dp.ip_dst {
+        if let Some(p) = dp.tcp_dst_port.or(dp.udp_dst_port) {
+            return format!("{dst}:{p}");
+        }
+        return dst.to_string();
+    }
+    if let Some(dst6) = &dp.ipv6_dst {
+        return dst6.clone();
+    }
+    dp.eth_dst.clone()
+}
+
+/// Build a rich Info column string from a DeepPacket (TLS SNI, HTTP method, DNS, etc.)
+fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
+    // QUIC/HTTP3
+    if dp.quic_detected {
+        let ver = dp
+            .quic_version
+            .map(|v| format!(" v0x{v:08x}"))
+            .unwrap_or_default();
+        return format!("QUIC/HTTP3{ver}");
+    }
+    // App-proto specific enrichment
+    if let Some(proto) = &dp.app_proto {
+        match proto.to_lowercase().as_str() {
+            "tls" => {
+                let mut parts: Vec<String> = Vec::new();
+                for line in &dp.app_detail {
+                    let l = line.trim();
+                    if l.starts_with("SNI") {
+                        if let Some(sni) = l.split_once(':').map(|x| x.1) {
+                            parts.push(format!("sni={}", sni.trim()));
+                        }
+                    } else if l.starts_with("Version") {
+                        if let Some(ver) = l.split_once(':').map(|x| x.1) {
+                            parts.push(ver.trim().to_string());
+                        }
+                    }
+                }
+                if !dp.tls_alpn.is_empty() {
+                    parts.push(format!("alpn=[{}]", dp.tls_alpn.join(",")));
+                }
+                let body = parts.join(" ");
+                return if body.is_empty() {
+                    "TLS".to_string()
+                } else {
+                    format!("TLS {body}")
+                };
+            }
+            "http" => {
+                for line in &dp.app_detail {
+                    let l = line.trim();
+                    if l.starts_with("Method") {
+                        if let Some(v) = l.split_once(':').map(|x| x.1) {
+                            return format!("HTTP {}", v.trim());
+                        }
+                    }
+                }
+                return dp
+                    .app_detail
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "HTTP".to_string());
+            }
+            "dns" => {
+                return dp
+                    .dns_query_name
+                    .as_deref()
+                    .map(|q| format!("DNS {q}"))
+                    .unwrap_or_else(|| "DNS".to_string());
+            }
+            "ssh" => {
+                return dp
+                    .ssh_banner
+                    .as_deref()
+                    .map(|b| format!("SSH {}", &b[..b.len().min(40)]))
+                    .unwrap_or_else(|| "SSH".to_string());
+            }
+            "sip" => {
+                let m = dp.sip_method.as_deref().unwrap_or("SIP");
+                let u = dp.sip_uri.as_deref().unwrap_or("");
+                return format!("{m} {u}").trim().to_string();
+            }
+            "bgp" => {
+                let msg = dp.bgp_msg_type.as_deref().unwrap_or("BGP");
+                let asn = dp.bgp_asn.map(|a| format!(" AS{a}")).unwrap_or_default();
+                return format!("BGP {msg}{asn}");
+            }
+            "ntp" => {
+                let ver = dp.ntp_version.map(|v| format!("v{v} ")).unwrap_or_default();
+                let mode = dp
+                    .ntp_mode
+                    .map(|m| format!("mode={m} "))
+                    .unwrap_or_default();
+                let amp = if dp.ntp_amplification_risk {
+                    "[AMPL-RISK]"
+                } else {
+                    ""
+                };
+                return format!("NTP {ver}{mode}{amp}").trim().to_string();
+            }
+            _ => {
+                return dp
+                    .app_detail
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| proto.to_uppercase());
+            }
+        }
+    }
+    // HTTP/2 without explicit app_proto
+    if dp.http2_detected {
+        let grpc = dp
+            .grpc_path
+            .as_deref()
+            .map(|p| format!(" gRPC={p}"))
+            .unwrap_or_default();
+        return format!("HTTP/2{grpc}");
+    }
+    // SSH banner without app_proto set
+    if let Some(b) = &dp.ssh_banner {
+        return format!("SSH {}", &b[..b.len().min(40)]);
+    }
+    // SIP
+    if let Some(m) = &dp.sip_method {
+        return format!("SIP {m}");
+    }
+    // BGP
+    if let Some(msg) = &dp.bgp_msg_type {
+        return format!("BGP {msg}");
+    }
+    // TCP flags + optional service hint
+    if let Some(flags) = &dp.tcp_flags_str {
+        let svc = dp
+            .tcp_dst_port
+            .map(|p| {
+                let s = port_service_name(p);
+                if s != "?" {
+                    format!(" [{s}]")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        return format!("{flags}{svc}");
+    }
+    // UDP service
+    if let Some(p) = dp.udp_dst_port.or(dp.udp_src_port) {
+        let s = port_service_name(p);
+        if s != "?" {
+            return s.to_string();
+        }
+    }
+    String::new()
+}
+
+/// Returns true when the path looks like a PCAP/PCAPNG/CAP file.
+fn is_pcap_path(s: &str) -> bool {
+    let l = s.to_lowercase();
+    l.ends_with(".pcap") || l.ends_with(".pcapng") || l.ends_with(".cap")
 }
 
 // ─── live capture ─────────────────────────────────────────────────────────────
@@ -219,6 +460,8 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     let mut pkt_num: usize = 0;
     let mut total_bytes: u64 = 0;
+    let mut proto_counts: HashMap<String, u64> = HashMap::new();
+    let mut src_counts: HashMap<String, (u64, u64)> = HashMap::new();
 
     let stats = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
         pkt_num += 1;
@@ -226,27 +469,48 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         let bytes = pkt.data.len();
         total_bytes += bytes as u64;
 
-        match analyze_bytes(&pkt.data) {
-            Ok(parsed) => {
-                let s = &parsed.summary;
-                println!(
-                    "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  {}",
-                    pkt_num,
-                    ts,
-                    bytes,
-                    s.proto_label(),
-                    trunc(&s.src_str(), 26),
-                    trunc(&s.dst_str(), 26),
-                    dns_decode(&parsed).unwrap_or_else(|| s.info_str()),
-                );
-            }
-            Err(_) => {
-                println!(
-                    "{:>5}  {:<17}  {:>7}  {:<5}  [parse error]",
-                    pkt_num, ts, bytes, "?"
-                );
-            }
+        let dp = inspect(&pkt.data);
+        let proto = dp_proto_label(&dp);
+        let src = dp_src_str(&dp);
+        let dst = dp_dst_str(&dp);
+        let info = dp_info_str(&dp);
+
+        // Accumulate end-of-capture stats
+        *proto_counts.entry(proto.clone()).or_insert(0) += 1;
+        let src_ip = dp
+            .ip_src
+            .map(|a| a.to_string())
+            .or_else(|| dp.ipv6_src.clone())
+            .unwrap_or_default();
+        if !src_ip.is_empty() {
+            let e = src_counts.entry(src_ip).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += bytes as u64;
         }
+
+        // Color-coded protocol column (pre-pad to width 5, then wrap with ANSI)
+        let proto_padded = format!("{proto:<5}");
+        let proto_col = dp_proto_color(&proto, &proto_padded);
+
+        // RST packets highlighted
+        let info_col = if dp.tcp_flags_str.as_deref() == Some("RST")
+            || dp.tcp_flags_str.as_deref() == Some("RST ACK")
+        {
+            format!("\x1b[1;31m{info}\x1b[0m")
+        } else {
+            info
+        };
+
+        println!(
+            "{:>5}  {:<17}  {:>7}  {}  {:<26}  {:<26}  {}",
+            pkt_num,
+            ts,
+            bytes,
+            proto_col,
+            trunc(&src, 26),
+            trunc(&dst, 26),
+            info_col,
+        );
         let _ = std::io::stdout().flush();
         true
     })?;
@@ -257,6 +521,284 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         stats.packets_seen,
         format_bytes(total_bytes),
     );
+
+    // ── End-of-capture summary ────────────────────────────────────────────────
+    if !proto_counts.is_empty() {
+        println!();
+        println!("  Protocol Breakdown:");
+        let total_pkts = pkt_num as f64;
+        let mut protos: Vec<(&String, &u64)> = proto_counts.iter().collect();
+        protos.sort_by_key(|(_, v)| Reverse(**v));
+        for (name, cnt) in protos.iter().take(8) {
+            let pct = **cnt as f64 / total_pkts * 100.0;
+            println!("    {:<8}  {:>6} pkts  ({:5.1}%)", name, cnt, pct);
+        }
+    }
+    if !src_counts.is_empty() {
+        println!();
+        println!("  Top Talkers (source IP):");
+        let mut srcs: Vec<(&String, &(u64, u64))> = src_counts.iter().collect();
+        srcs.sort_by_key(|(_, v)| Reverse(v.0));
+        for (i, (ip, (pkts, bytes))) in srcs.iter().take(5).enumerate() {
+            println!(
+                "    {:>2}.  {:<24}  {:>6} pkts   {}",
+                i + 1,
+                ip,
+                pkts,
+                format_bytes(*bytes)
+            );
+        }
+    }
+    Ok(())
+}
+
+// ─── record live traffic to a .pcap file ──────────────────────────────────────
+//  usage: pktana record <INTERFACE> <OUTPUT.pcap> [COUNT] [BPF_FILTER]
+
+fn run_record(args: &[String]) -> Result<(), CliError> {
+    if args.len() < 2 {
+        return Err(CliError::Usage(
+            "usage: pktana record <INTERFACE> <OUTPUT.pcap> [COUNT] [BPF_FILTER]".into(),
+        ));
+    }
+    let interface = &args[0];
+    let out_path = &args[1];
+    if !is_pcap_path(out_path) {
+        return Err(CliError::Usage(format!(
+            "output file must end in .pcap / .pcapng / .cap — got '{out_path}'"
+        )));
+    }
+
+    let (max_packets, filter) = match args.get(2) {
+        None => (0, None),
+        Some(s) => match s.parse::<usize>() {
+            Ok(n) => {
+                let f = if args.len() > 3 {
+                    Some(args[3..].join(" "))
+                } else {
+                    None
+                };
+                (n, f)
+            }
+            Err(_) => (0, Some(args[2..].join(" "))),
+        },
+    };
+
+    let count_label = if max_packets == 0 {
+        "unlimited".to_string()
+    } else {
+        max_packets.to_string()
+    };
+    let filter_label = filter.as_deref().unwrap_or("none");
+
+    println!(
+        "Recording on {interface}  →  {out_path}  |  packets: {count_label}  |  filter: {filter_label}  |  Ctrl+C to stop"
+    );
+    println!();
+
+    let sep = "─".repeat(118);
+    println!(
+        "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info",
+        "No.", "Time", "Bytes", "Proto", "Source", "Destination"
+    );
+    println!("{sep}");
+    let _ = std::io::stdout().flush();
+
+    let config = CaptureConfig {
+        interface: interface.clone(),
+        max_packets: if max_packets == 0 {
+            usize::MAX
+        } else {
+            max_packets
+        },
+        promiscuous: true,
+        snapshot_len: 65_535,
+        filter,
+        pcap_export: Some(out_path.clone()),
+    };
+
+    let mut pkt_num: usize = 0;
+    let mut total_bytes: u64 = 0;
+
+    let stats = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
+        pkt_num += 1;
+        let ts = format_timestamp(pkt.timestamp_sec, pkt.timestamp_usec);
+        let bytes = pkt.data.len();
+        total_bytes += bytes as u64;
+
+        let dp = inspect(&pkt.data);
+        let proto = dp_proto_label(&dp);
+        let src = dp_src_str(&dp);
+        let dst = dp_dst_str(&dp);
+        let info = dp_info_str(&dp);
+
+        let proto_padded = format!("{proto:<5}");
+        let proto_col = dp_proto_color(&proto, &proto_padded);
+
+        println!(
+            "{:>5}  {:<17}  {:>7}  {}  {:<26}  {:<26}  {}",
+            pkt_num,
+            ts,
+            bytes,
+            proto_col,
+            trunc(&src, 26),
+            trunc(&dst, 26),
+            info,
+        );
+        let _ = std::io::stdout().flush();
+        true
+    })?;
+
+    println!("{sep}");
+    println!(
+        "{} packets captured  |  {}  |  saved → {out_path}",
+        stats.packets_seen,
+        format_bytes(total_bytes),
+    );
+    Ok(())
+}
+
+// ─── pcap file analysis ────────────────────────────────────────────────────────
+
+fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
+    let path =
+        match args.first() {
+            Some(p) => p.as_str(),
+            None => return Err(CliError::Usage(
+                "usage: pktana pcap <FILE.pcap> [BPF_FILTER]\n       (also: pktana <FILE.pcap>)"
+                    .into(),
+            )),
+        };
+
+    // Optional BPF filter label (informational only — offline filtering not
+    // supported by this path; user can pre-filter with tcpdump -w)
+    let filter_label = if args.len() > 1 { &args[1] } else { "none" };
+
+    println!(
+        "Analyzing {}  |  filter: {}  |  Ctrl+C to stop early",
+        path, filter_label
+    );
+    println!();
+
+    let filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+
+    let sep = "─".repeat(130);
+    println!(
+        "{:>5}  {:<22}  {:>7}  {:<7}  {:<26}  {:<26}  Info",
+        "No.", "Timestamp", "Bytes", "Proto", "Source", "Destination"
+    );
+    println!("{sep}");
+    let _ = std::io::stdout().flush();
+
+    let mut pkt_num: usize = 0;
+    let mut total_bytes: u64 = 0;
+    let mut proto_counts: HashMap<String, u64> = HashMap::new();
+    let mut src_counts: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut base_ts: Option<f64> = None;
+
+    let stats = LinuxCaptureEngine::read_pcap_file(path, |pkt| {
+        pkt_num += 1;
+
+        // Use pcap timestamps for display
+        let ts_epoch = pkt.timestamp_sec as f64 + pkt.timestamp_usec as f64 / 1_000_000.0;
+        let rel_secs = match base_ts {
+            None => {
+                base_ts = Some(ts_epoch);
+                0.0
+            }
+            Some(base) => ts_epoch - base,
+        };
+        let ts_str = format!(
+            "{:>10}.{:06}",
+            rel_secs as u64,
+            ((rel_secs - rel_secs.floor()) * 1_000_000.0) as u64
+        );
+
+        let bytes = pkt.data.len();
+        total_bytes += bytes as u64;
+
+        let dp = inspect(&pkt.data);
+        let proto = dp_proto_label(&dp);
+        let src = dp_src_str(&dp);
+        let dst = dp_dst_str(&dp);
+        let info = dp_info_str(&dp);
+
+        *proto_counts.entry(proto.clone()).or_insert(0) += 1;
+        let src_ip = dp
+            .ip_src
+            .map(|a| a.to_string())
+            .or_else(|| dp.ipv6_src.clone())
+            .unwrap_or_default();
+        if !src_ip.is_empty() {
+            let e = src_counts.entry(src_ip).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += bytes as u64;
+        }
+
+        let proto_padded = format!("{proto:<7}");
+        let proto_col = dp_proto_color(&proto, &proto_padded);
+
+        let info_col = if dp.tcp_flags_str.as_deref() == Some("RST")
+            || dp.tcp_flags_str.as_deref() == Some("RST ACK")
+        {
+            format!("\x1b[1;31m{info}\x1b[0m")
+        } else {
+            info
+        };
+
+        println!(
+            "{:>5}  {:<22}  {:>7}  {}  {:<26}  {:<26}  {}",
+            pkt_num,
+            ts_str,
+            bytes,
+            proto_col,
+            trunc(&src, 26),
+            trunc(&dst, 26),
+            info_col,
+        );
+        let _ = std::io::stdout().flush();
+        true
+    })?;
+
+    println!("{sep}");
+    println!(
+        "{} packets read  |  {} total  |  file: {}",
+        stats.packets_seen,
+        format_bytes(total_bytes),
+        filename
+    );
+
+    // Summary
+    if !proto_counts.is_empty() {
+        println!();
+        println!("  Protocol Breakdown:");
+        let total_pkts = pkt_num as f64;
+        let mut protos: Vec<(&String, &u64)> = proto_counts.iter().collect();
+        protos.sort_by_key(|(_, v)| Reverse(**v));
+        for (name, cnt) in protos.iter().take(10) {
+            let pct = **cnt as f64 / total_pkts * 100.0;
+            let bar = ascii_bar(pct, 30);
+            println!("    {:<8}  {}  {:5.1}%  {:>6} pkts", name, bar, pct, cnt);
+        }
+    }
+    if !src_counts.is_empty() {
+        println!();
+        println!("  Top Talkers (source IP):");
+        let mut srcs: Vec<(&String, &(u64, u64))> = src_counts.iter().collect();
+        srcs.sort_by_key(|(_, v)| Reverse(v.0));
+        for (i, (ip, (pkts, bytes))) in srcs.iter().take(10).enumerate() {
+            println!(
+                "    {:>2}.  {:<24}  {:>6} pkts   {}",
+                i + 1,
+                ip,
+                pkts,
+                format_bytes(*bytes)
+            );
+        }
+    }
     Ok(())
 }
 
@@ -409,6 +951,7 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
     const CYAN: &str = "\x1b[1;36m";
     const RED: &str = "\x1b[1;31m";
     const GREEN: &str = "\x1b[32m";
+    const YELLOW: &str = "\x1b[1;33m";
     const RESET: &str = "\x1b[0m";
 
     // ── Packet summary + auto-diagnosis ───────────────────────────────────────
@@ -515,6 +1058,35 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
             dp.ip_fragment.unwrap_or(0)
         );
         println!("  Hdr length : {} bytes", dp.ip_hdr_len.unwrap_or(0));
+    }
+
+    // ── Layer 3: IPv6 (when EtherType = 0x86dd) ──────────────────────────────
+    if let (Some(src6), Some(dst6)) = (&dp.ipv6_src, &dp.ipv6_dst) {
+        println!();
+        println!("{bar}");
+        println!("  LAYER 3 — IPv6");
+        println!("  {thin}");
+        println!("  Src IP     : {src6}");
+        println!("  Dst IP     : {dst6}");
+        if let Some(nh) = dp.ipv6_next_header {
+            let nh_name = match nh {
+                6 => "TCP",
+                17 => "UDP",
+                58 => "ICMPv6",
+                41 => "IPv6-in-IPv6",
+                43 => "Routing",
+                44 => "Fragment",
+                50 => "ESP",
+                51 => "AH",
+                59 => "NoNextHdr",
+                60 => "Destinations",
+                _ => "?",
+            };
+            println!("  Next Hdr   : {nh}  ({nh_name})");
+        }
+        if let Some(hl) = dp.ipv6_hop_limit {
+            println!("  Hop Limit  : {hl}");
+        }
     }
 
     // ── Layer 4: TCP ──────────────────────────────────────────────────────────
@@ -659,6 +1231,206 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
         }
     }
 
+    // ── QUIC / HTTP3 ─────────────────────────────────────────────────────────
+    if dp.quic_detected {
+        println!();
+        println!("{bar}");
+        println!("  QUIC / HTTP3");
+        println!("  {thin}");
+        if let Some(ptype) = dp.quic_packet_type {
+            println!("  Packet Type: {ptype}");
+        }
+        if let Some(ver) = dp.quic_version {
+            let ver_name = match ver {
+                0x00000001 => "QUIC v1 (RFC 9000)",
+                0x6b3343cf => "QUIC v2 (RFC 9369)",
+                0x00000000 => "Version Negotiation",
+                v if v >> 8 == 0x5130 => "gQUIC",
+                v if v & 0x0f0f0f0f == 0x0a0a0a0a => "GREASE",
+                _ => "draft / unknown",
+            };
+            println!("  QUIC Ver   : 0x{ver:08x}  ({ver_name})");
+        }
+    }
+
+    // ── HTTP/2 & gRPC ─────────────────────────────────────────────────────────
+    if dp.http2_detected {
+        println!();
+        println!("{bar}");
+        println!(
+            "  HTTP/2{}",
+            if dp.quic_detected { " (over QUIC)" } else { "" }
+        );
+        println!("  {thin}");
+        println!("  Detected   : PRI * HTTP/2.0 magic or frame parsing");
+        if let Some(path) = &dp.grpc_path {
+            println!("  {CYAN}gRPC Path{RESET}  : {path}");
+        }
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────
+    if dp.ws_upgrade {
+        println!();
+        println!("{bar}");
+        println!("  WEBSOCKET");
+        println!("  {thin}");
+        println!("  Upgrade    : HTTP → WebSocket (Upgrade header detected)");
+    }
+
+    // ── SSH ───────────────────────────────────────────────────────────────────
+    if let Some(banner) = &dp.ssh_banner {
+        println!();
+        println!("{bar}");
+        println!("  SSH");
+        println!("  {thin}");
+        println!("  Banner     : {banner}");
+        if banner.starts_with("SSH-1") {
+            println!("  {RED}⚠  SSHv1 detected — protocol is obsolete and insecure{RESET}");
+        } else {
+            println!("  {GREEN}✓  SSHv2 (or later) — modern secure version{RESET}");
+        }
+    }
+
+    // ── SIP / VoIP ────────────────────────────────────────────────────────────
+    if dp.sip_method.is_some() || dp.sip_uri.is_some() {
+        println!();
+        println!("{bar}");
+        println!("  SIP  (Session Initiation Protocol / VoIP)");
+        println!("  {thin}");
+        if let Some(method) = &dp.sip_method {
+            println!("  Method     : {method}");
+        }
+        if let Some(uri) = &dp.sip_uri {
+            println!("  URI        : {uri}");
+        }
+        if let Some(call_id) = &dp.sip_call_id {
+            println!("  Call-ID    : {call_id}");
+        }
+    }
+
+    // ── NTP ───────────────────────────────────────────────────────────────────
+    if dp.ntp_version.is_some() {
+        println!();
+        println!("{bar}");
+        println!("  NTP  (Network Time Protocol)");
+        println!("  {thin}");
+        if let Some(ver) = dp.ntp_version {
+            println!("  Version    : NTPv{ver}");
+        }
+        if let Some(mode) = dp.ntp_mode {
+            let mode_name = match mode {
+                1 => "Symmetric Active",
+                2 => "Symmetric Passive",
+                3 => "Client",
+                4 => "Server",
+                5 => "Broadcast",
+                6 => "Control",
+                7 => "Private / monlist",
+                _ => "Unknown",
+            };
+            println!("  Mode       : {mode}  ({mode_name})");
+        }
+        if let Some(stratum) = dp.ntp_stratum {
+            let stratum_desc = match stratum {
+                0 => "unspecified / invalid",
+                1 => "primary reference (GPS, radio clock)",
+                2..=15 => "secondary reference (sync'd to stratum−1)",
+                16 => "unsynchronized",
+                _ => "reserved",
+            };
+            println!("  Stratum    : {stratum}  ({stratum_desc})");
+        }
+        if dp.ntp_amplification_risk {
+            println!("  {RED}⚠  Amplification Risk : mode 7 (monlist) response — potential DDoS vector{RESET}");
+        } else {
+            println!("  {GREEN}✓  No amplification risk detected{RESET}");
+        }
+    }
+
+    // ── BGP ───────────────────────────────────────────────────────────────────
+    if let Some(msg_type) = &dp.bgp_msg_type {
+        println!();
+        println!("{bar}");
+        println!("  BGP  (Border Gateway Protocol)");
+        println!("  {thin}");
+        println!("  Msg Type   : {msg_type}");
+        if let Some(asn) = dp.bgp_asn {
+            println!("  AS Number  : AS{asn}");
+        }
+    }
+
+    // ── Tunnel — Inner Frame ───────────────────────────────────────────────────
+    if let Some(ttype) = &dp.tunnel_type {
+        println!();
+        println!("{bar}");
+        println!("  TUNNEL — {}", ttype.to_uppercase());
+        println!("  {thin}");
+        println!("  Encap Type : {ttype}");
+        if let (Some(isrc), Some(idst)) = (dp.inner_ip_src, dp.inner_ip_dst) {
+            println!("  Inner Src  : {isrc}");
+            println!("  Inner Dst  : {idst}");
+        }
+        if let Some(proto) = dp.inner_proto {
+            println!("  Inner Proto: {proto}");
+        }
+        if let (Some(isp), Some(idp)) = (dp.inner_src_port, dp.inner_dst_port) {
+            println!("  Inner Ports: {isp} → {idp}");
+        }
+        if let Some(app) = &dp.inner_app_proto {
+            println!("  Inner App  : {app}");
+        }
+    }
+
+    // ── TLS Fingerprint (JA3) ─────────────────────────────────────────────────
+    if dp.tls_ja3_raw.is_some() || !dp.tls_alpn.is_empty() || !dp.tls_ciphers.is_empty() {
+        println!();
+        println!("{bar}");
+        println!("  TLS FINGERPRINT");
+        println!("  {thin}");
+        if let Some(ja3) = &dp.tls_ja3_raw {
+            println!("  JA3 raw    : {ja3}");
+            println!("  {CYAN}(copy JA3 raw to a threat intel lookup: MD5(raw) = JA3 hash){RESET}");
+        }
+        if !dp.tls_alpn.is_empty() {
+            println!("  ALPN       : {}", dp.tls_alpn.join(", "));
+        }
+        if !dp.tls_ciphers.is_empty() {
+            let cipher_strs: Vec<String> = dp
+                .tls_ciphers
+                .iter()
+                .take(8)
+                .map(|c| format!("0x{c:04x}"))
+                .collect();
+            let more = if dp.tls_ciphers.len() > 8 {
+                format!(" … +{} more", dp.tls_ciphers.len() - 8)
+            } else {
+                String::new()
+            };
+            println!("  Ciphers    : {}{}", cipher_strs.join(" "), more);
+        }
+    }
+
+    // ── DNS Analysis ──────────────────────────────────────────────────────────
+    if dp.dns_query_name.is_some() || dp.dns_label_entropy.is_some() {
+        println!();
+        println!("{bar}");
+        println!("  DNS ANALYSIS");
+        println!("  {thin}");
+        if let Some(qname) = &dp.dns_query_name {
+            println!("  Query Name : {qname}");
+        }
+        if let Some(ent) = dp.dns_label_entropy {
+            let (risk_label, risk_color) = if ent > 3.8 {
+                ("HIGH  — possible DGA / DNS tunneling", RED)
+            } else if ent > 3.0 {
+                ("MEDIUM — elevated entropy, verify", YELLOW)
+            } else {
+                ("LOW   — likely benign", GREEN)
+            };
+            println!("  Entropy    : {ent:.2} bits  →  {risk_color}{risk_label}{RESET}");
+        }
+    }
+
     // ── Payload hex dump ──────────────────────────────────────────────────────
     let payload_len = dp.payload.len();
     if payload_len > 0 {
@@ -668,6 +1440,40 @@ fn print_deep_packet(dp: &pktana_core::DeepPacket) {
         println!("  {thin}");
         for line in hex_dump(&dp.payload, 256) {
             println!("{line}");
+        }
+    }
+
+    // ── App Category & Risk Assessment ───────────────────────────────────────
+    println!();
+    println!("{bar}");
+    println!("  CLASSIFICATION & RISK");
+    println!("  {thin}");
+    if let Some(cat) = &dp.app_category {
+        println!("  Category   : {CYAN}{cat}{RESET}");
+    } else {
+        println!("  Category   : —");
+    }
+    {
+        let score = dp.risk_score;
+        let (risk_label, risk_color) = if score >= 70 {
+            ("HIGH", RED)
+        } else if score >= 35 {
+            ("MEDIUM", YELLOW)
+        } else {
+            ("LOW", GREEN)
+        };
+        let filled = (score as usize * 30 / 100).min(30);
+        let bar30 = format!(
+            "{}{}",
+            "\u{2588}".repeat(filled),
+            "\u{2591}".repeat(30 - filled)
+        );
+        println!("  Risk Score : {risk_color}{bar30} {score:>3}/100  [{risk_label}]{RESET}");
+        if !dp.risk_reasons.is_empty() {
+            println!("  Reasons    :");
+            for reason in &dp.risk_reasons {
+                println!("    {RED}▶{RESET}  {reason}");
+            }
         }
     }
 
@@ -813,7 +1619,14 @@ fn print_usage() {
     println!("  {Y}pktana <IFACE> <BPF>{R}           unlimited capture with BPF filter");
     println!("  {Y}pktana <IFACE> <N> <BPF>{R}       N packets matching BPF filter");
     println!("  {Y}pktana capture <IFACE> ...{R}      same as above (explicit subcommand)");
+    println!("  {Y}pktana record <IFACE> <OUT.pcap>{R}  live capture + save to pcap file");
     println!("  {Y}pktana interfaces{R}               list all pcap-capable interfaces");
+    println!();
+
+    println!("{C}PCAP FILE ANALYSIS{R}");
+    println!("  {Y}pktana pcap <FILE.pcap>{R}         parse & DPI-analyse every packet in file");
+    println!("  {Y}pktana <FILE.pcap>{R}              shorthand — auto-detected by extension");
+    println!("  {Y}pktana tui <FILE.pcap>{R}          open pcap file in TUI (offline mode)");
     println!();
 
     println!("{C}DEEP PACKET INSPECTION  (offline / no capture needed){R}");
@@ -855,6 +1668,9 @@ fn print_usage() {
     println!("  pktana eth0                               # capture everything on eth0");
     println!("  pktana eth0 100 'tcp port 443'            # 100 HTTPS packets");
     println!("  pktana eth0 'host 10.0.0.1'              # traffic to/from one host");
+    println!("  pktana record eth0 capture.pcap           # save live traffic to file");
+    println!("  pktana pcap capture.pcap                  # analyse saved pcap file");
+    println!("  pktana tui capture.pcap                   # browse pcap file in TUI");
     println!("  pktana nic eth0                           # NIC status + counters");
     println!("  pktana ethtool eth0                       # driver + offloads + queues");
     println!("  pktana dp eth0                            # XDP/DPDK/SR-IOV detection");
@@ -1314,46 +2130,126 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
         // ── tui ───────────────────────────────────────────────────────────────
         "tui" => {
             println!("{bar}");
-            println!("{B}  pktana tui{R}  —  Terminal UI dashboard");
+            println!("{B}  pktana tui{R}  —  Terminal UI dashboard (live or pcap)");
             println!("{bar}");
             println!();
             println!("{B}SYNOPSIS{R}");
-            println!("  {Y}pktana tui <IFACE>{R}");
+            println!("  {Y}pktana tui <IFACE>{R}           live capture TUI");
+            println!("  {Y}pktana tui <FILE.pcap>{R}       open saved pcap file in TUI (offline)");
             println!();
             println!("{B}DESCRIPTION{R}");
-            println!("  Opens a full-screen terminal UI dashboard for live network monitoring");
-            println!("  on the specified interface.  Displays real-time packets, bandwidth,");
-            println!("  protocol breakdown, top talkers with GeoIP country info, and active");
-            println!("  connections.");
+            println!("  Opens a full-screen terminal UI dashboard.  In live mode it captures");
+            println!("  from the given interface.  In pcap mode it pre-loads all packets from");
+            println!("  the file and displays them statically — no capture needed, no root.");
             println!();
             println!("{B}DASHBOARD LAYOUT{R}");
-            println!("  Header          — interface name, elapsed time, total packets");
-            println!("  Bandwidth       — RX/TX throughput gauges (MB/s)");
+            println!("  Header          — interface / PCAP filename, elapsed time, total packets");
+            println!("  Bandwidth       — RX/TX throughput gauges (MB/s)  [live mode only]");
             println!("  Protocol Chart  — TCP, UDP, ICMP, ARP breakdown with percentages");
             println!("  Top Talkers     — top 10 source IPs by packet count with GeoIP country");
-            println!(
-                "  Recent Packets  — table of last 20 captured packets (time, size, proto, IPs)"
-            );
+            println!("  Recent Packets  — table of last packets (time, size, proto, IPs)");
             println!("  Connections     — active TCP/UDP sockets with state");
             println!();
             println!("{B}CONTROLS{R}");
-            println!("  q, Q, Esc       — quit the dashboard");
-            println!("  Ctrl+C          — quit (if q doesn't work)");
+            println!("  q, Q, Esc       — quit");
+            println!("  1–5             — switch tabs (Packets / Bandwidth / Flows / Packets / Connections)");
+            println!("  j / k           — scroll packet list down / up");
+            println!("  Enter           — open packet detail (layers + hex dump)");
+            println!("  s / S           — sort packet list by size");
             println!();
-            println!("{B}REQUIRES{R}");
+            println!("{B}REQUIRES (live mode){R}");
             println!("  • root or CAP_NET_RAW capability");
-            println!("  • pktana built with --features tui (includes ratatui and crossterm)");
+            println!("  • pktana built with --features tui");
             println!("  • libpcap.so.1 in library path");
             println!();
             println!("{B}EXAMPLES{R}");
-            println!("  pktana tui eth0         # full TUI dashboard on eth0");
-            println!("  pktana tui ens3         # TUI on ens3");
+            println!("  pktana tui eth0              # live dashboard on eth0");
+            println!("  pktana tui ens3              # live dashboard on ens3");
+            println!("  pktana tui capture.pcap      # browse a saved pcap file");
             println!();
             println!("{B}FEATURES{R}");
             println!("  • GeoIP lookup — automatically resolves top-talker IPs to countries");
-            println!("  • Live update — refreshes every 100ms");
+            println!("  • Live update — refreshes every 100 ms");
+            println!("  • Pcap mode — browse any .pcap / .pcapng / .cap file offline");
             println!("  • Protocol breakdown — see which protocols dominate traffic");
             println!("  • Connection tracking — monitor active sockets in real-time");
+            println!("{bar}");
+        }
+
+        // ── record ────────────────────────────────────────────────────────────
+        "record" | "rec" => {
+            println!("{bar}");
+            println!("{B}  pktana record{R}  —  Record live traffic to a pcap file");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana record <IFACE> <OUT.pcap>{R}");
+            println!("  {Y}pktana record <IFACE> <OUT.pcap> <COUNT>{R}");
+            println!("  {Y}pktana record <IFACE> <OUT.pcap> <COUNT> <BPF_FILTER>{R}");
+            println!("  {Y}pktana record <IFACE> <OUT.pcap> <BPF_FILTER>{R}");
+            println!("  {Y}pktana rec ...{R}   (short alias)");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Captures live traffic from IFACE and writes every packet to OUT.pcap");
+            println!("  in standard pcap format.  Packets are also displayed on screen as they");
+            println!("  arrive.  The output file can be opened later with:");
+            println!("    pktana pcap <OUT.pcap>        # CLI analysis");
+            println!("    pktana tui <OUT.pcap>         # TUI browser");
+            println!("    wireshark <OUT.pcap>          # Wireshark");
+            println!();
+            println!("{B}ARGUMENTS{R}");
+            println!("  {Y}IFACE{R}        Network interface (eth0, ens3, ...)");
+            println!("  {Y}OUT.pcap{R}     Output file — must end in .pcap / .pcapng / .cap");
+            println!("  {Y}COUNT{R}        Stop after N packets (omit for unlimited)");
+            println!("  {Y}BPF_FILTER{R}   BPF filter expression (same syntax as tcpdump)");
+            println!();
+            println!("{B}REQUIRES{R}");
+            println!("  root or CAP_NET_RAW.  Press Ctrl+C to stop.");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana record eth0 out.pcap              # capture everything");
+            println!("  pktana record eth0 out.pcap 1000         # stop after 1 000 packets");
+            println!("  pktana record eth0 out.pcap 0 tcp        # TCP only, unlimited");
+            println!("  pktana record eth0 out.pcap 500 'port 80' # 500 HTTP packets");
+            println!("{bar}");
+        }
+
+        // ── pcap ──────────────────────────────────────────────────────────────
+        "pcap" | "pkt" => {
+            println!("{bar}");
+            println!("{B}  pktana pcap{R}  —  Analyse a pcap / pcapng / cap file");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana pcap <FILE.pcap>{R}");
+            println!("  {Y}pktana <FILE.pcap>{R}         shorthand — extension auto-detected");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Reads every packet from a pcap file, runs full DPI on each, and");
+            println!("  prints a color-coded table (same format as live capture) with");
+            println!("  pcap-relative timestamps.  Ends with a protocol breakdown and");
+            println!("  top-10 talkers summary.");
+            println!();
+            println!("  Supported file formats: .pcap  .pcapng  .cap");
+            println!("  No root required — reads file as a normal user.");
+            println!();
+            println!("{B}OUTPUT COLUMNS{R}");
+            println!("  No.        — packet number in file (1-based)");
+            println!("  Timestamp  — pcap-relative wall-clock time (HH:MM:SS.μs)");
+            println!("  Bytes      — captured packet size");
+            println!("  Proto      — colour-coded protocol label");
+            println!("  Source     — source IP:port or MAC");
+            println!("  Dest       — destination IP:port or MAC");
+            println!("  Info       — DPI summary line");
+            println!();
+            println!("{B}END-OF-FILE SUMMARY{R}");
+            println!("  Protocol Breakdown — percentage bar per protocol");
+            println!("  Top Talkers        — top 10 source IPs by packet count + bytes");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana pcap capture.pcap           # analyse file");
+            println!("  pktana capture.pcap                # shorthand");
+            println!("  pktana tui capture.pcap            # browse in TUI instead");
             println!("{bar}");
         }
 
@@ -1407,7 +2303,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             eprintln!();
             eprintln!("Available topics:");
             eprintln!(
-                "  capture  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  geoip"
+                "  capture  record  pcap  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  geoip"
             );
             return Err(CliError::Usage(format!("unknown help topic '{other}'")));
         }
@@ -1810,6 +2706,8 @@ fn run_routes(args: &[String]) -> Result<(), CliError> {
 // ─── connection table ─────────────────────────────────────────────────────────
 
 fn run_connections() -> Result<(), CliError> {
+    use pktana_core::geoip_lookup_str;
+
     let conns = list_connections();
     if conns.is_empty() {
         println!("No connections found (run as root to see all processes).");
@@ -1817,10 +2715,10 @@ fn run_connections() -> Result<(), CliError> {
     }
     println!("Active Connections ({})\n", conns.len());
     println!(
-        "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  Process",
-        "Proto", "Local Address", "Remote Address", "State", "PID"
+        "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {:<22}  Service / Country",
+        "Proto", "Local Address", "Remote Address", "State", "PID", "Process"
     );
-    println!("{}", "─".repeat(100));
+    println!("{}", "─".repeat(130));
     for c in &conns {
         let local = format!("{}:{}", c.local_ip, c.local_port);
         let remote = if c.remote_port == 0 {
@@ -1833,14 +2731,63 @@ fn run_connections() -> Result<(), CliError> {
             .map(|p| p.to_string())
             .unwrap_or_else(|| "—".to_string());
         let proc_s = c.process.as_deref().unwrap_or("—");
+
+        // Service name for well-known ports
+        let svc = if c.remote_port != 0 {
+            let s = port_service_name(c.remote_port);
+            if s != "?" {
+                s.to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            let s = port_service_name(c.local_port);
+            if s != "?" {
+                s.to_string()
+            } else {
+                String::new()
+            }
+        };
+
+        // GeoIP for remote IP
+        let geo = if c.remote_port != 0 {
+            geoip_lookup_str(&c.remote_ip.to_string())
+                .map(|g| format!("{} {}", g.country_code, g.country_name))
+                .unwrap_or_else(|| "Private/LAN".to_string())
+        } else {
+            String::new()
+        };
+
+        let svc_geo = match (svc.is_empty(), geo.is_empty()) {
+            (false, false) => format!("{svc} · {geo}"),
+            (false, true) => svc,
+            (true, false) => geo,
+            (true, true) => "—".to_string(),
+        };
+
+        // Color-coded TCP state
+        let state_padded = format!("{:<13}", c.state);
+        let state_col = if c.state.contains("ESTABLISH") {
+            format!("\x1b[32m{state_padded}\x1b[0m")
+        } else if c.state.contains("LISTEN") {
+            format!("\x1b[36m{state_padded}\x1b[0m")
+        } else if c.state.contains("TIME_WAIT") || c.state.contains("CLOSE_WAIT") {
+            format!("\x1b[33m{state_padded}\x1b[0m")
+        } else if c.state.contains("SYN") {
+            format!("\x1b[1;33m{state_padded}\x1b[0m")
+        } else {
+            state_padded
+        };
+
         println!(
-            "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {}",
+            "{:<5}  {:<28}  {:<28}  {}  {:<6}  {:<22}  {}",
             c.proto,
             trunc(&local, 28),
             trunc(&remote, 28),
-            c.state,
+            state_col,
             pid_s,
-            proc_s,
+            trunc(proc_s, 22),
+            svc_geo,
         );
     }
     Ok(())
@@ -1951,12 +2898,17 @@ impl LiveStats {
         let mut talkers: Vec<(&String, &(u64, u64))> = self.talkers.iter().collect();
         talkers.sort_by_key(|b| Reverse(b.1 .0));
         for (i, (ip, (pkts, bytes))) in talkers.iter().take(10).enumerate() {
+            use pktana_core::geoip_lookup_str;
+            let country = geoip_lookup_str(ip)
+                .map(|g| format!("{}  {}", g.country_code, g.country_name))
+                .unwrap_or_else(|| "Private/LAN".to_string());
             println!(
-                "    {:>2}.  {:<26}  {:>8} pkts   {}",
+                "    {:>2}.  {:<26}  {:>8} pkts   {:<12}  {}",
                 i + 1,
                 ip,
                 pkts,
-                format_bytes(*bytes)
+                format_bytes(*bytes),
+                country
             );
         }
 
@@ -2084,124 +3036,6 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
         nic.tx_errors,
         nic.tx_dropped
     );
-}
-
-// ─── DNS decode ───────────────────────────────────────────────────────────────
-
-/// Try to decode a DNS query or response from the raw packet bytes.
-/// Returns Some("DNS Query: example.com A") / Some("DNS Reply: example.com A") or None.
-fn dns_decode(pkt: &ParsedPacket) -> Option<String> {
-    let ip = pkt.summary.ipv4.as_ref()?;
-    let (src_port, dst_port) = match &pkt.summary.transport {
-        Some(TransportHeader::Udp {
-            source_port,
-            destination_port,
-            ..
-        }) => (*source_port, *destination_port),
-        _ => return None,
-    };
-    if src_port != 53 && dst_port != 53 {
-        return None;
-    }
-
-    // DNS payload starts after: 14 (eth) + ip_header + 8 (udp header)
-    let dns_start = 14 + ip.header_length + 8;
-    let data = pkt.raw.get(dns_start..)?;
-    if data.len() < 12 {
-        return None;
-    }
-
-    let flags = u16::from_be_bytes([data[2], data[3]]);
-    let is_resp = (flags & 0x8000) != 0;
-    let qdcount = u16::from_be_bytes([data[4], data[5]]);
-    if qdcount == 0 {
-        return None;
-    }
-
-    let name = dns_parse_name(data, 12)?;
-    if name.is_empty() {
-        return None;
-    }
-
-    // QTYPE is right after the name
-    let name_end = 12 + dns_name_len(data, 12);
-    let qtype = u16::from_be_bytes([*data.get(name_end)?, *data.get(name_end + 1)?]);
-    let type_str = dns_type_str(qtype);
-    let verb = if is_resp { "Reply" } else { "Query" };
-
-    // Rcode for replies
-    let rcode_str = if is_resp {
-        let rcode = flags & 0x000F;
-        if rcode == 3 {
-            " [NXDOMAIN]"
-        } else {
-            ""
-        }
-    } else {
-        ""
-    };
-
-    Some(format!("DNS {verb}: {name} {type_str}{rcode_str}"))
-}
-
-fn dns_parse_name(data: &[u8], mut pos: usize) -> Option<String> {
-    let mut labels = Vec::new();
-    let mut hops = 0;
-    loop {
-        if hops > 20 {
-            return None;
-        }
-        let len = *data.get(pos)? as usize;
-        if len == 0 {
-            break;
-        }
-        if len & 0xC0 == 0xC0 {
-            // Compression pointer
-            let ptr = ((len & 0x3F) << 8) | (*data.get(pos + 1)? as usize);
-            pos = ptr;
-            hops += 1;
-            continue;
-        }
-        pos += 1;
-        let label = std::str::from_utf8(data.get(pos..pos + len)?).ok()?;
-        labels.push(label);
-        pos += len;
-    }
-    Some(labels.join("."))
-}
-
-/// Number of bytes the name occupies in the DNS wire format (incl. final 0x00 or 2-byte pointer).
-fn dns_name_len(data: &[u8], mut pos: usize) -> usize {
-    let start = pos;
-    while let Some(&l) = data.get(pos) {
-        let len = l as usize;
-        if len == 0 {
-            pos += 1;
-            break;
-        }
-        if len & 0xC0 == 0xC0 {
-            pos += 2;
-            break;
-        }
-        pos += 1 + len;
-    }
-    pos - start
-}
-
-fn dns_type_str(t: u16) -> &'static str {
-    match t {
-        1 => "A",
-        2 => "NS",
-        5 => "CNAME",
-        6 => "SOA",
-        12 => "PTR",
-        15 => "MX",
-        16 => "TXT",
-        28 => "AAAA",
-        33 => "SRV",
-        255 => "ANY",
-        _ => "?",
-    }
 }
 
 // ─── GeoIP lookup command ─────────────────────────────────────────────────────

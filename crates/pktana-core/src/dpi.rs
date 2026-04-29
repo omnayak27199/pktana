@@ -86,6 +86,75 @@ pub struct DeepPacket {
 
     // ── Anomalies ─────────────────────────────────────────────────────────────
     pub anomalies: Vec<String>,
+
+    // ── TLS enhanced (JA3, ALPN, cipher suites) ──────────────────────────────
+    /// Raw TLS cipher suite values (from ClientHello),  GREASE filtered.
+    pub tls_ciphers: Vec<u16>,
+    /// Negotiated / offered ALPN protocols (e.g. ["h2", "http/1.1"]).
+    pub tls_alpn: Vec<String>,
+    /// JA3 fingerprint input string:  "TLSVer,Ciphers,Extensions,Curves,PointFmts".
+    /// MD5(tls_ja3_raw) == JA3 fingerprint used by security tools.
+    pub tls_ja3_raw: Option<String>,
+
+    // ── QUIC / HTTP3 ─────────────────────────────────────────────────────────
+    pub quic_detected: bool,
+    pub quic_version: Option<u32>,
+    pub quic_packet_type: Option<&'static str>,
+
+    // ── HTTP/2 & gRPC ────────────────────────────────────────────────────────
+    pub http2_detected: bool,
+    /// gRPC :path header value (if observed inside clear HTTP/2).
+    pub grpc_path: Option<String>,
+
+    // ── WebSocket ────────────────────────────────────────────────────────────
+    pub ws_upgrade: bool,
+
+    // ── Tunnel inner-frame ───────────────────────────────────────────────────
+    /// Encapsulation type: "VXLAN", "GRE", "Geneve", …
+    pub tunnel_type: Option<String>,
+    pub inner_ip_src: Option<std::net::Ipv4Addr>,
+    pub inner_ip_dst: Option<std::net::Ipv4Addr>,
+    pub inner_proto: Option<&'static str>,
+    pub inner_src_port: Option<u16>,
+    pub inner_dst_port: Option<u16>,
+    pub inner_app_proto: Option<String>,
+
+    // ── SSH ──────────────────────────────────────────────────────────────────
+    pub ssh_banner: Option<String>,
+
+    // ── SIP / VoIP ───────────────────────────────────────────────────────────
+    pub sip_method: Option<String>,
+    pub sip_uri: Option<String>,
+    pub sip_call_id: Option<String>,
+
+    // ── NTP ──────────────────────────────────────────────────────────────────
+    pub ntp_version: Option<u8>,
+    pub ntp_mode: Option<u8>,
+    pub ntp_stratum: Option<u8>,
+    /// True when response > 468 bytes — potential amplification abuse.
+    pub ntp_amplification_risk: bool,
+
+    // ── BGP ──────────────────────────────────────────────────────────────────
+    pub bgp_msg_type: Option<String>,
+    pub bgp_asn: Option<u16>,
+
+    // ── IPv6 ─────────────────────────────────────────────────────────────────
+    pub ipv6_src: Option<String>,
+    pub ipv6_dst: Option<String>,
+    pub ipv6_next_header: Option<u8>,
+    pub ipv6_hop_limit: Option<u8>,
+
+    // ── DNS enhanced ─────────────────────────────────────────────────────────
+    /// Shannon entropy of the queried label (high = possible DGA / tunneling).
+    pub dns_label_entropy: Option<f32>,
+    pub dns_query_name: Option<String>,
+
+    // ── Risk / classification ─────────────────────────────────────────────────
+    /// Composite 0-100 risk score  (0 = benign, 100 = high risk).
+    pub risk_score: u8,
+    pub risk_reasons: Vec<String>,
+    /// High-level traffic category: "WebBrowsing", "Streaming", "VoIP", "Tunnel", …
+    pub app_category: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,16 +242,21 @@ pub fn inspect(raw: &[u8]) -> DeepPacket {
             // IPv4
             parse_ipv4(l3, raw, &mut dp, &mut anomalies);
         }
-        0x86dd => { /* IPv6 — not yet decoded */ }
+        0x86dd => {
+            // IPv6 — basic header decode
+            parse_ipv6(l3, &mut dp, &mut anomalies);
+        }
         _ => {}
     }
 
     if dp.frame_len < 60 && ether_type != 0x8100 {
-        // Ethernet minimum is 64 bytes (60 + 4 CRC), pad frames < 60 bytes
-        // are normal for short packets on loopback/veth — not an anomaly.
+        // short frame — normal on loopback/veth
     }
 
     dp.anomalies = anomalies;
+    // Post-processing: risk score + app category
+    dp.compute_risk();
+    dp.classify_app_category();
     dp
 }
 
@@ -283,6 +357,7 @@ fn parse_ipv4(data: &[u8], _raw: &[u8], dp: &mut DeepPacket, anomalies: &mut Vec
         6 => parse_tcp(transport, dp, anomalies),
         17 => parse_udp(transport, dp, anomalies),
         1 => parse_icmp(transport, dp, anomalies),
+        47 => parse_gre(transport, dp, anomalies),
         proto => {
             dp.payload = transport.to_vec();
             let _ = proto;
@@ -493,15 +568,48 @@ fn parse_icmp(data: &[u8], dp: &mut DeepPacket, anomalies: &mut Vec<String>) {
 // ─── Application layer detection ─────────────────────────────────────────────
 
 fn detect_app_tcp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
-    // Check the higher port number — that is typically the server/service side
+    if payload.is_empty() {
+        return;
+    }
+
+    // Port-agnostic heuristics first (content sniffing)
+    // HTTP/2 PRI magic
+    if detect_http2(payload, dp) {
+        return;
+    }
+    // WebSocket upgrade
+    if detect_websocket(payload, dp) {
+        return;
+    }
+    // SSH banner
+    if payload.starts_with(b"SSH-") {
+        detect_ssh_banner(payload, dp);
+        return;
+    }
+    // BGP (16 × 0xFF marker)
+    if payload.starts_with(&[0xff; 16]) {
+        detect_bgp(payload, dp);
+        return;
+    }
+    // SIP (well-known method words or SIP/ response)
+    if payload.starts_with(b"INVITE")
+        || payload.starts_with(b"SIP/")
+        || payload.starts_with(b"REGISTER")
+        || payload.starts_with(b"OPTIONS")
+        || payload.starts_with(b"BYE ")
+        || payload.starts_with(b"ACK ")
+    {
+        detect_sip(payload, dp);
+        return;
+    }
+
+    // Port-based dispatch (check both src and dst)
     match dst.max(src) {
         80 | 8080 | 8000 => {
             detect_http(payload, dp);
         }
         443 | 8443 => detect_tls(payload, dp),
-        22 => {
-            dp.app_proto = Some("SSH".into());
-        }
+        22 => detect_ssh_banner(payload, dp),
         25 | 587 | 465 => detect_smtp(payload, dp),
         110 | 995 => {
             dp.app_proto = Some("POP3".into());
@@ -515,6 +623,14 @@ fn detect_app_tcp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
         23 => {
             dp.app_proto = Some("Telnet".into());
         }
+        179 => detect_bgp(payload, dp),
+        389 | 636 => {
+            dp.app_proto = Some("LDAP".into());
+        }
+        88 => {
+            dp.app_proto = Some("Kerberos".into());
+        }
+        5060 | 5061 => detect_sip(payload, dp),
         3306 => {
             dp.app_proto = Some("MySQL".into());
         }
@@ -530,12 +646,9 @@ fn detect_app_tcp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
         3389 => {
             dp.app_proto = Some("RDP".into());
         }
-        179 => {
-            dp.app_proto = Some("BGP".into());
-        }
         _ => {
-            // Heuristic fallback: try HTTP/TLS regardless of non-standard port
-            if payload.len() >= 4 && !detect_http(payload, dp) {
+            // Heuristic fallback: try HTTP then TLS regardless of non-standard port
+            if !detect_http(payload, dp) {
                 detect_tls(payload, dp);
             }
         }
@@ -546,9 +659,7 @@ fn detect_app_udp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
     match dst.max(src) {
         53 => detect_dns(payload, dp),
         67 | 68 => detect_dhcp(payload, dp),
-        123 => {
-            dp.app_proto = Some("NTP".into());
-        }
+        123 => detect_ntp_full(payload, dp),
         161 | 162 => {
             dp.app_proto = Some("SNMP".into());
         }
@@ -562,13 +673,25 @@ fn detect_app_udp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
             dp.app_proto = Some("SSDP".into());
         }
         5353 => detect_dns(payload, dp), // mDNS
+        5060 | 5061 => detect_sip(payload, dp),
         4789 => {
             dp.app_proto = Some("VXLAN".into());
+            inspect_vxlan_inner(payload, dp);
         }
         6081 => {
             dp.app_proto = Some("Geneve".into());
         }
-        _ => {}
+        // QUIC runs on UDP 443 (HTTP3) and occasionally 80
+        443 | 80 => {
+            detect_quic(payload, dp);
+            if !dp.quic_detected {
+                detect_dns(payload, dp);
+            } // fallback for DoH-over-UDP
+        }
+        _ => {
+            // QUIC heuristic: check long-header bit pattern regardless of port
+            detect_quic(payload, dp);
+        }
     }
 }
 
@@ -663,11 +786,19 @@ fn detect_tls(payload: &[u8], dp: &mut DeepPacket) {
     dp.app_detail.push(format!("Version  : {tls_ver}"));
     dp.app_detail.push(format!("Record   : {record_type}"));
 
-    // Try to extract SNI from ClientHello (handshake type 1)
+    // ClientHello (handshake type 1) — extract SNI, ALPN, ciphers, JA3
     if content_type == 22 && payload.len() > 9 && payload[5] == 1 {
         if let Some(sni) = extract_sni(payload) {
             dp.app_detail.push(format!("SNI      : {sni}"));
         }
+        // Full ClientHello parsing for JA3 + ALPN + ciphers
+        parse_tls_client_hello(payload, dp);
+    }
+    // TLS 1.0/1.1 deprecation warning
+    if ver_minor <= 2 {
+        dp.app_detail.push(format!(
+            "⚠ {tls_ver} is deprecated (RFC 8996) — upgrade to TLS 1.2+"
+        ));
     }
 }
 
@@ -754,6 +885,7 @@ fn detect_dns(payload: &[u8], dp: &mut DeepPacket) {
     // Decode question section
     if qdcount > 0 {
         if let Some((name, end)) = dns_parse_name(payload, 12) {
+            dp.dns_query_name = Some(name.clone());
             if end + 4 <= payload.len() {
                 let qtype = u16::from_be_bytes([payload[end], payload[end + 1]]);
                 let qclass = u16::from_be_bytes([payload[end + 2], payload[end + 3]]);
@@ -765,6 +897,17 @@ fn detect_dns(payload: &[u8], dp: &mut DeepPacket) {
                 ));
             } else {
                 dp.app_detail.push(format!("Question : {name}"));
+            }
+            // Shannon entropy of the longest label for DGA/tunnel detection
+            let longest = name.split('.').max_by_key(|l| l.len()).unwrap_or("");
+            if longest.len() >= 10 {
+                let entropy = shannon_entropy(longest);
+                dp.dns_label_entropy = Some(entropy);
+                if entropy > 3.5 {
+                    dp.app_detail.push(format!(
+                        "⚠ DNS label entropy={entropy:.2} (high — possible DGA/tunneling)"
+                    ));
+                }
             }
         }
     }
@@ -905,6 +1048,984 @@ fn detect_smtp(payload: &[u8], dp: &mut DeepPacket) {
         if !first.is_empty() {
             dp.app_detail.push(format!("Banner   : {first}"));
         }
+    }
+}
+
+// ── SSH ───────────────────────────────────────────────────────────────────────
+
+fn detect_ssh_banner(payload: &[u8], dp: &mut DeepPacket) {
+    // SSH identification string: "SSH-2.0-OpenSSH_8.4\r\n" or "SSH-1.99-..."
+    if let Ok(text) = std::str::from_utf8(&payload[..payload.len().min(256)]) {
+        if text.starts_with("SSH-") {
+            dp.app_proto = Some("SSH".into());
+            let banner = text.lines().next().unwrap_or("").trim();
+            dp.ssh_banner = Some(banner.to_string());
+            dp.app_detail.push(format!("Banner   : {banner}"));
+            // Software version hint
+            if let Some(sw) = banner.splitn(3, '-').nth(2) {
+                dp.app_detail.push(format!("Software : {sw}"));
+            }
+            // Flag SSH-1.x (insecure)
+            if text.starts_with("SSH-1.") {
+                dp.app_detail
+                    .push("⚠ SSHv1 is deprecated and cryptographically broken".to_string());
+            }
+        }
+    }
+}
+
+// ── SIP / VoIP ────────────────────────────────────────────────────────────────
+
+fn detect_sip(payload: &[u8], dp: &mut DeepPacket) {
+    let Ok(text) = std::str::from_utf8(&payload[..payload.len().min(512)]) else {
+        return;
+    };
+
+    // SIP request line: "INVITE sip:bob@example.com SIP/2.0"
+    // SIP response:     "SIP/2.0 200 OK"
+    let first_line = text.lines().next().unwrap_or("").trim();
+    if first_line.starts_with("SIP/2.0") {
+        // Response
+        dp.app_proto = Some("SIP".into());
+        dp.app_detail.push(format!("Response : {first_line}"));
+    } else {
+        let methods = [
+            "INVITE",
+            "ACK",
+            "BYE",
+            "CANCEL",
+            "REGISTER",
+            "OPTIONS",
+            "PRACK",
+            "SUBSCRIBE",
+            "NOTIFY",
+            "PUBLISH",
+            "INFO",
+            "REFER",
+            "MESSAGE",
+            "UPDATE",
+        ];
+        let method = methods.iter().find(|&&m| first_line.starts_with(m));
+        if let Some(&m) = method {
+            dp.app_proto = Some("SIP".into());
+            dp.sip_method = Some(m.to_string());
+            let parts: Vec<&str> = first_line.splitn(3, ' ').collect();
+            if parts.len() >= 2 {
+                dp.sip_uri = Some(parts[1].to_string());
+                dp.app_detail.push(format!("Method   : {m}"));
+                dp.app_detail.push(format!("URI      : {}", parts[1]));
+            }
+        } else {
+            return;
+        }
+    }
+    // Extract key headers
+    for line in text.lines().skip(1) {
+        let lower = line.to_lowercase();
+        if lower.starts_with("call-id:") || lower.starts_with("i:") {
+            let val = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            dp.sip_call_id = Some(val.to_string());
+            dp.app_detail.push(format!("Call-ID  : {val}"));
+        } else if lower.starts_with("from:") || lower.starts_with("f:") {
+            let val = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            dp.app_detail.push(format!("From     : {val}"));
+        } else if lower.starts_with("to:") || lower.starts_with("t:") {
+            let val = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            dp.app_detail.push(format!("To       : {val}"));
+        } else if lower.starts_with("user-agent:") {
+            let val = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+            dp.app_detail.push(format!("UA       : {val}"));
+        }
+        if line.trim().is_empty() {
+            break;
+        }
+    }
+}
+
+// ── NTP ───────────────────────────────────────────────────────────────────────
+
+fn detect_ntp_full(payload: &[u8], dp: &mut DeepPacket) {
+    if payload.len() < 48 {
+        return;
+    }
+    let byte0 = payload[0];
+    let li = (byte0 >> 6) & 0x03;
+    let version = (byte0 >> 3) & 0x07;
+    let mode = byte0 & 0x07;
+    let stratum = payload[1];
+    let poll = payload[2] as i8;
+    let precision = payload[3] as i8;
+
+    dp.app_proto = Some("NTP".into());
+    dp.ntp_version = Some(version);
+    dp.ntp_mode = Some(mode);
+    dp.ntp_stratum = Some(stratum);
+
+    let mode_str = match mode {
+        0 => "Reserved",
+        1 => "Symmetric Active",
+        2 => "Symmetric Passive",
+        3 => "Client",
+        4 => "Server",
+        5 => "Broadcast",
+        6 => "Control",
+        7 => "Private (monlist?)",
+        _ => "?",
+    };
+    let stratum_str = match stratum {
+        0 => "Unspecified/KoD",
+        1 => "Primary (GPS / atomic clock)",
+        2..=15 => "Secondary",
+        16..=255 => "Unsynchronized",
+    };
+    let li_str = match li {
+        0 => "No warning",
+        1 => "Last minute 61s",
+        2 => "Last minute 59s",
+        _ => "Clock unsynchronized",
+    };
+
+    dp.app_detail.push(format!("Version  : NTPv{version}"));
+    dp.app_detail
+        .push(format!("Mode     : {mode} ({mode_str})"));
+    dp.app_detail
+        .push(format!("Stratum  : {stratum} — {stratum_str}"));
+    dp.app_detail.push(format!("LI       : {li} — {li_str}"));
+    dp.app_detail.push(format!("Poll     : 2^{poll} s"));
+    dp.app_detail.push(format!("Precision: 2^{precision} s"));
+
+    // Mode 7 (private/monlist) over UDP is the classic NTP amplification vector
+    if mode == 7 && payload.len() > 468 {
+        dp.ntp_amplification_risk = true;
+        dp.app_detail
+            .push("⚠ Mode 7 response > 468B — NTP amplification attack risk".to_string());
+    }
+    if mode == 6 && payload.len() > 100 {
+        dp.app_detail
+            .push("⚠ NTP control mode — verify source is authorised".to_string());
+    }
+}
+
+// ── BGP ───────────────────────────────────────────────────────────────────────
+
+fn detect_bgp(payload: &[u8], dp: &mut DeepPacket) {
+    // BGP messages start with 16-byte 0xFF marker
+    if payload.len() < 19 {
+        return;
+    }
+    if payload[..16] != [0xff; 16] {
+        return;
+    }
+
+    let length = u16::from_be_bytes([payload[16], payload[17]]);
+    let msg_type = payload[18];
+    let type_str = match msg_type {
+        1 => "OPEN",
+        2 => "UPDATE",
+        3 => "NOTIFICATION",
+        4 => "KEEPALIVE",
+        5 => "ROUTE-REFRESH",
+        _ => "Unknown",
+    };
+    dp.app_proto = Some("BGP".into());
+    dp.bgp_msg_type = Some(type_str.to_string());
+    dp.app_detail
+        .push(format!("MsgType  : {type_str}  (len={length})"));
+
+    // OPEN message carries BGP version + AS number
+    if msg_type == 1 && payload.len() >= 29 {
+        let bgp_ver = payload[19];
+        let my_asn = u16::from_be_bytes([payload[20], payload[21]]);
+        let hold_time = u16::from_be_bytes([payload[22], payload[23]]);
+        dp.bgp_asn = Some(my_asn);
+        dp.app_detail.push(format!("BGP Ver  : {bgp_ver}"));
+        dp.app_detail.push(format!("My ASN   : {my_asn}"));
+        dp.app_detail.push(format!("Hold Time: {hold_time}s"));
+        let router_id = std::net::Ipv4Addr::new(payload[24], payload[25], payload[26], payload[27]);
+        dp.app_detail.push(format!("Router ID: {router_id}"));
+    }
+    if msg_type == 3 && payload.len() >= 22 {
+        let error = payload[19];
+        let sub = payload[20];
+        let err_str = match error {
+            1 => "Message Header Error",
+            2 => "OPEN Message Error",
+            3 => "UPDATE Message Error",
+            4 => "Hold Timer Expired",
+            5 => "FSM Error",
+            6 => "Cease",
+            _ => "Unknown",
+        };
+        dp.app_detail
+            .push(format!("Error    : {err_str}  (sub={sub})"));
+    }
+}
+
+// ── QUIC / HTTP3 ─────────────────────────────────────────────────────────────
+
+fn detect_quic(payload: &[u8], dp: &mut DeepPacket) {
+    if payload.len() < 5 {
+        return;
+    }
+    let first = payload[0];
+
+    // QUIC long header: first byte bit7=1, bit6=1 (0xC0 mask = 0xC0)
+    if first & 0xC0 == 0xC0 {
+        let version = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+        let pkt_type = match (first >> 4) & 0x03 {
+            0 => "Initial",
+            1 => "0-RTT",
+            2 => "Handshake",
+            3 => "Retry",
+            _ => "Long",
+        };
+        // Common QUIC versions
+        let ver_str = match version {
+            0x00000001 => "QUIC v1 (RFC 9000)",
+            0xff00001d..=0xff00002b => "QUIC draft",
+            0x6b3343cf => "QUIC v2",
+            0x51303530 | 0x51303433 | 0x51303436 => "gQUIC (Google)",
+            0x00000000 => "Version Negotiation",
+            _ => "QUIC (unknown ver)",
+        };
+        dp.quic_detected = true;
+        dp.quic_version = Some(version);
+        dp.quic_packet_type = Some(pkt_type);
+        dp.app_proto = Some("QUIC/HTTP3".into());
+        dp.app_detail.push(format!("QUIC     : {ver_str}"));
+        dp.app_detail.push(format!("PktType  : {pkt_type}"));
+        dp.app_detail.push(format!("Version  : 0x{version:08x}"));
+        if version == 0x00000000 {
+            dp.app_detail
+                .push("Version Negotiation — client offering multiple QUIC versions".to_string());
+        }
+    } else if first & 0x80 == 0 {
+        // Short header — encrypted, can still identify as QUIC
+        dp.quic_detected = true;
+        dp.quic_packet_type = Some("Short/1-RTT");
+        dp.app_proto = Some("QUIC/HTTP3".into());
+        dp.app_detail
+            .push("QUIC short header (1-RTT encrypted)".to_string());
+    }
+}
+
+// ── HTTP/2 ────────────────────────────────────────────────────────────────────
+
+fn detect_http2(payload: &[u8], dp: &mut DeepPacket) -> bool {
+    // HTTP/2 client preface: "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" (24 bytes)
+    const H2_MAGIC: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    if payload.len() >= H2_MAGIC.len() && &payload[..H2_MAGIC.len()] == H2_MAGIC {
+        dp.app_proto = Some("HTTP/2".into());
+        dp.http2_detected = true;
+        dp.app_detail
+            .push("HTTP/2 client connection preface".to_string());
+        // Parse SETTINGS frame that follows
+        let rest = &payload[H2_MAGIC.len()..];
+        parse_h2_frames(rest, dp);
+        return true;
+    }
+    // HTTP/2 frames without preface (continuation)
+    if payload.len() >= 9 {
+        let frame_type = payload[3];
+        let stream_id = u32::from_be_bytes([payload[5] & 0x7f, payload[6], payload[7], payload[8]]);
+        if matches!(frame_type, 0..=9) && stream_id <= 0x7fff_ffff {
+            let len = u32::from_be_bytes([0, payload[0], payload[1], payload[2]]);
+            if len as usize <= payload.len().saturating_sub(9) {
+                dp.http2_detected = true;
+                dp.app_proto = Some("HTTP/2".into());
+                parse_h2_frames(payload, dp);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn parse_h2_frames(data: &[u8], dp: &mut DeepPacket) {
+    const FRAME_NAMES: &[&str] = &[
+        "DATA",
+        "HEADERS",
+        "PRIORITY",
+        "RST_STREAM",
+        "SETTINGS",
+        "PUSH_PROMISE",
+        "PING",
+        "GOAWAY",
+        "WINDOW_UPDATE",
+        "CONTINUATION",
+    ];
+    let mut pos = 0;
+    let mut frame_count = 0;
+    while pos + 9 <= data.len() && frame_count < 8 {
+        let length = u32::from_be_bytes([0, data[pos], data[pos + 1], data[pos + 2]]) as usize;
+        let frame_type = data[pos + 3];
+        let flags = data[pos + 4];
+        let stream_id = u32::from_be_bytes([
+            data[pos + 5] & 0x7f,
+            data[pos + 6],
+            data[pos + 7],
+            data[pos + 8],
+        ]);
+        let name = FRAME_NAMES
+            .get(frame_type as usize)
+            .copied()
+            .unwrap_or("UNKNOWN");
+        dp.app_detail.push(format!(
+            "H2 Frame : {name}  len={length}  flags=0x{flags:02x}  stream={stream_id}"
+        ));
+
+        // HEADERS frame: look for :path and content-type (basic HPACK literal detection)
+        if frame_type == 1 {
+            let payload_start = pos + 9;
+            let payload_end = (payload_start + length).min(data.len());
+            let hdr_bytes = &data[payload_start..payload_end];
+            if let Some(path) = hpack_find_literal(hdr_bytes, b":path") {
+                dp.app_detail.push(format!("H2 Path  : {path}"));
+                // gRPC detection: content-type = application/grpc
+                if path.starts_with('/') && path.contains('.') {
+                    dp.grpc_path = Some(path.clone());
+                }
+            }
+            if let Some(ct) = hpack_find_literal(hdr_bytes, b"content-type") {
+                dp.app_detail.push(format!("H2 CT    : {ct}"));
+                if ct.contains("grpc") {
+                    dp.grpc_path
+                        .get_or_insert_with(|| "gRPC (unknown path)".to_string());
+                    dp.app_proto = Some("gRPC".into());
+                }
+            }
+        }
+        frame_count += 1;
+        pos += 9 + length;
+    }
+}
+
+/// Very simple HPACK literal header value finder (no huffman, indexed-only skip).
+fn hpack_find_literal(data: &[u8], key: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(data).ok()?;
+    // Look for key as substring then extract following value
+    let key_str = std::str::from_utf8(key).ok()?;
+    let lower = text.to_lowercase();
+    let pos = lower.find(key_str)?;
+    let after = &text[pos + key_str.len()..];
+    // Value follows as length-prefixed bytes; try to grab printable chars
+    let value: String = after
+        .chars()
+        .skip_while(|c| !c.is_ascii_alphanumeric() && *c != '/')
+        .take_while(|c| c.is_ascii_graphic())
+        .collect();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+
+fn detect_websocket(payload: &[u8], dp: &mut DeepPacket) -> bool {
+    let Ok(text) = std::str::from_utf8(&payload[..payload.len().min(512)]) else {
+        return false;
+    };
+    let lower = text.to_lowercase();
+    if lower.contains("upgrade: websocket") || lower.contains("connection: upgrade") {
+        dp.ws_upgrade = true;
+        dp.app_proto = Some("WebSocket".into());
+        dp.app_detail.push("WebSocket upgrade request".to_string());
+        for line in text.lines() {
+            let ll = line.to_lowercase();
+            if ll.starts_with("sec-websocket-key:") {
+                let key = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+                dp.app_detail.push(format!("WS Key   : {key}"));
+            }
+            if ll.starts_with("sec-websocket-version:") {
+                let ver = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+                dp.app_detail.push(format!("WS Ver   : {ver}"));
+            }
+            if ll.starts_with("sec-websocket-extensions:") {
+                let ext = line.split_once(':').map(|x| x.1).unwrap_or("").trim();
+                dp.app_detail.push(format!("WS Ext   : {ext}"));
+            }
+        }
+        return true;
+    }
+    // WebSocket frame (binary): first byte = opcode
+    if !payload.is_empty() && dp.ws_upgrade {
+        let opcode = payload[0] & 0x0f;
+        let masked = (payload[1] & 0x80) != 0;
+        let op_str = match opcode {
+            0 => "Continuation",
+            1 => "Text",
+            2 => "Binary",
+            8 => "Close",
+            9 => "Ping",
+            10 => "Pong",
+            _ => "?",
+        };
+        dp.app_detail
+            .push(format!("WS Frame : opcode={op_str}  masked={masked}"));
+    }
+    false
+}
+
+// ── TLS enhanced — ALPN + cipher suites + JA3 raw ───────────────────────────
+
+/// Parse a full TLS ClientHello and extract cipher suites, ALPN, supported groups,
+/// point formats — then build the raw JA3 input string.
+fn parse_tls_client_hello(payload: &[u8], dp: &mut DeepPacket) {
+    // Layout: TLS record(5) + HandshakeType(1) + HS length(3) = 9
+    // Then: ClientHello version(2) + random(32) = 43 from start
+    if payload.len() < 43 {
+        return;
+    }
+
+    // Record-layer version (for JA3 SSLVersion field)
+    let rec_ver = u16::from_be_bytes([payload[1], payload[2]]);
+    // ClientHello version (bytes 9-10 after TLS record header)
+    let hello_ver = u16::from_be_bytes([payload[9], payload[10]]);
+
+    let mut pos: usize = 43;
+
+    // Session ID
+    if pos >= payload.len() {
+        return;
+    }
+    let sid_len = payload[pos] as usize;
+    pos += 1 + sid_len;
+    if pos + 2 > payload.len() {
+        return;
+    }
+
+    // Cipher suites
+    let cs_len = u16::from_be_bytes([payload[pos], payload[pos + 1]]) as usize;
+    pos += 2;
+    if pos + cs_len > payload.len() {
+        return;
+    }
+    let mut ciphers: Vec<u16> = Vec::new();
+    let mut i = 0;
+    while i + 1 < cs_len {
+        let cs = u16::from_be_bytes([payload[pos + i], payload[pos + i + 1]]);
+        if !is_grease(cs) {
+            ciphers.push(cs);
+        }
+        i += 2;
+    }
+    pos += cs_len;
+
+    // Compression methods
+    if pos >= payload.len() {
+        return;
+    }
+    let comp_len = payload[pos] as usize;
+    pos += 1 + comp_len;
+
+    // Extensions
+    if pos + 2 > payload.len() {
+        return;
+    }
+    let ext_total = u16::from_be_bytes([payload[pos], payload[pos + 1]]) as usize;
+    pos += 2;
+    let ext_end = (pos + ext_total).min(payload.len());
+
+    let mut ext_types: Vec<u16> = Vec::new();
+    let mut curves: Vec<u16> = Vec::new();
+    let mut pf: Vec<u8> = Vec::new();
+    let mut alpn_list: Vec<String> = Vec::new();
+
+    while pos + 4 <= ext_end {
+        let ext_type = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
+        let ext_len = u16::from_be_bytes([payload[pos + 2], payload[pos + 3]]) as usize;
+        pos += 4;
+        let ext_data = if pos + ext_len <= payload.len() {
+            &payload[pos..pos + ext_len]
+        } else {
+            break;
+        };
+
+        if !is_grease(ext_type) {
+            ext_types.push(ext_type);
+        }
+
+        match ext_type {
+            0x0000 => { /* SNI — already extracted */ }
+            0x000a if ext_data.len() >= 2 => {
+                // Supported groups (elliptic curves)
+                let list_len = u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
+                let mut j = 2usize;
+                while j + 1 < list_len + 2 && j + 1 < ext_data.len() {
+                    let g = u16::from_be_bytes([ext_data[j], ext_data[j + 1]]);
+                    if !is_grease(g) {
+                        curves.push(g);
+                    }
+                    j += 2;
+                }
+            }
+            0x000b if !ext_data.is_empty() => {
+                // EC point formats
+                let pf_len = ext_data[0] as usize;
+                for k in 0..pf_len.min(ext_data.len() - 1) {
+                    pf.push(ext_data[1 + k]);
+                }
+            }
+            0x0010 if ext_data.len() >= 2 => {
+                // ALPN
+                let list_len = u16::from_be_bytes([ext_data[0], ext_data[1]]) as usize;
+                let mut j = 2usize;
+                while j < list_len + 2 && j < ext_data.len() {
+                    if j >= ext_data.len() {
+                        break;
+                    }
+                    let proto_len = ext_data[j] as usize;
+                    j += 1;
+                    if j + proto_len <= ext_data.len() {
+                        if let Ok(s) = std::str::from_utf8(&ext_data[j..j + proto_len]) {
+                            alpn_list.push(s.to_string());
+                        }
+                    }
+                    j += proto_len;
+                }
+            }
+            _ => {}
+        }
+        pos += ext_len;
+    }
+
+    // Store parsed data
+    dp.tls_ciphers = ciphers.clone();
+    dp.tls_alpn = alpn_list.clone();
+
+    if !alpn_list.is_empty() {
+        dp.app_detail
+            .push(format!("ALPN     : {}", alpn_list.join(", ")));
+        // If ALPN includes h2, tag HTTP/2 over TLS
+        if alpn_list.iter().any(|a| a == "h2") {
+            dp.http2_detected = true;
+            dp.app_detail
+                .push("ALPN→h2  : HTTP/2 negotiated over TLS".to_string());
+        }
+        if alpn_list.iter().any(|a| a.contains("grpc")) {
+            dp.app_detail
+                .push("ALPN→gRPC: gRPC transport negotiated".to_string());
+        }
+    }
+    if !ciphers.is_empty() {
+        let cs_str: Vec<String> = ciphers
+            .iter()
+            .take(5)
+            .map(|c| format!("0x{c:04x}"))
+            .collect();
+        let suffix = if ciphers.len() > 5 {
+            format!("…+{}", ciphers.len() - 5)
+        } else {
+            String::new()
+        };
+        dp.app_detail
+            .push(format!("Ciphers  : {}{suffix}", cs_str.join(" ")));
+    }
+    if !curves.is_empty() {
+        let cur_str: Vec<String> = curves.iter().map(|c| named_group(*c)).collect();
+        dp.app_detail
+            .push(format!("Curves   : {}", cur_str.join(", ")));
+    }
+
+    // Build JA3 raw string: "TLSVersion,Ciphers,Extensions,Curves,PointFormats"
+    //  JA3 uses the ClientHello version (hello_ver) not record version
+    let _ = rec_ver;
+    let ja3_ciphers = ciphers
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let ja3_exts = ext_types
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let ja3_curves = curves
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let ja3_pf = pf
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join("-");
+    let ja3_raw = format!("{hello_ver},{ja3_ciphers},{ja3_exts},{ja3_curves},{ja3_pf}");
+    dp.tls_ja3_raw = Some(ja3_raw.clone());
+    dp.app_detail.push(format!("JA3-raw  : {ja3_raw}"));
+    dp.app_detail
+        .push("(MD5 of JA3-raw = JA3 fingerprint used by security tools)".to_string());
+}
+
+fn is_grease(val: u16) -> bool {
+    // GREASE values: 0x0a0a, 0x1a1a, … 0xfafa
+    let lo = val & 0x00ff;
+    let hi = val >> 8;
+    lo == hi && lo & 0x0f == 0x0a
+}
+
+fn named_group(g: u16) -> String {
+    match g {
+        23 => "secp256r1".into(),
+        24 => "secp384r1".into(),
+        25 => "secp521r1".into(),
+        29 => "x25519".into(),
+        30 => "x448".into(),
+        256 => "ffdhe2048".into(),
+        257 => "ffdhe3072".into(),
+        _ => format!("0x{g:04x}"),
+    }
+}
+
+// ── IPv6 ─────────────────────────────────────────────────────────────────────
+
+fn parse_ipv6(data: &[u8], dp: &mut DeepPacket, anomalies: &mut Vec<String>) {
+    if data.len() < 40 {
+        anomalies.push("IPv6 header truncated".into());
+        return;
+    }
+    dp.ip_version = Some(6);
+    let next_header = data[6];
+    let hop_limit = data[7];
+    let src = fmt_ipv6(&data[8..24]);
+    let dst = fmt_ipv6(&data[24..40]);
+
+    dp.ipv6_src = Some(src.clone());
+    dp.ipv6_dst = Some(dst.clone());
+    dp.ipv6_next_header = Some(next_header);
+    dp.ipv6_hop_limit = Some(hop_limit);
+
+    dp.ip_ttl = Some(hop_limit);
+    dp.ip_proto_name = Some(ip_proto_name(next_header));
+    if hop_limit == 0 {
+        anomalies.push("IPv6 Hop Limit=0 (invalid)".into());
+    }
+
+    let payload = &data[40..];
+    match next_header {
+        6 => parse_tcp(payload, dp, anomalies),
+        17 => parse_udp(payload, dp, anomalies),
+        58 => parse_icmp(payload, dp, anomalies), // ICMPv6
+        _ => {
+            dp.payload = payload.to_vec();
+        }
+    }
+}
+
+fn fmt_ipv6(b: &[u8]) -> String {
+    let groups: Vec<String> = b
+        .chunks(2)
+        .map(|g| format!("{:02x}{:02x}", g[0], g[1]))
+        .collect();
+    groups.join(":")
+}
+
+// ── Tunnel inner frame re-inspection (VXLAN, GRE, Geneve) ───────────────────
+
+fn inspect_vxlan_inner(payload: &[u8], dp: &mut DeepPacket) {
+    // VXLAN: 8-byte header (flags + VNI), then inner Ethernet frame (≥14 bytes)
+    if payload.len() < 22 {
+        return;
+    }
+    let vni = ((payload[4] as u32) << 16) | ((payload[5] as u32) << 8) | payload[6] as u32;
+    dp.tunnel_type = Some(format!("VXLAN VNI={vni}"));
+    dp.app_detail.push(format!("VXLAN VNI: {vni}"));
+    let inner = &payload[8..];
+    decode_inner_ethernet(inner, dp);
+}
+
+fn inspect_gre_inner(payload: &[u8], gre_proto: u16, dp: &mut DeepPacket) {
+    if payload.is_empty() {
+        return;
+    }
+    dp.tunnel_type = Some("GRE".to_string());
+    dp.app_detail.push(format!("GRE Proto: 0x{gre_proto:04x}"));
+    match gre_proto {
+        0x0800 => {
+            // Inner IPv4
+            let mut inner_dp = DeepPacket::empty(payload.len());
+            let mut anoms = Vec::new();
+            parse_ipv4(payload, payload, &mut inner_dp, &mut anoms);
+            harvest_inner(&inner_dp, dp);
+        }
+        0x86dd => {
+            let mut inner_dp = DeepPacket::empty(payload.len());
+            let mut anoms = Vec::new();
+            parse_ipv6(payload, &mut inner_dp, &mut anoms);
+            harvest_inner(&inner_dp, dp);
+        }
+        _ => {}
+    }
+}
+
+fn decode_inner_ethernet(inner: &[u8], dp: &mut DeepPacket) {
+    if inner.len() < 14 {
+        return;
+    }
+    let et = u16::from_be_bytes([inner[12], inner[13]]);
+    let l3 = &inner[14..];
+    let mut inner_dp = DeepPacket::empty(inner.len());
+    let mut anoms = Vec::new();
+    match et {
+        0x0800 => parse_ipv4(l3, l3, &mut inner_dp, &mut anoms),
+        0x86dd => parse_ipv6(l3, &mut inner_dp, &mut anoms),
+        _ => {}
+    }
+    harvest_inner(&inner_dp, dp);
+}
+
+fn harvest_inner(inner: &DeepPacket, dp: &mut DeepPacket) {
+    dp.inner_ip_src = inner.ip_src;
+    dp.inner_ip_dst = inner.ip_dst;
+    dp.inner_proto = inner.ip_proto_name;
+    dp.inner_src_port = inner.tcp_src_port.or(inner.udp_src_port);
+    dp.inner_dst_port = inner.tcp_dst_port.or(inner.udp_dst_port);
+    dp.inner_app_proto = inner.app_proto.clone();
+    if let Some(src) = inner.ip_src {
+        dp.app_detail.push(format!("Inner Src: {src}"));
+    }
+    if let Some(dst) = inner.ip_dst {
+        dp.app_detail.push(format!("Inner Dst: {dst}"));
+    }
+    if let Some(p) = inner.app_proto.as_deref() {
+        dp.app_detail.push(format!("Inner App: {p}"));
+    }
+    if let Some(p) = &inner.ip_proto_name {
+        dp.app_detail.push(format!("Inner Proto: {p}"));
+    }
+}
+
+// ── GRE header parsing ───────────────────────────────────────────────────────
+
+fn parse_gre(data: &[u8], dp: &mut DeepPacket, anomalies: &mut Vec<String>) {
+    if data.len() < 4 {
+        anomalies.push("GRE header truncated".into());
+        return;
+    }
+    let flags = u16::from_be_bytes([data[0], data[1]]);
+    let proto = u16::from_be_bytes([data[2], data[3]]);
+    let has_checksum = (flags >> 15) & 1 == 1;
+    let has_key = (flags >> 13) & 1 == 1;
+    let has_seq = (flags >> 12) & 1 == 1;
+    let mut offset = 4usize;
+    if has_checksum {
+        offset += 4;
+    }
+    if has_key {
+        offset += 4;
+    }
+    if has_seq {
+        offset += 4;
+    }
+    dp.app_proto = Some("GRE".into());
+    if offset <= data.len() {
+        inspect_gre_inner(&data[offset..], proto, dp);
+    }
+}
+
+// ── DNS label entropy (tunneling / DGA heuristic) ────────────────────────────
+
+/// Shannon entropy of a string. High entropy (>3.5) suggests encoding or DGA.
+fn shannon_entropy(s: &str) -> f32 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let mut freq = [0u32; 256];
+    for b in s.bytes() {
+        freq[b as usize] += 1;
+    }
+    let len = s.len() as f32;
+    freq.iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f32 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+// ── Risk scorer ───────────────────────────────────────────────────────────────
+
+impl DeepPacket {
+    /// Compute a 0-100 risk score based on observed anomalies and protocol signals.
+    pub fn compute_risk(&mut self) {
+        let mut score: i32 = 0;
+        let mut reasons: Vec<String> = Vec::new();
+
+        // Anomaly-based score
+        score += (self.anomalies.len() as i32) * 10;
+
+        // TCP flag attacks
+        if let Some(flags) = self.tcp_flags {
+            if flags & 0x003 == 0x003 {
+                score += 30;
+                reasons.push("SYN+FIN (port scan / malformed)".into());
+            }
+            if flags & 0x006 == 0x006 {
+                score += 30;
+                reasons.push("SYN+RST (malformed)".into());
+            }
+            if flags == 0 {
+                score += 25;
+                reasons.push("NULL scan (no flags)".into());
+            }
+        }
+
+        // Old/deprecated protocol versions
+        if let Some(ref proto) = self.app_proto {
+            if proto == "TLS/SSL" || proto == "TLS" {
+                for d in &self.app_detail {
+                    if d.contains("TLS 1.0") || d.contains("TLS 1.1") {
+                        score += 20;
+                        reasons.push("Deprecated TLS version".into());
+                        break;
+                    }
+                }
+            }
+            if proto == "Telnet" {
+                score += 40;
+                reasons.push("Telnet — cleartext remote access".into());
+            }
+            if proto == "FTP Control" {
+                score += 15;
+                reasons.push("FTP — cleartext credentials".into());
+            }
+            if proto == "SNMP" {
+                score += 10;
+                reasons.push("SNMP — verify SNMPv3 auth".into());
+            }
+        }
+
+        // Cleartext HTTP carrying sensitive-looking paths
+        if self.app_proto.as_deref() == Some("HTTP") {
+            score += 10;
+            reasons.push("Cleartext HTTP".into());
+            for d in &self.app_detail {
+                let dl = d.to_lowercase();
+                if dl.contains("password")
+                    || dl.contains("passwd")
+                    || dl.contains("token")
+                    || dl.contains("secret")
+                {
+                    score += 20;
+                    reasons.push("HTTP with credential-like keyword in path/header".into());
+                    break;
+                }
+            }
+        }
+
+        // NTP amplification
+        if self.ntp_amplification_risk {
+            score += 35;
+            reasons.push("NTP amplification attack pattern".into());
+        }
+
+        // DNS tunneling heuristic
+        if let Some(entropy) = self.dns_label_entropy {
+            if entropy > 3.8 {
+                score += 25;
+                reasons.push(format!(
+                    "DNS label entropy={entropy:.2} — possible tunneling/DGA"
+                ));
+            } else if entropy > 3.3 {
+                score += 10;
+                reasons.push(format!(
+                    "DNS label entropy={entropy:.2} — slightly elevated"
+                ));
+            }
+        }
+
+        // SSH version 1
+        if let Some(ref b) = self.ssh_banner {
+            if b.starts_with("SSH-1.") {
+                score += 35;
+                reasons.push("SSHv1 — cryptographically broken".into());
+            }
+        }
+
+        // BGP anomaly
+        if self.bgp_msg_type.as_deref() == Some("NOTIFICATION") {
+            score += 15;
+            reasons.push("BGP NOTIFICATION — session may be flapping".into());
+        }
+
+        // IP TTL anomalies
+        if self.ip_ttl == Some(0) {
+            score += 30;
+            reasons.push("IP TTL=0".into());
+        }
+        if self.ip_ttl == Some(1) {
+            score += 5;
+            reasons.push("IP TTL=1 (expires on next hop)".into());
+        }
+
+        // Fragment
+        if self.ip_fragment.is_some() {
+            score += 5;
+            reasons.push("Fragmented IP packet".into());
+        }
+
+        // QUIC (not inherently risky, but mark for visibility)
+        if self.quic_detected {
+            // QUIC itself is fine, but note for visibility
+        }
+
+        // Source IP anomalies from anomalies list
+        for a in &self.anomalies {
+            if a.contains("broadcast")
+                || a.contains("unspecified")
+                || a.contains("malformed")
+                || a.contains("scan")
+            {
+                score += 10;
+                reasons.push(a.clone());
+            }
+        }
+
+        self.risk_score = score.clamp(0, 100) as u8;
+        self.risk_reasons = reasons;
+    }
+
+    /// App category classification based on detected protocol.
+    pub fn classify_app_category(&mut self) {
+        self.app_category = Some(match self.app_proto.as_deref().unwrap_or("") {
+            "HTTP" | "HTTPS" | "TLS/SSL" | "HTTP/2" => "Web Browsing".into(),
+            "QUIC/HTTP3" => "Web Browsing (QUIC)".into(),
+            "gRPC" => "RPC / Microservices".into(),
+            "DNS" => "DNS".into(),
+            "DHCP" => "Network Infrastructure".into(),
+            "NTP" => "Time Synchronization".into(),
+            "SSH" => "Remote Access".into(),
+            "Telnet" => "Remote Access (Insecure)".into(),
+            "FTP Control" => "File Transfer".into(),
+            "SMTP" | "IMAP" | "POP3" | "SMTPS" | "IMAPS" | "POP3S" => "Email".into(),
+            "SIP" => "VoIP / UC".into(),
+            "SNMP" => "Network Management".into(),
+            "BGP" | "OSPF" | "RIP" => "Routing Protocol".into(),
+            "VXLAN" | "GRE" | "Geneve" => "Overlay Tunnel".into(),
+            "SSDP" => "Service Discovery".into(),
+            "IKE/IPsec" => "VPN / Encrypted Tunnel".into(),
+            "MySQL" | "PostgreSQL" | "Redis" | "MongoDB" => "Database".into(),
+            "RDP" => "Remote Desktop".into(),
+            "WebSocket" => "Real-time / WebSocket".into(),
+            "LDAP" | "Kerberos" => "Directory / Auth".into(),
+            _ => {
+                // Port-based category fallback
+                let port = self.tcp_dst_port.or(self.udp_dst_port).unwrap_or(0);
+                match port {
+                    80 | 443 | 8080 | 8443 => "Web Browsing",
+                    25 | 465 | 587 => "Email",
+                    22 => "Remote Access",
+                    3306 | 5432 | 6379 | 27017 => "Database",
+                    1935 | 8554 => "Streaming",
+                    5060 | 5061 | 16384..=32767 => "VoIP / UC",
+                    _ => "Unknown",
+                }
+                .into()
+            }
+        });
     }
 }
 
@@ -1349,11 +2470,66 @@ impl DeepPacket {
                     _ => {}
                 }
             }
-            "NTP"    => out.push("NTP clock sync — large response (>400B) may indicate amplification abuse".into()),
-            "SNMP"   => out.push("SNMP management — ensure SNMPv3 auth; avoid community string exposure".into()),
-            "BGP"    => out.push("BGP peering — protect with TCP-MD5 or TTL-security (GTSM)".into()),
-            "VXLAN"  => out.push("VXLAN tunnel — inner L2 frame encapsulated; re-inspect inner payload for real traffic".into()),
-            "SSH"    => out.push("SSH — encrypted; many SYNs with RSTs on port 22 suggest brute-force scanning".into()),
+            "NTP" => {
+                let mode = self.ntp_mode.unwrap_or(0);
+                let stratum = self.ntp_stratum.unwrap_or(0);
+                out.push(format!("NTP mode={mode}  stratum={stratum}"));
+                if self.ntp_amplification_risk {
+                    out.push("⚠ NTP amplification risk — mode 7 or oversized monlist response".into());
+                }
+            }
+            "SNMP"   => out.push("SNMP management — ensure SNMPv3 auth+encrypt; avoid SNMPv1/v2 community strings on internet".into()),
+            "BGP"    => {
+                out.push("BGP peering — protect with TCP-MD5 or TTL-security (GTSM)".into());
+                if let Some(asn) = self.bgp_asn { out.push(format!("BGP AS: {asn}")); }
+            }
+            "VXLAN"  => {
+                if let Some(ref tn) = self.tunnel_type { out.push(format!("Tunnel: {tn}")); }
+                if let (Some(s), Some(d)) = (self.inner_ip_src, self.inner_ip_dst) {
+                    out.push(format!("Inner flow: {s} → {d}"));
+                }
+                if let Some(ref ap) = self.inner_app_proto { out.push(format!("Inner app: {ap}")); }
+            }
+            "GRE"    => {
+                if let Some(ref tn) = self.tunnel_type { out.push(format!("GRE tunnel: {tn}")); }
+                if let (Some(s), Some(d)) = (self.inner_ip_src, self.inner_ip_dst) {
+                    out.push(format!("Inner flow: {s} → {d}"));
+                }
+            }
+            "SSH" => {
+                if let Some(ref b) = self.ssh_banner {
+                    out.push(format!("SSH server: {b}"));
+                    if b.starts_with("SSH-1.") {
+                        out.push("⚠ SSHv1 is deprecated — cryptographically broken, upgrade to OpenSSH".into());
+                    }
+                } else {
+                    out.push("SSH — encrypted session; brute-force attempts appear as many SYN+RST on port 22".into());
+                }
+            }
+            "SIP" => {
+                if let Some(ref m) = self.sip_method { out.push(format!("SIP {m} request")); }
+                if let Some(ref cid) = self.sip_call_id { out.push(format!("Call-ID: {cid}")); }
+                if let Some(ref uri) = self.sip_uri { out.push(format!("URI: {uri}")); }
+            }
+            "QUIC/HTTP3" => {
+                if let Some(ver) = self.quic_version {
+                    out.push(format!("QUIC encrypted transport (ver=0x{ver:08x}) — content not readable without keys"));
+                }
+                if let Some(pt) = self.quic_packet_type { out.push(format!("Packet type: {pt}")); }
+            }
+            "HTTP/2" | "gRPC" => {
+                if let Some(ref path) = self.grpc_path {
+                    out.push(format!("gRPC method: {path}"));
+                } else {
+                    out.push("HTTP/2 frame stream — binary multiplexed over single TCP connection".into());
+                }
+                if !self.tls_alpn.is_empty() {
+                    out.push(format!("ALPN negotiated: {}", self.tls_alpn.join(", ")));
+                }
+            }
+            "WebSocket" => {
+                out.push("WebSocket — full-duplex real-time channel over HTTP upgrade".into());
+            }
             other    => out.push(format!("Application: {other}")),
         }
     }
@@ -1371,6 +2547,35 @@ impl DeepPacket {
         }
         if let Some(vendor) = self.eth_vendor_src {
             out.push(format!("Source NIC vendor: {vendor}"));
+        }
+        // IPv6 summary
+        if let (Some(ref s), Some(ref d)) = (&self.ipv6_src, &self.ipv6_dst) {
+            out.push(format!("IPv6: {s} → {d}"));
+            if let Some(hl) = self.ipv6_hop_limit {
+                out.push(format!("IPv6 Hop Limit: {hl}"));
+            }
+        }
+        // Tunnel inner summary
+        if let Some(ref tn) = self.tunnel_type {
+            out.push(format!("Tunnel encapsulation: {tn}"));
+            if let (Some(s), Some(d)) = (self.inner_ip_src, self.inner_ip_dst) {
+                out.push(format!("  Inner: {s} → {d}"));
+            }
+        }
+        // JA3 fingerprint
+        if let Some(ref ja3) = self.tls_ja3_raw {
+            out.push(format!("TLS JA3-raw (MD5 = JA3): {ja3}"));
+        }
+        // Risk score
+        if self.risk_score > 0 {
+            out.push(format!("⚠ Risk score: {}/100", self.risk_score));
+            for r in &self.risk_reasons {
+                out.push(format!("  • {r}"));
+            }
+        }
+        // App category
+        if let Some(ref cat) = self.app_category {
+            out.push(format!("Category: {cat}"));
         }
     }
 }
@@ -1497,6 +2702,41 @@ impl DeepPacket {
             app_detail: Vec::new(),
             payload: Vec::new(),
             anomalies: Vec::new(),
+            tls_ciphers: Vec::new(),
+            tls_alpn: Vec::new(),
+            tls_ja3_raw: None,
+            quic_detected: false,
+            quic_version: None,
+            quic_packet_type: None,
+            http2_detected: false,
+            grpc_path: None,
+            ws_upgrade: false,
+            tunnel_type: None,
+            inner_ip_src: None,
+            inner_ip_dst: None,
+            inner_proto: None,
+            inner_src_port: None,
+            inner_dst_port: None,
+            inner_app_proto: None,
+            ssh_banner: None,
+            sip_method: None,
+            sip_uri: None,
+            sip_call_id: None,
+            ntp_version: None,
+            ntp_mode: None,
+            ntp_stratum: None,
+            ntp_amplification_risk: false,
+            bgp_msg_type: None,
+            bgp_asn: None,
+            ipv6_src: None,
+            ipv6_dst: None,
+            ipv6_next_header: None,
+            ipv6_hop_limit: None,
+            dns_label_entropy: None,
+            dns_query_name: None,
+            risk_score: 0,
+            risk_reasons: Vec::new(),
+            app_category: None,
         }
     }
 }

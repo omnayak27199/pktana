@@ -92,6 +92,16 @@ impl LinuxCaptureEngine {
     {
         capture_streaming_impl(config, on_packet)
     }
+
+    /// Read every packet from a `.pcap` / `.cap` / `.pcapng` file and call
+    /// `on_packet` for each one. Return `false` from the closure to stop early.
+    /// Requires the `pcap` feature.
+    pub fn read_pcap_file<F>(path: &str, on_packet: F) -> Result<CaptureStats, CaptureError>
+    where
+        F: FnMut(CapturePacket) -> bool,
+    {
+        read_pcap_file_impl(path, on_packet)
+    }
 }
 
 #[cfg(feature = "pcap")]
@@ -263,5 +273,53 @@ fn capture_impl(
 ) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
     Err(CaptureError::Unsupported(
         "live capture is not enabled; rebuild with `--features pcap`",
+    ))
+}
+
+// ─── PCAP file reader ─────────────────────────────────────────────────────────
+
+#[cfg(feature = "pcap")]
+fn read_pcap_file_impl<F>(path: &str, mut on_packet: F) -> Result<CaptureStats, CaptureError>
+where
+    F: FnMut(CapturePacket) -> bool,
+{
+    let mut cap = pcap::Capture::from_file(path)
+        .map_err(|e| CaptureError::Open(format!("cannot open '{}': {}", path, e)))?;
+
+    let mut stats = CaptureStats {
+        packets_seen: 0,
+        bytes_seen: 0,
+    };
+
+    loop {
+        match cap.next_packet() {
+            Ok(pkt) => {
+                let data = pkt.data.to_vec();
+                stats.bytes_seen += data.len();
+                stats.packets_seen += 1;
+                #[allow(clippy::unnecessary_cast)]
+                let cp = CapturePacket {
+                    timestamp_sec: pkt.header.ts.tv_sec,
+                    timestamp_usec: pkt.header.ts.tv_usec as i64,
+                    data,
+                };
+                if !on_packet(cp) {
+                    break;
+                }
+            }
+            Err(pcap::Error::NoMorePackets) => break,
+            Err(e) => return Err(CaptureError::Read(e.to_string())),
+        }
+    }
+    Ok(stats)
+}
+
+#[cfg(not(feature = "pcap"))]
+fn read_pcap_file_impl<F>(_path: &str, _on_packet: F) -> Result<CaptureStats, CaptureError>
+where
+    F: FnMut(CapturePacket) -> bool,
+{
+    Err(CaptureError::Unsupported(
+        "pcap file reading requires the 'pcap' feature; rebuild with `--features pcap`",
     ))
 }

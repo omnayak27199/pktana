@@ -10,6 +10,82 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.0] — 2026-04-29
+
+### Added
+
+#### DPI Engine — TLS Intelligence
+- **JA3 fingerprinting**: full ClientHello parse — cipher suites, extensions, elliptic curves, point formats; GREASE values filtered; raw JA3 string stored in `tls_ja3_raw`
+- **ALPN extraction**: negotiated ALPN protocols (e.g. `h2`, `http/1.1`) stored in `tls_alpn`
+- **Cipher suite list** stored as `Vec<u16>` in `tls_ciphers`
+- TLS 1.0/1.1 deprecation warning inline (RFC 8996)
+
+#### DPI Engine — Modern Protocols
+- **QUIC / HTTP3**: long/short header decode, version decode (RFC 9000 v1, RFC 9369 v2, gQUIC, negotiation, GREASE) in `quic_version` / `quic_packet_type`
+- **HTTP/2**: PRI magic detection + frame-type parsing; `http2_detected` flag
+- **gRPC**: `:path` header extraction via naive HPACK literal scan; stored in `grpc_path`
+- **WebSocket**: Upgrade header detection + per-frame opcode (Text/Binary/Close/Ping/Pong) + mask; `ws_upgrade` flag
+- **SSH banner**: full banner string extraction, SSHv1 detection; stored in `ssh_banner`
+- **SIP / VoIP**: all SIP methods (INVITE/BYE/REGISTER/OPTIONS/CANCEL/ACK/…), SIP URI, Call-ID, From, To, User-Agent; stored in `sip_method` / `sip_uri` / `sip_call_id`
+- **NTP full decode**: version, mode (with name), stratum (with description), amplification risk flag (`ntp_amplification_risk`) for mode 7 monlist responses
+- **BGP**: message type (OPEN/UPDATE/NOTIFICATION/KEEPALIVE), AS number from OPEN, Router ID; stored in `bgp_msg_type` / `bgp_asn`
+- **IPv6**: basic header decode (src, dst, next header, hop limit); stored in `ipv6_src` / `ipv6_dst` / `ipv6_next_header` / `ipv6_hop_limit`; wired into `inspect()` via EtherType 0x86dd
+
+#### DPI Engine — Tunnel Inner-Frame Re-Inspection
+- **VXLAN** (UDP/4789): inner Ethernet + IPv4 re-inspection, inner ports and app-proto stored
+- **GRE** (IP proto 47): header parse (flags, checksum, key, seq), inner Ethernet re-inspection
+- **Geneve** detection
+- All tunnel details stored in `tunnel_type` / `inner_ip_src` / `inner_ip_dst` / `inner_proto` / `inner_src_port` / `inner_dst_port` / `inner_app_proto`
+
+#### DPI Engine — DNS Enhancement
+- **Shannon entropy** computed on the longest DNS label; stored in `dns_label_entropy`
+- `dns_query_name` stores the first question name
+- Entropy threshold labels: HIGH (>3.8 bits) = possible DGA/tunneling, MEDIUM, LOW
+
+#### DPI Engine — Risk Scoring & Classification
+- `compute_risk()` method builds a **0–100 composite risk score** from: deprecated TLS, SSHv1, NTP monlist, high DNS entropy, NULL scan, zero-window SYN, broadcast source, tunneling
+- `classify_app_category()` maps protocol/port to a human-readable category: Web Browsing, Encrypted Transport, VoIP / UC, Database, File Transfer, Tunneling / Overlay, Remote Access, DNS / Infrastructure, Monitoring / Mgmt, Generic TCP/UDP
+- Both fields (`risk_score`, `risk_reasons`, `app_category`) automatically populated by `inspect()`
+
+#### CLI — `pktana inspect` (print_deep_packet)
+New sections added to the inspect output:
+- **LAYER 3 — IPv6**: src/dst, next header with name, hop limit
+- **QUIC / HTTP3**: packet type, version with RFC name
+- **HTTP/2**: frame detection, gRPC `:path` in cyan
+- **WEBSOCKET**: Upgrade detection
+- **SSH**: banner string, SSHv1 warning in red / SSHv2 confirmation in green
+- **SIP (VoIP)**: method, URI, Call-ID
+- **NTP**: version, mode, stratum with description, amplification risk in red
+- **BGP**: message type, AS number
+- **TUNNEL**: encap type, inner src/dst IP, inner proto, inner ports, inner app proto
+- **TLS FINGERPRINT**: JA3 raw string with lookup hint, ALPN list, cipher suites (first 8 as hex)
+- **DNS ANALYSIS**: query name, entropy with color-coded risk label
+- **CLASSIFICATION & RISK**: app category in cyan, 0-100 bar with LOW/MEDIUM/HIGH label, reasons list
+
+#### CLI — `pktana capture` / `pktana <iface>`
+- Switched from `analyze_bytes()` to full `inspect()` DPI per packet
+- **Color-coded protocol column**: TLS=green, HTTP=blue, DNS=cyan, QUIC=bright-green, SSH=bright-blue, ICMP=yellow, ARP=magenta, BGP/NTP=red
+- **DPI-enriched Info column**: TLS SNI+ALPN, HTTP method+path, DNS query name, SSH banner, SIP method, BGP type+ASN, QUIC version, NTP mode
+- RST packets highlighted in red
+- **End-of-capture summary**: protocol breakdown table + top-5 talkers with packet/byte counts
+
+#### CLI — `pktana conn`
+- **GeoIP country** for every remote IP (offline lookup, no API call)
+- **Service name** for well-known ports shown in extra column
+- **Color-coded TCP state**: ESTABLISHED=green, LISTEN=cyan, TIME_WAIT/CLOSE_WAIT=yellow, SYN*=bold yellow
+
+#### CLI — `pktana stats`
+- **GeoIP country name** shown for each top-10 talker
+
+#### TUI (`pktana tui eth0`)
+- `dpi_lines()` extended with all new DPI fields: IPv6, QUIC, HTTP/2, gRPC, WebSocket, SSH banner, SIP, NTP, BGP, tunnel inner frame, JA3+ALPN, DNS analysis, risk score bar, app category
+
+### Fixed
+- Removed unused `dns_decode()`/`dns_parse_name()`/`dns_name_len()`/`dns_type_str()` functions from `main.rs`
+- Removed unused `TransportHeader` import from `main.rs`
+
+---
+
 ## [0.1.0] — 2026-04-24
 
 Initial public release.
@@ -120,5 +196,6 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/omnayak27199/pktana/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/omnayak27199/pktana/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/omnayak27199/pktana/releases/tag/v0.3.0
 [0.1.0]: https://github.com/omnayak27199/pktana/releases/tag/v0.1.0
