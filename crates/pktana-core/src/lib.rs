@@ -14,10 +14,10 @@ pub mod parser;
 pub mod process;
 pub mod routes;
 
+pub use buffer_pool::{BufferPool, PacketBuffer};
 pub use capture::{
     CaptureConfig, CaptureError, CapturePacket, CaptureStats, InterfaceSummary, LinuxCaptureEngine,
 };
-pub use buffer_pool::{BufferPool, PacketBuffer};
 pub use connections::{list_connections, Connection};
 pub use dpi::{hex_dump, inspect, ArpDetail, DeepPacket, VlanTag};
 pub use ethtool::{get_ethtool_report, EthtoolReport, QueueIrq};
