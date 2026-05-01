@@ -1,6 +1,7 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod buffer_pool;
 pub mod capture;
 pub mod connections;
 pub mod dpi;
@@ -16,6 +17,7 @@ pub mod routes;
 pub use capture::{
     CaptureConfig, CaptureError, CapturePacket, CaptureStats, InterfaceSummary, LinuxCaptureEngine,
 };
+pub use buffer_pool::{BufferPool, PacketBuffer};
 pub use connections::{list_connections, Connection};
 pub use dpi::{hex_dump, inspect, ArpDetail, DeepPacket, VlanTag};
 pub use ethtool::{get_ethtool_report, EthtoolReport, QueueIrq};

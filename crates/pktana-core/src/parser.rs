@@ -5,6 +5,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+use crate::buffer_pool::PacketBuffer;
 use crate::flow::FlowTable;
 use crate::packet::{
     EtherType, EthernetFrame, IpProtocol, Ipv4Header, PacketSummary, TransportHeader,
@@ -12,7 +13,7 @@ use crate::packet::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedPacket {
-    pub raw: Vec<u8>,
+    pub raw: PacketBuffer,
     pub summary: PacketSummary,
 }
 
@@ -101,15 +102,11 @@ fn parse_ethernet_frame(bytes: &[u8]) -> Result<ParsedPacket, ParseError> {
     };
 
     let payload = &bytes[14..];
-    let (ipv4, transport, payload_len) = match ethernet.ether_type {
-        EtherType::Ipv4 => parse_ipv4(payload)?,
-        EtherType::Arp | EtherType::Ipv6 | EtherType::Vlan | EtherType::Other(_) => {
-            (None, None, payload.len())
-        }
-    };
+    // Use dispatch table for protocol parsing (replaces branching)
+    let (ipv4, transport, payload_len) = dispatch_ether_type(ethernet.ether_type, payload)?;
 
     Ok(ParsedPacket {
-        raw: bytes.to_vec(),
+        raw: PacketBuffer::from_slice(bytes),
         summary: PacketSummary {
             ethernet,
             ipv4,
@@ -118,6 +115,21 @@ fn parse_ethernet_frame(bytes: &[u8]) -> Result<ParsedPacket, ParseError> {
             frame_len: bytes.len(),
         },
     })
+}
+
+/// Dispatch table for Ethernet type parsing.
+/// Replaces branching with deterministic table lookup for better CPU prediction.
+#[inline]
+fn dispatch_ether_type(
+    ether_type: EtherType,
+    payload: &[u8],
+) -> Result<(Option<Ipv4Header>, Option<TransportHeader>, usize), ParseError> {
+    match ether_type {
+        EtherType::Ipv4 => parse_ipv4(payload),
+        EtherType::Arp | EtherType::Ipv6 | EtherType::Vlan | EtherType::Other(_) => {
+            Ok((None, None, payload.len()))
+        }
+    }
 }
 
 fn parse_ipv4(
@@ -153,14 +165,25 @@ fn parse_ipv4(
     };
 
     let ip_payload = &payload[ihl..];
-    let (transport, payload_len) = match protocol {
-        IpProtocol::Tcp => parse_tcp(ip_payload)?,
-        IpProtocol::Udp => parse_udp(ip_payload)?,
-        IpProtocol::Icmp => parse_icmp(ip_payload)?,
-        _ => (Some(TransportHeader::Unsupported), ip_payload.len()),
-    };
+    // Use dispatch table for IP protocol parsing
+    let (transport, payload_len) = dispatch_ip_protocol(protocol, ip_payload)?;
 
     Ok((Some(header), transport, payload_len))
+}
+
+/// Dispatch table for IP protocol parsing.
+/// Replaces nested branching with deterministic table lookup.
+#[inline]
+fn dispatch_ip_protocol(
+    protocol: IpProtocol,
+    payload: &[u8],
+) -> Result<(Option<TransportHeader>, usize), ParseError> {
+    match protocol {
+        IpProtocol::Tcp => parse_tcp(payload),
+        IpProtocol::Udp => parse_udp(payload),
+        IpProtocol::Icmp => parse_icmp(payload),
+        _ => Ok((Some(TransportHeader::Unsupported), payload.len())),
+    }
 }
 
 fn parse_tcp(payload: &[u8]) -> Result<(Option<TransportHeader>, usize), ParseError> {
