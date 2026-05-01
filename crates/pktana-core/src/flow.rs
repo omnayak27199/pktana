@@ -70,14 +70,24 @@ impl FlowTable {
             protocol,
         };
 
-        let entry = self.records.entry(key.clone()).or_insert(FlowRecord {
-            key,
-            packets: 0,
-            bytes: 0,
-        });
-
-        entry.packets += 1;
-        entry.bytes += summary.frame_len;
+        // Use entry API to avoid double-lookup and unnecessary clone
+        use std::collections::btree_map::Entry;
+        match self.records.entry(key) {
+            Entry::Occupied(mut entry) => {
+                // Key already exists, just update stats
+                entry.get_mut().packets += 1;
+                entry.get_mut().bytes += summary.frame_len;
+            }
+            Entry::Vacant(entry) => {
+                // New flow, insert with initial stats
+                let record = FlowRecord {
+                    key: entry.key().clone(),
+                    packets: 1,
+                    bytes: summary.frame_len,
+                };
+                entry.insert(record);
+            }
+        }
     }
 
     pub fn records(&self) -> Vec<&FlowRecord> {
