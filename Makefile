@@ -136,7 +136,12 @@ _check-cargo:
 _check-rpmbuild:
 	@command -v rpmbuild >/dev/null 2>&1 || { \
 	  echo "error: rpmbuild not found"; \
-	  echo "hint:  yum install rpm-build   (el7)"; \
-	  echo "hint:  dnf install rpm-build   (el9)"; \
+	  if command -v apt >/dev/null 2>&1; then \
+	    echo "hint:  apt install rpm   (Debian/Ubuntu)"; \
+	  elif command -v dnf >/dev/null 2>&1; then \
+	    echo "hint:  dnf install rpm-build   (Fedora/RHEL 8+)"; \
+	  elif command -v yum >/dev/null 2>&1; then \
+	    echo "hint:  yum install rpm-build   (CentOS/RHEL 7)"; \
+	  fi; \
 	  exit 1; \
 	}

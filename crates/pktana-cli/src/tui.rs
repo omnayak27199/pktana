@@ -224,7 +224,7 @@ pub mod inner {
             }
         }
 
-        fn ingest_packet(&mut self, pkt: &CapturePacket) {
+        fn ingest_packet(&mut self, pkt: &CapturePacket<'_>) {
             self.total_packets += 1;
             let plen = pkt.data.len() as u64;
             self.total_bytes += plen;
@@ -248,7 +248,7 @@ pub mod inner {
                     protocol: "RAW".into(),
                     length: pkt.data.len(),
                     info: format!("{} bytes (unparseable)", pkt.data.len()),
-                    raw: pkt.data.clone(),
+                    raw: pkt.data.to_vec(),
                 };
                 self.push_packet(entry);
                 return;
@@ -281,7 +281,7 @@ pub mod inner {
                 protocol: protocol.clone(),
                 length: pkt.data.len(),
                 info,
-                raw: pkt.data.clone(),
+                raw: pkt.data.to_vec(),
             };
             self.push_packet(entry);
 
@@ -334,7 +334,7 @@ pub mod inner {
                 if conn.recent_raw.len() >= 5 {
                     conn.recent_raw.pop_front();
                 }
-                conn.recent_raw.push_back(pkt.data.clone());
+                conn.recent_raw.push_back(pkt.data.to_vec());
                 // Update live DPI fields from most recent packet
                 let dp = inspect(&pkt.data);
                 if dp.app_proto.is_some() {
@@ -361,7 +361,7 @@ pub mod inner {
                     None
                 };
                 let mut rr = VecDeque::new();
-                rr.push_back(pkt.data.clone());
+                rr.push_back(pkt.data.to_vec());
                 let dp = inspect(&pkt.data);
                 self.connections.push(Connection {
                     id: self.next_conn_id,
@@ -732,12 +732,12 @@ pub mod inner {
 
     fn proto_color(proto: &str) -> Color {
         match proto {
-            "TCP" => Color::Cyan,
+            "TCP" => Color::Rgb(100, 200, 255),
             "UDP" => Color::LightGreen,
             "ICMP" => Color::LightMagenta,
-            "DNS" | "mDNS" => Color::LightYellow,
+            "DNS" | "mDNS" => Color::Rgb(255, 165, 0),
             "HTTP" => Color::White,
-            "HTTPS" | "TLS" => Color::LightBlue,
+            "HTTPS" | "TLS" => Color::Rgb(200, 200, 255),
             "ARP" => Color::Yellow,
             "DHCP" => Color::Green,
             "NTP" => Color::Gray,
@@ -783,25 +783,6 @@ pub mod inner {
         s
     }
 
-    fn centered_rect(px: u16, py: u16, area: Rect) -> Rect {
-        let v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage((100 - py) / 2),
-                Constraint::Percentage(py),
-                Constraint::Percentage((100 - py) / 2),
-            ])
-            .split(area);
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage((100 - px) / 2),
-                Constraint::Percentage(px),
-                Constraint::Percentage((100 - px) / 2),
-            ])
-            .split(v[1])[1]
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     //  Rendering
     // ═══════════════════════════════════════════════════════════════════════════
@@ -813,9 +794,6 @@ pub mod inner {
             Tab::Flows => render_flows(f, app),
             Tab::Stats => render_stats(f, app),
             Tab::Help => render_help(f, app),
-        }
-        if app.show_detail {
-            render_detail_popup(f, app);
         }
     }
 
@@ -830,10 +808,7 @@ pub mod inner {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(&app.pcap_file);
-            format!(
-                " pktana | \u{1f4c5} PCAP: {} | {} pkts | ",
-                fname, app.total_packets
-            )
+            format!(" pktana | PCAP: {} | {} pkts | ", fname, app.total_packets)
         } else {
             format!(
                 " pktana | {} | {} | {}/s {} | ",
@@ -860,35 +835,50 @@ pub mod inner {
         for (label, tab) in &tabs {
             let style = if *tab == app.current_tab {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(Color::White)
+                    .bg(Color::Blue)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
             spans.push(Span::styled(format!(" {label} "), style));
         }
-        let widget =
-            Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::ALL));
+        let widget = Paragraph::new(Line::from(spans)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
         f.render_widget(widget, area);
     }
 
     fn render_status(f: &mut Frame, area: Rect, app: &App) {
-        let text = if app.filter_mode {
-            format!(" Filter: {}█  [Esc] clear  [Enter] apply", app.filter_text)
+        let (text, style) = if app.filter_mode {
+            (
+                format!(
+                    " Search Filter: {}█  [Esc] clear  [Enter] apply",
+                    app.filter_text
+                ),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Rgb(255, 136, 0))
+                    .add_modifier(Modifier::BOLD),
+            )
         } else if app.show_detail {
-            " [Esc]Close  [O]Overview  [L]Layers  [H]Hex  [←→]Sub-tab  [↑↓/PgUp/PgDn]Scroll".into()
+            (
+                " [Esc]Close Detail  [O]Overview  [L]Layers  [H]Hex  [←→]Sub-tabs  [PgUp/PgDn]Scroll Detail  [↑↓]Navigate Table".into(),
+                Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD)
+            )
         } else {
-            match app.current_tab {
-                Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [1-5]Tab  [q]Quit".into(),
-                Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [/]Filter  [q]Quit".into(),
-                _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [s]Sort  [q]Quit".into(),
-            }
+            (
+                match app.current_tab {
+                    Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [1-5]Tab  [q]Quit".into(),
+                    Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [/]Filter  [q]Quit".into(),
+                    _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [s]Sort  [q]Quit".into(),
+                },
+                Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD)
+            )
         };
-        f.render_widget(
-            Paragraph::new(text).style(Style::default().fg(Color::Green)),
-            area,
-        );
+        f.render_widget(Paragraph::new(text).style(style), area);
     }
 
     // ── Overview tab ──
@@ -903,10 +893,17 @@ pub mod inner {
                 Constraint::Length(1),
             ])
             .split(f.area());
+
         render_tab_bar(f, chunks[0], app);
         render_stats_row(f, chunks[1], app);
         render_flow_table(f, chunks[2], app);
         render_status(f, chunks[3], app);
+
+        if app.show_detail {
+            let popup_area = centered_rect(80, 80, f.area());
+            f.render_widget(Clear, popup_area);
+            render_flow_detail_pane(f, popup_area, app);
+        }
     }
 
     fn render_stats_row(f: &mut Frame, area: Rect, app: &App) {
@@ -929,7 +926,9 @@ pub mod inner {
         f.render_widget(Paragraph::new(format!(
             "Packets  : {}\nBytes    : {}\nRate     : {}/s  {} pkt/s\nActive   : {}  Idle: {}\nRetransmits: {}",
             app.total_packets, fmt_bytes(app.total_bytes), fmt_bytes(bps), pps, active, idle, retx
-        )).block(Block::default().title(" Traffic ").borders(Borders::ALL)), chunks[0]);
+        )).block(Block::default()
+            .title(Span::styled(" Traffic ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)))
+            .borders(Borders::ALL).border_style(Style::default().fg(Color::Rgb(255, 136, 0)))), chunks[0]);
 
         let mut protos: Vec<_> = app.protocol_counts.iter().collect();
         protos.sort_by_key(|(_, c)| std::cmp::Reverse(**c));
@@ -947,8 +946,17 @@ pub mod inner {
             .collect::<Vec<_>>()
             .join("\n");
         f.render_widget(
-            Paragraph::new(proto_text)
-                .block(Block::default().title(" Protocols ").borders(Borders::ALL)),
+            Paragraph::new(proto_text).block(
+                Block::default()
+                    .title(Span::styled(
+                        " Protocols ",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
             chunks[1],
         );
 
@@ -972,8 +980,17 @@ pub mod inner {
             .collect::<Vec<_>>()
             .join("\n");
         f.render_widget(
-            Paragraph::new(flow_text)
-                .block(Block::default().title(" Top Flows ").borders(Borders::ALL)),
+            Paragraph::new(flow_text).block(
+                Block::default()
+                    .title(Span::styled(
+                        " Top Flows ",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
             chunks[2],
         );
     }
@@ -989,8 +1006,19 @@ pub mod inner {
                 Constraint::Length(1),
             ])
             .split(f.area());
-        render_tab_bar(f, chunks[0], app);
 
+        render_tab_bar(f, chunks[0], app);
+        render_pkt_table(f, chunks[1], app);
+        render_status(f, chunks[2], app);
+
+        if app.show_detail {
+            let popup_area = centered_rect(80, 80, f.area());
+            f.render_widget(Clear, popup_area);
+            render_pkt_detail_pane(f, popup_area, app);
+        }
+    }
+
+    fn render_pkt_table(f: &mut Frame, area: Rect, app: &mut App) {
         let filtered = app.filtered_packets();
         let header = Row::new(vec![
             "No.",
@@ -1003,7 +1031,7 @@ pub mod inner {
         ])
         .style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
         let rows: Vec<Row> = filtered
@@ -1045,14 +1073,24 @@ pub mod inner {
             ],
         )
         .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .row_highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Blue)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
-        f.render_stateful_widget(table, chunks[1], &mut app.pkt_table_state);
-        render_status(f, chunks[2], app);
+        f.render_stateful_widget(table, area, &mut app.pkt_table_state);
     }
 
     // ── Flows tab ──
@@ -1066,9 +1104,16 @@ pub mod inner {
                 Constraint::Length(1),
             ])
             .split(f.area());
+
         render_tab_bar(f, chunks[0], app);
         render_flow_table(f, chunks[1], app);
         render_status(f, chunks[2], app);
+
+        if app.show_detail {
+            let popup_area = centered_rect(80, 80, f.area());
+            f.render_widget(Clear, popup_area);
+            render_flow_detail_pane(f, popup_area, app);
+        }
     }
 
     fn render_flow_table(f: &mut Frame, area: Rect, app: &mut App) {
@@ -1093,7 +1138,7 @@ pub mod inner {
         ])
         .style(
             Style::default()
-                .fg(Color::Yellow)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -1190,10 +1235,21 @@ pub mod inner {
             ],
         )
         .header(header)
-        .block(Block::default().title(title).borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(Span::styled(
+                    title,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .row_highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Blue)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         );
         f.render_stateful_widget(table, area, &mut app.flow_table_state);
@@ -1238,8 +1294,14 @@ pub mod inner {
             Paragraph::new(lines.join("\n"))
                 .block(
                     Block::default()
-                        .title(" Protocol Hierarchy ")
-                        .borders(Borders::ALL),
+                        .title(Span::styled(
+                            " Protocol Hierarchy ",
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
                 )
                 .wrap(Wrap { trim: false }),
             chunks[1],
@@ -1259,8 +1321,14 @@ pub mod inner {
             Paragraph::new(ep_lines.join("\n"))
                 .block(
                     Block::default()
-                        .title(" Top Endpoints (bytes) ")
-                        .borders(Borders::ALL),
+                        .title(Span::styled(
+                            " Top Endpoints (bytes) ",
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
                 )
                 .wrap(Wrap { trim: false }),
             chunks[2],
@@ -1310,23 +1378,44 @@ pub mod inner {
             "  LightYellow=DNS  LightBlue=TLS/HTTPS  LightRed=Anomalous flow",
         ].join("\n");
         f.render_widget(
-            Paragraph::new(text).block(Block::default().title(" Help ").borders(Borders::ALL)),
+            Paragraph::new(text).block(
+                Block::default()
+                    .title(Span::styled(
+                        " Help ",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
             f.area(),
         );
     }
 
     // ── Detail popup ──
 
-    fn render_detail_popup(f: &mut Frame, app: &App) {
-        let area = centered_rect(82, 86, f.area());
-        f.render_widget(Clear, area);
-        match app.current_tab {
-            Tab::Packets => render_pkt_detail(f, area, app),
-            _ => render_flow_detail(f, area, app),
-        }
+    fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+        let popup_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ])
+            .split(r);
+
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ])
+            .split(popup_layout[1])[1]
     }
 
-    fn render_flow_detail(f: &mut Frame, area: Rect, app: &App) {
+    fn render_flow_detail_pane(f: &mut Frame, area: Rect, app: &App) {
         let flows = app.filtered_flows();
         let Some(conn) = flows.get(app.flow_selected) else {
             return;
@@ -1336,16 +1425,17 @@ pub mod inner {
             conn.id, conn.local_ip, conn.local_port, conn.remote_ip, conn.remote_port
         );
         let outer = Block::default()
-            .title(title)
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Reset));
+        let inner = outer.inner(area);
         f.render_widget(outer, area);
-        let inner = Rect {
-            x: area.x + 1,
-            y: area.y + 1,
-            width: area.width.saturating_sub(2),
-            height: area.height.saturating_sub(2),
-        };
         let lines = match app.detail_sub {
             DetailSub::Overview => flow_overview_lines(conn),
             DetailSub::Layers => flow_layer_lines(conn),
@@ -1403,12 +1493,12 @@ pub mod inner {
 
         let mut lines = vec![
             "  ── Addressing ──────────────────────────────────────────────".into(),
-            format!("  Protocol    : {}  service: {svc}", c.protocol),
+            format!("  Protocol    : {}  (service: {svc})", c.protocol),
             format!("  State       : {}", c.state),
             format!("  Local       : {}:{}", c.local_ip, c.local_port),
             format!("  Remote      : {}:{}", c.remote_ip, c.remote_port),
             String::new(),
-            "  ── Process ──────────────────────────────────────────────────".into(),
+            "  ── Process / Host ───────────────────────────────────────────".into(),
             format!("  Process     : {proc}"),
             format!("  Cmdline     : {cmd}"),
             String::new(),
@@ -1417,17 +1507,17 @@ pub mod inner {
             String::new(),
             "  ── Traffic ──────────────────────────────────────────────────".into(),
             format!(
-                "  Sent        : {}  ({} pkts)",
+                "  Sent        : {:<10}  ({} pkts)",
                 fmt_bytes(c.bytes_sent),
                 c.packets_sent
             ),
             format!(
-                "  Received    : {}  ({} pkts)",
+                "  Received    : {:<10}  ({} pkts)",
                 fmt_bytes(c.bytes_recv),
                 c.packets_recv
             ),
             format!(
-                "  Total       : {}  ({} pkts)",
+                "  Total       : {:<10}  ({} pkts)",
                 fmt_bytes(c.bytes_sent + c.bytes_recv),
                 c.packets_sent + c.packets_recv
             ),
@@ -1436,7 +1526,7 @@ pub mod inner {
             "  ── Timing ───────────────────────────────────────────────────".into(),
             format!("  First seen  : {} ago", fmt_dur(c.first_seen.elapsed())),
             format!(
-                "  Last seen   : {} ago",
+                "  Last seen   : {} ago (Idle since)",
                 fmt_dur(now.duration_since(c.last_seen))
             ),
             format!("  Duration    : {}", fmt_dur(dur)),
@@ -1486,7 +1576,7 @@ pub mod inner {
             }
         }
         lines.push(String::new());
-        lines.push("  [Esc]Close  [L]Layers  [H]Hex  [PgUp/PgDn]Scroll".into());
+        lines.push("  [Esc]Close Detail  [L]Layers  [H]Hex  [PgUp/PgDn]Scroll Detail".into());
         lines
     }
 
@@ -1506,11 +1596,11 @@ pub mod inner {
             lines.push(format!("  {l}"));
         }
         lines.push(String::new());
-        lines.push("  [Esc]Close  [O]Overview  [L]Layers  [PgUp/PgDn]Scroll".into());
+        lines.push("  [Esc]Close Detail  [O]Overview  [L]Layers  [PgUp/PgDn]Scroll Detail".into());
         lines
     }
 
-    fn render_pkt_detail(f: &mut Frame, area: Rect, app: &App) {
+    fn render_pkt_detail_pane(f: &mut Frame, area: Rect, app: &App) {
         let pkts = app.filtered_packets();
         let Some(pkt) = pkts.get(app.pkt_selected) else {
             return;
@@ -1520,16 +1610,17 @@ pub mod inner {
             pkt.no, pkt.time_offset, pkt.src, pkt.dst, pkt.length
         );
         let outer = Block::default()
-            .title(title)
+            .title(Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::Black));
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Reset));
+        let inner = outer.inner(area);
         f.render_widget(outer, area);
-        let inner = Rect {
-            x: area.x + 1,
-            y: area.y + 1,
-            width: area.width.saturating_sub(2),
-            height: area.height.saturating_sub(2),
-        };
         let lines = match app.detail_sub {
             DetailSub::Overview => vec![
                 format!("  No.         : {}", pkt.no),
@@ -1541,7 +1632,7 @@ pub mod inner {
                 String::new(),
                 format!("  Info        : {}", pkt.info),
                 String::new(),
-                "  [L]Layers decode  [H]Hex dump  [Esc]Close".into(),
+                "  [L]Layers decode  [H]Hex dump  [Esc]Close Detail".into(),
             ],
             DetailSub::Layers => dpi_lines(&pkt.raw),
             DetailSub::Hex => {
@@ -1553,7 +1644,7 @@ pub mod inner {
                     v.push(format!("  {l}"));
                 }
                 v.push(String::new());
-                v.push("  [Esc]Close  [O]Overview  [L]Layers".into());
+                v.push("  [Esc]Close Detail  [O]Overview  [L]Layers".into());
                 v
             }
         };
@@ -1881,7 +1972,7 @@ pub mod inner {
             v.push(format!("  Category    : {cat}"));
         }
         v.push(String::new());
-        v.push("  [Esc]Close  [O]Overview  [H]Hex  [PgUp/PgDn]Scroll".into());
+        v.push("  [Esc]Close Detail  [O]Overview  [H]Hex  [PgUp/PgDn]Scroll Detail".into());
         v
     }
 
@@ -1896,7 +1987,7 @@ pub mod inner {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         let mut app = App::new(interface);
 
-        let (tx, rx) = mpsc::channel::<CapturePacket>();
+        let (tx, rx) = mpsc::channel::<CapturePacket<'static>>();
         let iface = interface.to_string();
         std::thread::spawn(move || {
             let cfg = CaptureConfig {
@@ -1908,7 +1999,7 @@ pub mod inner {
                 pcap_export: None,
             };
             let _ = LinuxCaptureEngine::capture_streaming(&cfg, |pkt| {
-                let _ = tx.send(pkt);
+                let _ = tx.send(pkt.into_owned());
                 true
             });
         });
@@ -1952,57 +2043,17 @@ pub mod inner {
                                 }
                                 _ => {}
                             }
-                        } else if app.show_detail {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.show_detail = false;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('o') | KeyCode::Char('O') => {
-                                    app.detail_sub = DetailSub::Overview;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('l') | KeyCode::Char('L') => {
-                                    app.detail_sub = DetailSub::Layers;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('h') | KeyCode::Char('H') => {
-                                    app.detail_sub = DetailSub::Hex;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Right => {
-                                    app.detail_sub = match app.detail_sub {
-                                        DetailSub::Overview => DetailSub::Layers,
-                                        DetailSub::Layers => DetailSub::Hex,
-                                        DetailSub::Hex => DetailSub::Overview,
-                                    };
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Left => {
-                                    app.detail_sub = match app.detail_sub {
-                                        DetailSub::Overview => DetailSub::Hex,
-                                        DetailSub::Layers => DetailSub::Overview,
-                                        DetailSub::Hex => DetailSub::Layers,
-                                    };
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::PageDown | KeyCode::Char('J') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_add(10);
-                                }
-                                KeyCode::PageUp | KeyCode::Char('K') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_sub(10);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_add(1);
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_sub(1);
-                                }
-                                _ => {}
-                            }
                         } else {
                             match key.code {
-                                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
+                                KeyCode::Esc => {
+                                    if app.show_detail {
+                                        app.show_detail = false;
+                                        app.popup_scroll = 0;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                KeyCode::Char('q') | KeyCode::Char('Q') => break,
                                 KeyCode::Char('/') => {
                                     app.filter_mode = true;
                                     app.filter_text.clear();
@@ -2034,12 +2085,53 @@ pub mod inner {
                                         Tab::Help => Tab::Stats,
                                     };
                                 }
-                                KeyCode::Up | KeyCode::Char('k') => app.nav_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.nav_down(),
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.nav_up();
+                                    app.popup_scroll = 0;
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.nav_down();
+                                    app.popup_scroll = 0;
+                                }
                                 KeyCode::Enter => {
                                     app.show_detail = !app.show_detail;
                                     app.detail_sub = DetailSub::Overview;
                                     app.popup_scroll = 0;
+                                }
+                                KeyCode::PageDown if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_add(5);
+                                }
+                                KeyCode::PageUp if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_sub(5);
+                                }
+                                KeyCode::Char('J') if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_add(2);
+                                }
+                                KeyCode::Char('K') if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_sub(2);
+                                }
+                                KeyCode::Right if app.show_detail => {
+                                    app.detail_sub = match app.detail_sub {
+                                        DetailSub::Overview => DetailSub::Layers,
+                                        DetailSub::Layers => DetailSub::Hex,
+                                        DetailSub::Hex => DetailSub::Overview,
+                                    }
+                                }
+                                KeyCode::Left if app.show_detail => {
+                                    app.detail_sub = match app.detail_sub {
+                                        DetailSub::Overview => DetailSub::Hex,
+                                        DetailSub::Layers => DetailSub::Overview,
+                                        DetailSub::Hex => DetailSub::Layers,
+                                    }
+                                }
+                                KeyCode::Char('o') | KeyCode::Char('O') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Overview
+                                }
+                                KeyCode::Char('l') | KeyCode::Char('L') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Layers
+                                }
+                                KeyCode::Char('h') | KeyCode::Char('H') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Hex
                                 }
                                 KeyCode::Char('s') => {
                                     app.sort_column = match app.sort_column {
@@ -2104,9 +2196,9 @@ pub mod inner {
     /// Identical controls to `run_tui()`; no live capture thread is started.
     pub fn run_tui_pcap(path: &str) -> io::Result<()> {
         // Load all packets from the file first (before opening the terminal)
-        let mut raw_packets: Vec<pktana_core::CapturePacket> = Vec::new();
+        let mut raw_packets: Vec<pktana_core::CapturePacket<'static>> = Vec::new();
         LinuxCaptureEngine::read_pcap_file(path, |pkt| {
-            raw_packets.push(pkt);
+            raw_packets.push(pkt.into_owned());
             true
         })
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -2171,57 +2263,17 @@ pub mod inner {
                                 KeyCode::Char(c) => app.filter_text.push(c),
                                 _ => {}
                             }
-                        } else if app.show_detail {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.show_detail = false;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('o') | KeyCode::Char('O') => {
-                                    app.detail_sub = DetailSub::Overview;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('l') | KeyCode::Char('L') => {
-                                    app.detail_sub = DetailSub::Layers;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Char('h') | KeyCode::Char('H') => {
-                                    app.detail_sub = DetailSub::Hex;
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Right => {
-                                    app.detail_sub = match app.detail_sub {
-                                        DetailSub::Overview => DetailSub::Layers,
-                                        DetailSub::Layers => DetailSub::Hex,
-                                        DetailSub::Hex => DetailSub::Overview,
-                                    };
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::Left => {
-                                    app.detail_sub = match app.detail_sub {
-                                        DetailSub::Overview => DetailSub::Hex,
-                                        DetailSub::Layers => DetailSub::Overview,
-                                        DetailSub::Hex => DetailSub::Layers,
-                                    };
-                                    app.popup_scroll = 0;
-                                }
-                                KeyCode::PageDown | KeyCode::Char('J') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_add(10);
-                                }
-                                KeyCode::PageUp | KeyCode::Char('K') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_sub(10);
-                                }
-                                KeyCode::Down | KeyCode::Char('j') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_add(1);
-                                }
-                                KeyCode::Up | KeyCode::Char('k') => {
-                                    app.popup_scroll = app.popup_scroll.saturating_sub(1);
-                                }
-                                _ => {}
-                            }
                         } else {
                             match key.code {
-                                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
+                                KeyCode::Esc => {
+                                    if app.show_detail {
+                                        app.show_detail = false;
+                                        app.popup_scroll = 0;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                KeyCode::Char('q') | KeyCode::Char('Q') => break,
                                 KeyCode::Char('/') => {
                                     app.filter_mode = true;
                                     app.filter_text.clear();
@@ -2253,12 +2305,53 @@ pub mod inner {
                                         Tab::Help => Tab::Stats,
                                     };
                                 }
-                                KeyCode::Up | KeyCode::Char('k') => app.nav_up(),
-                                KeyCode::Down | KeyCode::Char('j') => app.nav_down(),
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    app.nav_up();
+                                    app.popup_scroll = 0;
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    app.nav_down();
+                                    app.popup_scroll = 0;
+                                }
                                 KeyCode::Enter => {
                                     app.show_detail = !app.show_detail;
                                     app.detail_sub = DetailSub::Overview;
                                     app.popup_scroll = 0;
+                                }
+                                KeyCode::PageDown if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_add(5);
+                                }
+                                KeyCode::PageUp if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_sub(5);
+                                }
+                                KeyCode::Char('J') if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_add(2);
+                                }
+                                KeyCode::Char('K') if app.show_detail => {
+                                    app.popup_scroll = app.popup_scroll.saturating_sub(2);
+                                }
+                                KeyCode::Right if app.show_detail => {
+                                    app.detail_sub = match app.detail_sub {
+                                        DetailSub::Overview => DetailSub::Layers,
+                                        DetailSub::Layers => DetailSub::Hex,
+                                        DetailSub::Hex => DetailSub::Overview,
+                                    }
+                                }
+                                KeyCode::Left if app.show_detail => {
+                                    app.detail_sub = match app.detail_sub {
+                                        DetailSub::Overview => DetailSub::Hex,
+                                        DetailSub::Layers => DetailSub::Overview,
+                                        DetailSub::Hex => DetailSub::Layers,
+                                    }
+                                }
+                                KeyCode::Char('o') | KeyCode::Char('O') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Overview
+                                }
+                                KeyCode::Char('l') | KeyCode::Char('L') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Layers
+                                }
+                                KeyCode::Char('h') | KeyCode::Char('H') if app.show_detail => {
+                                    app.detail_sub = DetailSub::Hex
                                 }
                                 KeyCode::Char('s') => {
                                     app.sort_column = match app.sort_column {
