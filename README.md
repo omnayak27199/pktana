@@ -137,6 +137,14 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 
 ## Installation
 
+### Automatic Install (Recommended)
+
+You can use the automatic installation script which detects your OS (Ubuntu/Debian vs RHEL/Rocky) and either installs the RPM or builds from source automatically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/omnayak27199/pktana/main/install.sh | bash
+```
+
 ### RHEL / Rocky Linux / AlmaLinux / CentOS Stream 9
 
 ```bash
@@ -497,4 +505,3 @@ cargo test --all
 
 Copyright 2026 Omprakash (omnayak27199@gmail.com)  
 Licensed under the [Apache License 2.0](LICENSE).
-
