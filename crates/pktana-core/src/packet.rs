@@ -163,11 +163,13 @@ impl PacketSummary {
                     source_port,
                     destination_port,
                     flags,
+                    sequence_number,
+                    acknowledgement_number,
                     window_size,
                     ..
                 } => {
                     line.push_str(&format!(
-                        " | tcp={} -> {} | flags=0x{flags:03x} | win={window_size}",
+                        " | tcp={} -> {} | flags=0x{flags:03x} | seq={sequence_number} | ack={acknowledgement_number} | win={window_size}",
                         source_port, destination_port
                     ));
                 }

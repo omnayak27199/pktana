@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod tui;
+mod web;
 
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -59,7 +60,7 @@ impl From<std::io::Error> for CliError {
 
 fn main() {
     if let Err(err) = run() {
-        eprintln!("pktana: {err}");
+        eprintln!("\x1b[1;31mError:\x1b[0m {err}");
         std::process::exit(1);
     }
 }
@@ -134,7 +135,7 @@ fn run() -> Result<(), CliError> {
         "route" | "routes" | "nexthop" => run_routes(&args[2..]),
 
         // ── connection table (replaces ss / netstat) ──────────────────────────
-        "conn" | "connections" => run_connections(),
+        "conn" | "connections" => run_connections(&args[2..]),
 
         // ── live traffic stats dashboard (replaces iftop) ────────────────────
         "stats" => run_stats(&args[2..]),
@@ -149,6 +150,38 @@ fn run() -> Result<(), CliError> {
                 tui::inner::run_tui_pcap(arg).map_err(CliError::Io)
             } else {
                 tui::inner::run_tui(arg).map_err(CliError::Io)
+            }
+        }
+
+        // ── Web UI dashboard ──────────────────────────────────────────────────
+        "web" => {
+            let mut port = 8080;
+            let mut foreground = false;
+            for arg in args.iter().skip(2) {
+                if arg == "-f" || arg == "--foreground" || arg == "--run-server" {
+                    foreground = true;
+                } else if let Ok(p) = arg.parse::<u16>() {
+                    port = p;
+                }
+            }
+            if !foreground {
+                let exe = std::env::current_exe().map_err(CliError::Io)?;
+                let child = std::process::Command::new(exe)
+                    .arg("web")
+                    .arg(port.to_string())
+                    .arg("--run-server")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .map_err(CliError::Io)?;
+                println!(
+                    "Started pktana Web UI in background (PID: {}) on port {}",
+                    child.id(),
+                    port
+                );
+                Ok(())
+            } else {
+                web::inner::run_web_server(port).map_err(CliError::Usage)
             }
         }
 
@@ -251,16 +284,18 @@ fn dp_dst_str(dp: &pktana_core::DeepPacket) -> String {
 
 /// Build a rich Info column string from a DeepPacket (TLS SNI, HTTP method, DNS, etc.)
 fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
+    let mut app_info = String::new();
+
     // QUIC/HTTP3
     if dp.quic_detected {
         let ver = dp
             .quic_version
             .map(|v| format!(" v0x{v:08x}"))
             .unwrap_or_default();
-        return format!("QUIC/HTTP3{ver}");
+        app_info = format!("QUIC/HTTP3{ver}");
     }
     // App-proto specific enrichment
-    if let Some(proto) = &dp.app_proto {
+    else if let Some(proto) = &dp.app_proto {
         match proto.to_lowercase().as_str() {
             "tls" => {
                 let mut parts: Vec<String> = Vec::new();
@@ -280,36 +315,41 @@ fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
                     parts.push(format!("alpn=[{}]", dp.tls_alpn.join(",")));
                 }
                 let body = parts.join(" ");
-                return if body.is_empty() {
+                app_info = if body.is_empty() {
                     "TLS".to_string()
                 } else {
                     format!("TLS {body}")
                 };
             }
             "http" => {
+                let mut found = false;
                 for line in &dp.app_detail {
                     let l = line.trim();
-                    if l.starts_with("Method") {
+                    if l.starts_with("Method") || l.starts_with("Status") {
                         if let Some(v) = l.split_once(':').map(|x| x.1) {
-                            return format!("HTTP {}", v.trim());
+                            app_info = format!("HTTP {}", v.trim());
+                            found = true;
+                            break;
                         }
                     }
                 }
-                return dp
-                    .app_detail
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "HTTP".to_string());
+                if !found {
+                    app_info = dp
+                        .app_detail
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "HTTP".to_string());
+                }
             }
             "dns" => {
-                return dp
+                app_info = dp
                     .dns_query_name
                     .as_deref()
                     .map(|q| format!("DNS {q}"))
                     .unwrap_or_else(|| "DNS".to_string());
             }
             "ssh" => {
-                return dp
+                app_info = dp
                     .ssh_banner
                     .as_deref()
                     .map(|b| format!("SSH {}", &b[..b.len().min(40)]))
@@ -318,12 +358,12 @@ fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
             "sip" => {
                 let m = dp.sip_method.as_deref().unwrap_or("SIP");
                 let u = dp.sip_uri.as_deref().unwrap_or("");
-                return format!("{m} {u}").trim().to_string();
+                app_info = format!("{m} {u}").trim().to_string();
             }
             "bgp" => {
                 let msg = dp.bgp_msg_type.as_deref().unwrap_or("BGP");
                 let asn = dp.bgp_asn.map(|a| format!(" AS{a}")).unwrap_or_default();
-                return format!("BGP {msg}{asn}");
+                app_info = format!("BGP {msg}{asn}");
             }
             "ntp" => {
                 let ver = dp.ntp_version.map(|v| format!("v{v} ")).unwrap_or_default();
@@ -336,10 +376,10 @@ fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
                 } else {
                     ""
                 };
-                return format!("NTP {ver}{mode}{amp}").trim().to_string();
+                app_info = format!("NTP {ver}{mode}{amp}").trim().to_string();
             }
             _ => {
-                return dp
+                app_info = dp
                     .app_detail
                     .first()
                     .cloned()
@@ -348,27 +388,28 @@ fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
         }
     }
     // HTTP/2 without explicit app_proto
-    if dp.http2_detected {
+    else if dp.http2_detected {
         let grpc = dp
             .grpc_path
             .as_deref()
             .map(|p| format!(" gRPC={p}"))
             .unwrap_or_default();
-        return format!("HTTP/2{grpc}");
+        app_info = format!("HTTP/2{grpc}");
     }
     // SSH banner without app_proto set
-    if let Some(b) = &dp.ssh_banner {
-        return format!("SSH {}", &b[..b.len().min(40)]);
+    else if let Some(b) = &dp.ssh_banner {
+        app_info = format!("SSH {}", &b[..b.len().min(40)]);
     }
     // SIP
-    if let Some(m) = &dp.sip_method {
-        return format!("SIP {m}");
+    else if let Some(m) = &dp.sip_method {
+        app_info = format!("SIP {m}");
     }
     // BGP
-    if let Some(msg) = &dp.bgp_msg_type {
-        return format!("BGP {msg}");
+    else if let Some(msg) = &dp.bgp_msg_type {
+        app_info = format!("BGP {msg}");
     }
-    // TCP flags + optional service hint
+
+    let mut l4_info = String::new();
     if let Some(flags) = &dp.tcp_flags_str {
         let svc = dp
             .tcp_dst_port
@@ -381,16 +422,46 @@ fn dp_info_str(dp: &pktana_core::DeepPacket) -> String {
                 }
             })
             .unwrap_or_default();
-        return format!("{flags}{svc}");
-    }
-    // UDP service
-    if let Some(p) = dp.udp_dst_port.or(dp.udp_src_port) {
+        let seq = dp.tcp_seq.map(|s| format!(" seq {s}")).unwrap_or_default();
+        let ack = dp
+            .tcp_ack
+            .map(|a| {
+                if a > 0 || flags.contains("ACK") {
+                    format!(" ack {a}")
+                } else {
+                    String::new()
+                }
+            })
+            .unwrap_or_default();
+        let win = dp
+            .tcp_window
+            .map(|w| format!(" win {w}"))
+            .unwrap_or_default();
+        let len = format!(" len {}", dp.tcp_payload_len);
+        l4_info = format!("{flags}{svc}{seq}{ack}{win}{len}");
+    } else if let Some(p) = dp.udp_dst_port.or(dp.udp_src_port) {
         let s = port_service_name(p);
-        if s != "?" {
-            return s.to_string();
-        }
+        let svc = if s != "?" {
+            format!("[{s}] ")
+        } else {
+            String::new()
+        };
+        l4_info = format!("{svc}UDP len {}", dp.udp_payload_len);
+    } else if let Some(t) = dp.icmp_type {
+        let c = dp
+            .icmp_code
+            .map(|code| format!(" code {code}"))
+            .unwrap_or_default();
+        l4_info = format!("ICMP type {t}{c}");
     }
-    String::new()
+
+    if !app_info.is_empty() && !l4_info.is_empty() {
+        format!("{app_info}  |  {l4_info}")
+    } else if !app_info.is_empty() {
+        app_info
+    } else {
+        l4_info
+    }
 }
 
 /// Returns true when the path looks like a PCAP/PCAPNG/CAP file.
@@ -439,10 +510,10 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     let sep = "─".repeat(118);
     println!(
-        "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info",
+        "\x1b[1;36m{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info\x1b[0m",
         "No.", "Time", "Bytes", "Proto", "Source", "Destination"
     );
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     let _ = std::io::stdout().flush();
 
     let config = CaptureConfig {
@@ -515,7 +586,7 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         true
     })?;
 
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     println!(
         "{} packets captured  |  {} total",
         stats.packets_seen,
@@ -598,10 +669,10 @@ fn run_record(args: &[String]) -> Result<(), CliError> {
 
     let sep = "─".repeat(118);
     println!(
-        "{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info",
+        "\x1b[1;36m{:>5}  {:<17}  {:>7}  {:<5}  {:<26}  {:<26}  Info\x1b[0m",
         "No.", "Time", "Bytes", "Proto", "Source", "Destination"
     );
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     let _ = std::io::stdout().flush();
 
     let config = CaptureConfig {
@@ -649,7 +720,7 @@ fn run_record(args: &[String]) -> Result<(), CliError> {
         true
     })?;
 
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     println!(
         "{} packets captured  |  {}  |  saved → {out_path}",
         stats.packets_seen,
@@ -687,10 +758,10 @@ fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
 
     let sep = "─".repeat(130);
     println!(
-        "{:>5}  {:<22}  {:>7}  {:<7}  {:<26}  {:<26}  Info",
+        "\x1b[1;36m{:>5}  {:<22}  {:>7}  {:<7}  {:<26}  {:<26}  Info\x1b[0m",
         "No.", "Timestamp", "Bytes", "Proto", "Source", "Destination"
     );
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     let _ = std::io::stdout().flush();
 
     let mut pkt_num: usize = 0;
@@ -763,7 +834,7 @@ fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
         true
     })?;
 
-    println!("{sep}");
+    println!("\x1b[1;36m{sep}\x1b[0m");
     println!(
         "{} packets read  |  {} total  |  file: {}",
         stats.packets_seen,
@@ -833,15 +904,46 @@ fn print_capture_interfaces() -> Result<(), CliError> {
 // ─── nic info / stats ─────────────────────────────────────────────────────────
 
 fn run_nic(args: &[String]) -> Result<(), CliError> {
-    match args.first().map(|s| s.as_str()) {
+    let json = args.iter().any(|a| a == "--json" || a == "-j");
+    let target = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str());
+
+    match target {
         // pktana nic  or  pktana nic list
         None | Some("list") => {
             let nics = list_nics()?;
+            if json {
+                let mut out = String::from("[\n");
+                for (i, nic) in nics.iter().enumerate() {
+                    let state = if nic.is_up() { "UP" } else { "DOWN" };
+                    let ips = nic
+                        .ip_addresses
+                        .iter()
+                        .map(|ip| format!("\"{}\"", ip))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    out.push_str(&format!(
+                        r#"  {{"name":"{}","state":"{}","mac":"{}","mtu":{},"speed_mbps":{},"ips":[{}]}}"#,
+                        nic.name, state, nic.mac, nic.mtu, nic.speed_mbps.unwrap_or(0), ips
+                    ));
+                    if i < nics.len() - 1 {
+                        out.push_str(",\n");
+                    } else {
+                        out.push('\n');
+                    }
+                }
+                out.push(']');
+                println!("{out}");
+                return Ok(());
+            }
+
             println!(
-                "{:<16}  {:<5}  {:<19}  {:<6}  {:<8}  IP Addresses",
+                "\x1b[1;36m{:<16}  {:<5}  {:<19}  {:<6}  {:<8}  IP Addresses\x1b[0m",
                 "Interface", "State", "MAC", "MTU", "Speed"
             );
-            println!("{}", "─".repeat(90));
+            println!("\x1b[1;36m{}\x1b[0m", "─".repeat(90));
             for nic in &nics {
                 let state = if nic.is_up() { "UP" } else { "down" };
                 let speed = nic.speed_label();
@@ -860,6 +962,33 @@ fn run_nic(args: &[String]) -> Result<(), CliError> {
         // pktana nic <interface>
         Some(name) => {
             let nic = get_nic_info(name)?;
+
+            if json {
+                let state = if nic.is_up() { "UP" } else { "DOWN" };
+                let ips = nic
+                    .ip_addresses
+                    .iter()
+                    .map(|ip| format!("\"{}\"", ip))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let out = format!(
+                    r#"{{"name":"{}","state":"{}","mac":"{}","mtu":{},"speed_mbps":{},"duplex":"{}","driver":"{}","promisc":{},"ips":[{}],"rx_bytes":{},"tx_bytes":{}}}"#,
+                    nic.name,
+                    state,
+                    nic.mac,
+                    nic.mtu,
+                    nic.speed_mbps.unwrap_or(0),
+                    nic.duplex.as_deref().unwrap_or("unknown"),
+                    nic.driver.as_deref().unwrap_or("unknown"),
+                    nic.is_promisc(),
+                    ips,
+                    nic.rx_bytes,
+                    nic.tx_bytes
+                );
+                println!("{out}");
+                return Ok(());
+            }
+
             println!("Interface : {}", nic.name);
             println!("State     : {}", if nic.is_up() { "UP" } else { "down" });
             println!("MAC       : {}", nic.mac);
@@ -1602,84 +1731,89 @@ fn trunc(s: &str, max: usize) -> String {
 // ─── usage ────────────────────────────────────────────────────────────────────
 
 fn print_usage() {
-    const B: &str = "\x1b[1m"; // bold
     const C: &str = "\x1b[1;36m"; // cyan heading
-    const Y: &str = "\x1b[33m"; // yellow command
+    const Y: &str = "\x1b[1;33m"; // yellow command
+    const G: &str = "\x1b[1;32m"; // green
+    const DIM: &str = "\x1b[2m"; // dim
     const R: &str = "\x1b[0m"; // reset
 
-    println!("{B}pktana{R}  —  Linux packet analyser & network inspector");
-    println!("        replaces: tcpdump  ethtool  ss  netstat  ip route  ip link  iftop");
+    println!(
+        "{C}⚡ pktana{R} {DIM}v{v}{R} — Linux packet analyser & network inspector",
+        v = env!("CARGO_PKG_VERSION")
+    );
+    println!("   {DIM}replaces: tcpdump, ethtool, ss, netstat, ip route, ip link, iftop{R}");
     println!();
-    println!("  {Y}pktana help <COMMAND>{R}   — show detailed documentation for any command");
+    println!("  {DIM}Run{R} {Y}pktana help <COMMAND>{R} {DIM}for detailed documentation.{R}");
     println!();
 
-    println!("{C}PACKET CAPTURE  (requires root or CAP_NET_RAW){R}");
-    println!("  {Y}pktana <IFACE>{R}                 live capture, unlimited  (Ctrl+C to stop)");
-    println!("  {Y}pktana <IFACE> <N>{R}             capture exactly N packets then exit");
-    println!("  {Y}pktana <IFACE> <BPF>{R}           unlimited capture with BPF filter");
-    println!("  {Y}pktana <IFACE> <N> <BPF>{R}       N packets matching BPF filter");
-    println!("  {Y}pktana capture <IFACE> ...{R}      same as above (explicit subcommand)");
-    println!("  {Y}pktana record <IFACE> <OUT.pcap>{R}  live capture + save to pcap file");
-    println!("  {Y}pktana interfaces{R}               list all pcap-capable interfaces");
+    println!("{C}PACKET CAPTURE{R} {DIM}(requires root or CAP_NET_RAW){R}");
+    println!(
+        "  {G}pktana{R} {Y}<IFACE>{R}                 Live capture, unlimited (Ctrl+C to stop)"
+    );
+    println!("  {G}pktana{R} {Y}<IFACE> <N>{R}             Capture exactly N packets then exit");
+    println!("  {G}pktana{R} {Y}<IFACE> <BPF>{R}           Unlimited capture with BPF filter");
+    println!("  {G}pktana capture{R} {Y}<IFACE> ...{R}      Same as above (explicit subcommand)");
+    println!("  {G}pktana record{R} {Y}<IFACE> <OUT>{R}    Live capture + save to .pcap file");
+    println!("  {G}pktana interfaces{R}               List all pcap-capable interfaces");
     println!();
 
     println!("{C}PCAP FILE ANALYSIS{R}");
-    println!("  {Y}pktana pcap <FILE.pcap>{R}         parse & DPI-analyse every packet in file");
-    println!("  {Y}pktana <FILE.pcap>{R}              shorthand — auto-detected by extension");
-    println!("  {Y}pktana tui <FILE.pcap>{R}          open pcap file in TUI (offline mode)");
+    println!(
+        "  {G}pktana pcap{R} {Y}<FILE.pcap>{R}         Parse & DPI-analyse every packet in file"
+    );
+    println!(
+        "  {G}pktana{R} {Y}<FILE.pcap>{R}              Shorthand — auto-detected by extension"
+    );
     println!();
 
-    println!("{C}DEEP PACKET INSPECTION  (offline / no capture needed){R}");
-    println!("  {Y}pktana inspect <HEX>{R}            full layer-by-layer decode + auto-diagnosis");
-    println!("  {Y}pktana inspect -f <FILE>{R}        inspect first hex packet from file");
-    println!("  {Y}pktana hex <HEX>{R}                quick field table (shorter than inspect)");
+    println!("{C}DEEP PACKET INSPECTION{R} {DIM}(offline){R}");
     println!(
-        "  {Y}pktana file <FILE>{R}              decode all hex packets in file (one per line)"
+        "  {G}pktana inspect{R} {Y}<HEX>{R}            Full layer-by-layer decode + auto-diagnosis"
     );
-    println!("  {Y}pktana demo{R}                     decode built-in sample packets");
+    println!("  {G}pktana inspect{R} {Y}-f <FILE>{R}        Inspect first hex packet from file");
+    println!("  {G}pktana hex{R} {Y}<HEX>{R}                Quick field table summary");
+    println!(
+        "  {G}pktana file{R} {Y}<FILE>{R}              Batch decode hex packets (one per line)"
+    );
+    println!("  {G}pktana demo{R}                     Decode built-in sample packets");
     println!();
 
-    println!("{C}INTERFACE & NIC INFO  (reads sysfs/procfs — no external tools){R}");
-    println!("  {Y}pktana nic{R}                      list all NICs: state / MAC / IP / speed");
-    println!("  {Y}pktana nic <IFACE>{R}              full NIC detail + RX/TX counters");
-    println!(
-        "  {Y}pktana ethtool <IFACE>{R}          driver · link · offloads · queues · IRQ affinity"
-    );
-    println!("  {Y}pktana dp <IFACE>{R}               dataplane: XDP · AF_XDP · DPDK · SR-IOV · offloads");
-    println!("  {Y}pktana route{R}                    full routing table (IPv4 + IPv6)");
-    println!("  {Y}pktana route <IFACE>{R}            routes and nexthops for one interface");
+    println!("{C}INTERFACE & NIC INFO{R} {DIM}(sysfs/procfs){R}");
+    println!("  {G}pktana nic{R} {Y}[--json] [IFACE]{R}     List all NICs or detail for one");
+    println!("  {G}pktana ethtool{R} {Y}<IFACE>{R}          Driver, link, offloads, queues, IRQ affinity");
+    println!("  {G}pktana dp{R} {Y}<IFACE>{R}               Dataplane: XDP, AF_XDP, DPDK, SR-IOV");
+    println!("  {G}pktana route{R} {Y}[--json] [IFACE]{R}   Full routing table (IPv4 + IPv6)");
     println!();
 
     println!("{C}LIVE NETWORK MONITORING{R}");
-    println!("  {Y}pktana conn{R}                     TCP/UDP connections + PID  (replaces ss / netstat)");
-    println!("  {Y}pktana stats <IFACE>{R}            live dashboard: PPS · BPS · proto breakdown · top talkers");
-    println!("  {Y}pktana watch <IFACE> [SECS]{R}     auto-refresh NIC counters every N seconds  (default 2)");
-    println!("  {Y}pktana tui <IFACE>{R}              terminal UI dashboard — realtime packets & bandwidth & GeoIP");
+    println!("  {G}pktana conn{R} {Y}[--json]{R}             TCP/UDP connections + PID + GeoIP");
+    println!("  {G}pktana stats{R} {Y}<IFACE>{R}            Live dashboard: PPS, BPS, top talkers");
+    println!(
+        "  {G}pktana watch{R} {Y}<IFACE> [SECS]{R}     Auto-refresh NIC counters (default: 2s)"
+    );
+    println!("  {G}pktana tui{R} {Y}<IFACE | PCAP>{R}       Terminal UI dashboard — realtime packets & flows");
+    println!("  {G}pktana web{R} {Y}[PORT] [-f]{R}         Web UI dashboard (starts in background, -f for foreground)");
     println!();
 
     println!("{C}GEOLOCATION{R}");
     println!(
-        "  {Y}pktana geoip <IP> [IP2] ...{R}      IP-to-country lookup (no API calls, offline)"
+        "  {G}pktana geoip{R} {Y}<IP> ...{R}           IP-to-country lookup (offline, no API)"
     );
-    println!("  {Y}pktana geo <IP> [IP2] ...{R}       alias for geoip");
     println!();
 
     println!("{C}QUICK EXAMPLES{R}");
-    println!("  pktana eth0                               # capture everything on eth0");
-    println!("  pktana eth0 100 'tcp port 443'            # 100 HTTPS packets");
-    println!("  pktana eth0 'host 10.0.0.1'              # traffic to/from one host");
-    println!("  pktana record eth0 capture.pcap           # save live traffic to file");
-    println!("  pktana pcap capture.pcap                  # analyse saved pcap file");
-    println!("  pktana tui capture.pcap                   # browse pcap file in TUI");
-    println!("  pktana nic eth0                           # NIC status + counters");
-    println!("  pktana ethtool eth0                       # driver + offloads + queues");
-    println!("  pktana dp eth0                            # XDP/DPDK/SR-IOV detection");
-    println!("  pktana inspect <hex>                      # decode raw packet bytes");
-    println!("  pktana stats eth0                         # live traffic dashboard");
-    println!("  pktana conn                               # active connections");
-    println!("  pktana route                              # routing table");
-    println!();
-    println!("  Run {Y}pktana help <command>{R} for detailed usage of any command.");
+    println!("  {DIM}${R} pktana eth0                               {DIM}# capture everything on eth0{R}");
+    println!("  {DIM}${R} pktana eth0 100 'tcp port 443'            {DIM}# 100 HTTPS packets{R}");
+    println!(
+        "  {DIM}${R} pktana record eth0 capture.pcap           {DIM}# save live traffic to file{R}"
+    );
+    println!(
+        "  {DIM}${R} pktana tui capture.pcap                   {DIM}# browse pcap file in TUI{R}"
+    );
+    println!("  {DIM}${R} pktana ethtool eth0                       {DIM}# driver + offloads + queues{R}");
+    println!(
+        "  {DIM}${R} pktana dp eth0                            {DIM}# XDP/DPDK/SR-IOV detection{R}"
+    );
 }
 
 // ─── Per-command documentation ────────────────────────────────────────────────
@@ -1687,7 +1821,7 @@ fn print_usage() {
 fn print_doc(cmd: &str) -> Result<(), CliError> {
     const B: &str = "\x1b[1m";
     const C: &str = "\x1b[1;36m";
-    const Y: &str = "\x1b[33m";
+    const Y: &str = "\x1b[1;33m";
     const DIM: &str = "\x1b[2m";
     const R: &str = "\x1b[0m";
 
@@ -1948,8 +2082,8 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
             println!();
             println!("{B}SYNOPSIS{R}");
-            println!("  {Y}pktana route{R}");
-            println!("  {Y}pktana route <IFACE>{R}");
+            println!("  {Y}pktana route [--json]{R}");
+            println!("  {Y}pktana route [--json] <IFACE>{R}");
             println!();
             println!("{B}DESCRIPTION{R}");
             println!("  Reads the kernel routing table directly from /proc/net/route (IPv4)");
@@ -1980,7 +2114,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
             println!();
             println!("{B}SYNOPSIS{R}");
-            println!("  {Y}pktana conn{R}");
+            println!("  {Y}pktana conn [--json]{R}");
             println!();
             println!("{B}DESCRIPTION{R}");
             println!("  Lists all active TCP and UDP sockets by reading:");
@@ -2176,6 +2310,29 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
         }
 
+        // ── web ───────────────────────────────────────────────────────────────
+        "web" => {
+            println!("{bar}");
+            println!("{B}  pktana web{R}  —  Web UI dashboard");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana web{R}                   start on default port 8080");
+            println!("  {Y}pktana web <PORT>{R}            start on custom port");
+            println!("  {Y}pktana web <PORT> -f{R}         start in foreground");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Starts a local HTTP server providing a rich Web UI. Includes live");
+            println!("  packet inspection, active connections, routing tables, and NIC details.");
+            println!();
+            println!("{B}REQUIRES{R}");
+            println!("  • root or CAP_NET_RAW capability for live packet inspection");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana web                   # listen on http://0.0.0.0:8080");
+            println!("{bar}");
+        }
+
         // ── record ────────────────────────────────────────────────────────────
         "record" | "rec" => {
             println!("{bar}");
@@ -2303,7 +2460,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             eprintln!();
             eprintln!("Available topics:");
             eprintln!(
-                "  capture  record  pcap  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  geoip"
+                "  capture  record  pcap  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  web  geoip"
             );
             return Err(CliError::Usage(format!("unknown help topic '{other}'")));
         }
@@ -2649,32 +2806,64 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
 // ─── routing table / nexthop ──────────────────────────────────────────────────
 
 fn run_routes(args: &[String]) -> Result<(), CliError> {
-    let routes = match args.first() {
+    let json = args.iter().any(|a| a == "--json" || a == "-j");
+    let target = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str());
+
+    let routes = match target {
         Some(iface) => {
             let r = routes_for_iface(iface);
             if r.is_empty() {
-                println!("No routes found for interface '{iface}'.");
+                if !json {
+                    println!("No routes found for interface '{iface}'.");
+                }
                 return Ok(());
             }
-            println!("Routes for {iface}:\n");
             r
         }
         None => {
             let r = list_routes();
             if r.is_empty() {
-                println!("No routes found.");
+                if !json {
+                    println!("No routes found.");
+                }
                 return Ok(());
             }
-            println!("Routing Table (IPv4 + IPv6):\n");
             r
         }
     };
 
+    if json {
+        let mut out = String::from("[\n");
+        for (i, r) in routes.iter().enumerate() {
+            out.push_str(&format!(
+                r#"  {{"interface":"{}","destination":"{}","prefix_len":{},"gateway":"{}","metric":{},"is_default":{}}}"#,
+                r.interface, r.destination, r.prefix_len, r.gateway, r.metric, r.is_default
+            ));
+            if i < routes.len() - 1 {
+                out.push_str(",\n");
+            } else {
+                out.push('\n');
+            }
+        }
+        out.push(']');
+        println!("{out}");
+        return Ok(());
+    }
+
+    if let Some(t) = target {
+        println!("Routes for {}:\n", t);
+    } else {
+        println!("Routing Table (IPv4 + IPv6):\n");
+    }
+
     println!(
-        "{:<16}  {:<24}  {:<8}  {:<26}  {:<8}  Type",
+        "\x1b[1;36m{:<16}  {:<24}  {:<8}  {:<26}  {:<8}  Type\x1b[0m",
         "Interface", "Destination", "Prefix", "Gateway / Nexthop", "Metric"
     );
-    println!("{}", "─".repeat(100));
+    println!("\x1b[1;36m{}\x1b[0m", "─".repeat(100));
 
     for r in &routes {
         let dest_cidr = format!("{}/{}", r.destination, r.prefix_len);
@@ -2705,20 +2894,48 @@ fn run_routes(args: &[String]) -> Result<(), CliError> {
 
 // ─── connection table ─────────────────────────────────────────────────────────
 
-fn run_connections() -> Result<(), CliError> {
+fn run_connections(args: &[String]) -> Result<(), CliError> {
     use pktana_core::geoip_lookup_str;
 
+    let json = args.iter().any(|a| a == "--json" || a == "-j");
     let conns = list_connections();
     if conns.is_empty() {
-        println!("No connections found (run as root to see all processes).");
+        if !json {
+            println!("No connections found (run as root to see all processes).");
+        }
         return Ok(());
     }
+
+    if json {
+        let mut out = String::from("[\n");
+        for (i, c) in conns.iter().enumerate() {
+            let proc = c
+                .process
+                .as_deref()
+                .unwrap_or("")
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"");
+            out.push_str(&format!(
+                r#"  {{"proto":"{}","local_ip":"{}","local_port":{},"remote_ip":"{}","remote_port":{},"state":"{}","pid":{},"process":"{}"}}"#,
+                c.proto, c.local_ip, c.local_port, c.remote_ip, c.remote_port, c.state, c.pid.unwrap_or(0), proc
+            ));
+            if i < conns.len() - 1 {
+                out.push_str(",\n");
+            } else {
+                out.push('\n');
+            }
+        }
+        out.push(']');
+        println!("{out}");
+        return Ok(());
+    }
+
     println!("Active Connections ({})\n", conns.len());
     println!(
-        "{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {:<22}  Service / Country",
+        "\x1b[1;36m{:<5}  {:<28}  {:<28}  {:<13}  {:<6}  {:<22}  Service / Country\x1b[0m",
         "Proto", "Local Address", "Remote Address", "State", "PID", "Process"
     );
-    println!("{}", "─".repeat(130));
+    println!("\x1b[1;36m{}\x1b[0m", "─".repeat(130));
     for c in &conns {
         let local = format!("{}:{}", c.local_ip, c.local_port);
         let remote = if c.remote_port == 0 {
@@ -2850,40 +3067,40 @@ impl LiveStats {
         let bps = self.win_bytes as f64 / secs;
         let total_sec = self.start.elapsed().as_secs();
 
-        // clear screen, start at top
-        print!("\x1b[H\x1b[J");
+        // Move cursor to top instead of full clear to prevent flicker
+        print!("\x1b[H");
 
         println!(
-            "pktana LIVE STATS — {}   [elapsed {:02}h {:02}m {:02}s]  Ctrl+C to stop",
+            "\x1b[1;36mpktana LIVE STATS — {}   [elapsed {:02}h {:02}m {:02}s]  Ctrl+C to stop\x1b[0m\x1b[K",
             self.interface,
             total_sec / 3600,
             (total_sec % 3600) / 60,
             total_sec % 60,
         );
-        println!("{}", "═".repeat(72));
-        println!();
+        println!("\x1b[1;36m{}\x1b[0m\x1b[K", "═".repeat(72));
+        println!("\x1b[K");
         println!(
-            "  Rate (last {}s)  :  {:>8.0} pkt/s   {}/s",
+            "  Rate (last {}s)  :  {:>8.0} pkt/s   {}/s\x1b[K",
             elapsed.as_secs().max(1),
             pps,
             format_bytes(bps as u64)
         );
         println!(
-            "  Total           :  {:>8} pkts    {}",
+            "  Total           :  {:>8} pkts    {}\x1b[K",
             self.total_pkts,
             format_bytes(self.total_bytes)
         );
-        println!();
+        println!("\x1b[K");
 
         // Protocol breakdown
-        println!("  Protocol Breakdown:");
+        println!("  Protocol Breakdown:\x1b[K");
         let total = self.total_pkts.max(1);
         let mut protos: Vec<(&String, &(u64, u64))> = self.proto.iter().collect();
         protos.sort_by_key(|b| Reverse(b.1 .0));
         for (name, (pkts, bytes)) in protos.iter().take(6) {
             let pct = *pkts as f64 / total as f64 * 100.0;
             println!(
-                "    {:6}  {}  {:5.1}%  {:>8} pkts  {}",
+                "    {:6}  {}  {:5.1}%  {:>8} pkts  {}\x1b[K",
                 name,
                 ascii_bar(pct, 28),
                 pct,
@@ -2891,10 +3108,10 @@ impl LiveStats {
                 format_bytes(*bytes)
             );
         }
-        println!();
+        println!("\x1b[K");
 
         // Top talkers
-        println!("  Top Talkers (by packets):");
+        println!("  Top Talkers (by packets):\x1b[K");
         let mut talkers: Vec<(&String, &(u64, u64))> = self.talkers.iter().collect();
         talkers.sort_by_key(|b| Reverse(b.1 .0));
         for (i, (ip, (pkts, bytes))) in talkers.iter().take(10).enumerate() {
@@ -2903,7 +3120,7 @@ impl LiveStats {
                 .map(|g| format!("{}  {}", g.country_code, g.country_name))
                 .unwrap_or_else(|| "Private/LAN".to_string());
             println!(
-                "    {:>2}.  {:<26}  {:>8} pkts   {:<12}  {}",
+                "    {:>2}.  {:<26}  {:>8} pkts   {:<12}  {}\x1b[K",
                 i + 1,
                 ip,
                 pkts,
@@ -2912,6 +3129,8 @@ impl LiveStats {
             );
         }
 
+        // Clear any remaining lines below the render area
+        print!("\x1b[J");
         let _ = std::io::stdout().flush();
 
         // reset window counters
@@ -2984,12 +3203,15 @@ fn run_watch(args: &[String]) -> Result<(), CliError> {
     }
     let name = &args[0];
     let interval = args.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(2);
+
+    print!("\x1b[2J"); // clear full screen once at start
     loop {
-        print!("\x1b[H\x1b[J");
+        print!("\x1b[H"); // move cursor to top-left
         match get_nic_info(name) {
             Ok(nic) => print_nic_watch(&nic, interval),
             Err(e) => println!("Error reading {name}: {e}"),
         }
+        print!("\x1b[J"); // clear anything below our new render
         let _ = std::io::stdout().flush();
         thread::sleep(Duration::from_secs(interval));
     }
@@ -2997,31 +3219,34 @@ fn run_watch(args: &[String]) -> Result<(), CliError> {
 
 fn print_nic_watch(nic: &NicInfo, interval: u64) {
     println!(
-        "pktana watch — {}   (every {}s, Ctrl+C to stop)",
+        "pktana watch — {}   (every {}s, Ctrl+C to stop)\x1b[K",
         nic.name, interval
     );
-    println!("{}", "─".repeat(52));
-    println!();
-    println!("  Interface : {}", nic.name);
-    println!("  State     : {}", if nic.is_up() { "UP" } else { "down" });
-    println!("  MAC       : {}", nic.mac);
-    println!("  MTU       : {}", nic.mtu);
+    println!("{}\x1b[K", "─".repeat(52));
+    println!("\x1b[K");
+    println!("  Interface : {}\x1b[K", nic.name);
     println!(
-        "  Speed     : {} / {}",
+        "  State     : {}\x1b[K",
+        if nic.is_up() { "UP" } else { "down" }
+    );
+    println!("  MAC       : {}\x1b[K", nic.mac);
+    println!("  MTU       : {}\x1b[K", nic.mtu);
+    println!(
+        "  Speed     : {} / {}\x1b[K",
         nic.speed_label(),
         nic.duplex.as_deref().unwrap_or("?")
     );
     if !nic.ip_addresses.is_empty() {
-        println!("  Addresses : {}", nic.ip_addresses.join(", "));
+        println!("  Addresses : {}\x1b[K", nic.ip_addresses.join(", "));
     }
-    println!();
+    println!("\x1b[K");
     println!(
-        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "\x1b[1;36m  {:4}  {:>12}  {:>12}  {:>10}  {:>10}\x1b[0m\x1b[K",
         "", "Packets", "Bytes", "Errors", "Dropped"
     );
-    println!("  {}", "─".repeat(55));
+    println!("\x1b[1;36m  {}\x1b[0m\x1b[K", "─".repeat(55));
     println!(
-        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}\x1b[K",
         "RX",
         nic.rx_packets,
         format_bytes(nic.rx_bytes),
@@ -3029,7 +3254,7 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
         nic.rx_dropped
     );
     println!(
-        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "  {:4}  {:>12}  {:>12}  {:>10}  {:>10}\x1b[K",
         "TX",
         nic.tx_packets,
         format_bytes(nic.tx_bytes),
@@ -3043,16 +3268,47 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
 fn run_geoip(args: &[String]) -> Result<(), CliError> {
     use pktana_core::geoip_lookup_str;
 
-    if args.is_empty() {
+    let json = args.iter().any(|a| a == "--json" || a == "-j");
+    let ips: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+
+    if ips.is_empty() {
         return Err(CliError::Usage(
             "usage: pktana geoip <IP> [IP2] [IP3] ...".into(),
         ));
     }
 
-    println!("{:<18}  {:<4}  {:<9}  Country", "IP", "CC", "Continent");
-    println!("{}", "─".repeat(55));
+    if json {
+        let mut out = String::from("[\n");
+        for (i, ip) in ips.iter().enumerate() {
+            if let Some(geo) = geoip_lookup_str(ip) {
+                out.push_str(&format!(
+                    r#"  {{"ip":"{}","country_code":"{}","continent":"{}","country_name":"{}"}}"#,
+                    ip, geo.country_code, geo.continent, geo.country_name
+                ));
+            } else {
+                out.push_str(&format!(
+                    r#"  {{"ip":"{}","country_code":null,"continent":null,"country_name":null}}"#,
+                    ip
+                ));
+            }
+            if i < ips.len() - 1 {
+                out.push_str(",\n");
+            } else {
+                out.push('\n');
+            }
+        }
+        out.push(']');
+        println!("{out}");
+        return Ok(());
+    }
 
-    for ip in args {
+    println!(
+        "\x1b[1;36m{:<18}  {:<4}  {:<9}  Country\x1b[0m",
+        "IP", "CC", "Continent"
+    );
+    println!("\x1b[1;36m{}\x1b[0m", "─".repeat(55));
+
+    for ip in ips {
         match geoip_lookup_str(ip) {
             Some(geo) => println!(
                 "{:<18}  {:<4}  {:<9}  {}",

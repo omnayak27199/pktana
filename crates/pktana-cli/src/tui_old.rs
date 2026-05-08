@@ -92,7 +92,7 @@ pub mod inner {
             }
         }
 
-        fn ingest(&mut self, pkt: &CapturePacket) {
+        fn ingest(&mut self, pkt: &CapturePacket<'_>) {
             use pktana_core::analyze_bytes;
             self.total_pkts += 1;
             self.total_bytes += pkt.data.len() as u64;
@@ -464,7 +464,7 @@ pub mod inner {
 
         // Spawn capture thread
         let iface = interface.to_string();
-        let (tx, rx) = std::sync::mpsc::channel::<CapturePacket>();
+        let (tx, rx) = std::sync::mpsc::channel::<CapturePacket<'static>>();
 
         std::thread::spawn(move || {
             let config = CaptureConfig {
@@ -475,7 +475,7 @@ pub mod inner {
              max_packets: usize::MAX,
             };
             let _result = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
-                let _ = tx.send(pkt);
+                let _ = tx.send(pkt.into_owned());
                 true
             });
         });

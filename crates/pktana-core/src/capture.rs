@@ -1,6 +1,7 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,10 +36,20 @@ pub struct InterfaceSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CapturePacket {
+pub struct CapturePacket<'a> {
     pub timestamp_sec: i64,
     pub timestamp_usec: i64,
-    pub data: Vec<u8>,
+    pub data: Cow<'a, [u8]>,
+}
+
+impl<'a> CapturePacket<'a> {
+    pub fn into_owned(self) -> CapturePacket<'static> {
+        CapturePacket {
+            timestamp_sec: self.timestamp_sec,
+            timestamp_usec: self.timestamp_usec,
+            data: Cow::Owned(self.data.into_owned()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +88,7 @@ impl LinuxCaptureEngine {
 
     pub fn capture(
         config: &CaptureConfig,
-    ) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+    ) -> Result<(Vec<CapturePacket<'static>>, CaptureStats), CaptureError> {
         capture_impl(config)
     }
 
@@ -88,7 +99,7 @@ impl LinuxCaptureEngine {
         on_packet: F,
     ) -> Result<CaptureStats, CaptureError>
     where
-        F: FnMut(CapturePacket) -> bool,
+        F: FnMut(CapturePacket<'_>) -> bool,
     {
         capture_streaming_impl(config, on_packet)
     }
@@ -98,7 +109,7 @@ impl LinuxCaptureEngine {
     /// Requires the `pcap` feature.
     pub fn read_pcap_file<F>(path: &str, on_packet: F) -> Result<CaptureStats, CaptureError>
     where
-        F: FnMut(CapturePacket) -> bool,
+        F: FnMut(CapturePacket<'_>) -> bool,
     {
         read_pcap_file_impl(path, on_packet)
     }
@@ -138,7 +149,7 @@ fn capture_streaming_impl<F>(
     mut on_packet: F,
 ) -> Result<CaptureStats, CaptureError>
 where
-    F: FnMut(CapturePacket) -> bool,
+    F: FnMut(CapturePacket<'_>) -> bool,
 {
     let inactive = pcap::Capture::from_device(config.interface.as_str())
         .map_err(|err| CaptureError::Interface(err.to_string()))?;
@@ -184,14 +195,13 @@ where
                     writer.write(&packet);
                 }
 
-                let data = packet.data.to_vec();
                 stats.packets_seen += 1;
-                stats.bytes_seen += data.len();
+                stats.bytes_seen += packet.data.len();
                 #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
                 let cp = CapturePacket {
                     timestamp_sec: packet.header.ts.tv_sec,
                     timestamp_usec: packet.header.ts.tv_usec as i64,
-                    data,
+                    data: Cow::Borrowed(packet.data),
                 };
                 if !on_packet(cp) {
                     break;
@@ -211,7 +221,7 @@ fn capture_streaming_impl<F>(
     _on_packet: F,
 ) -> Result<CaptureStats, CaptureError>
 where
-    F: FnMut(CapturePacket) -> bool,
+    F: FnMut(CapturePacket<'_>) -> bool,
 {
     Err(CaptureError::Unsupported(
         "live capture is not enabled; rebuild with `--features pcap`",
@@ -221,7 +231,7 @@ where
 #[cfg(feature = "pcap")]
 fn capture_impl(
     config: &CaptureConfig,
-) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+) -> Result<(Vec<CapturePacket<'static>>, CaptureStats), CaptureError> {
     let inactive = pcap::Capture::from_device(config.interface.as_str())
         .map_err(|err| CaptureError::Interface(err.to_string()))?;
 
@@ -248,14 +258,13 @@ fn capture_impl(
     while packets.len() < config.max_packets {
         match capture.next_packet() {
             Ok(packet) => {
-                let packet_data = packet.data.to_vec();
                 stats.packets_seen += 1;
-                stats.bytes_seen += packet_data.len();
+                stats.bytes_seen += packet.data.len();
                 #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
                 let pkt = CapturePacket {
                     timestamp_sec: packet.header.ts.tv_sec,
                     timestamp_usec: packet.header.ts.tv_usec as i64,
-                    data: packet_data,
+                    data: Cow::Owned(packet.data.to_vec()),
                 };
                 packets.push(pkt);
             }
@@ -270,7 +279,7 @@ fn capture_impl(
 #[cfg(not(feature = "pcap"))]
 fn capture_impl(
     _config: &CaptureConfig,
-) -> Result<(Vec<CapturePacket>, CaptureStats), CaptureError> {
+) -> Result<(Vec<CapturePacket<'static>>, CaptureStats), CaptureError> {
     Err(CaptureError::Unsupported(
         "live capture is not enabled; rebuild with `--features pcap`",
     ))
@@ -281,7 +290,7 @@ fn capture_impl(
 #[cfg(feature = "pcap")]
 fn read_pcap_file_impl<F>(path: &str, mut on_packet: F) -> Result<CaptureStats, CaptureError>
 where
-    F: FnMut(CapturePacket) -> bool,
+    F: FnMut(CapturePacket<'_>) -> bool,
 {
     let mut cap = pcap::Capture::from_file(path)
         .map_err(|e| CaptureError::Open(format!("cannot open '{}': {}", path, e)))?;
@@ -294,14 +303,13 @@ where
     loop {
         match cap.next_packet() {
             Ok(pkt) => {
-                let data = pkt.data.to_vec();
-                stats.bytes_seen += data.len();
+                stats.bytes_seen += pkt.data.len();
                 stats.packets_seen += 1;
                 #[allow(clippy::unnecessary_cast)]
                 let cp = CapturePacket {
                     timestamp_sec: pkt.header.ts.tv_sec,
                     timestamp_usec: pkt.header.ts.tv_usec as i64,
-                    data,
+                    data: Cow::Borrowed(pkt.data),
                 };
                 if !on_packet(cp) {
                     break;
@@ -317,7 +325,7 @@ where
 #[cfg(not(feature = "pcap"))]
 fn read_pcap_file_impl<F>(_path: &str, _on_packet: F) -> Result<CaptureStats, CaptureError>
 where
-    F: FnMut(CapturePacket) -> bool,
+    F: FnMut(CapturePacket<'_>) -> bool,
 {
     Err(CaptureError::Unsupported(
         "pcap file reading requires the 'pcap' feature; rebuild with `--features pcap`",
