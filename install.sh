@@ -2,7 +2,7 @@
 # pktana automatic installation script
 set -e
 
-VERSION="v0.3.1"
+VERSION="v0.4.0"
 
 if [ -f /etc/os-release ]; then
     . /etc/os-release
