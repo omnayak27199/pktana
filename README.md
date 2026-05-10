@@ -36,6 +36,7 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 | Live bandwidth dashboard + GeoIP | `iftop` | `pktana stats eth0` |
 | Wireshark-like TUI | Wireshark (GUI only) | `pktana tui eth0` |
 | Offline GeoIP lookup | `geoiplookup` binary | `pktana geoip <IP>` |
+|Web UI | web UI | `pktana web 8080` hit localhost with curl|
 
 ---
 
@@ -122,6 +123,22 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 - Offline IP → country code + continent + country name
 - Private, loopback, CGNAT, link-local ranges labelled automatically
 - Bulk lookup: `pktana geoip 8.8.8.8 1.1.1.1 9.9.9.9`
+
+### Web UI Server
+- **HTTP Server**: Built-in lightweight web server accessible at `http://0.0.0.0:8080` (default)
+- **Live Interface Dashboard**: Real-time capture interface selection and live packet stream with 
+auto-refresh
+- **Interactive Packet Table**: Browse captured packets with sortable columns (Time, Bytes, Proto, 
+Source, Dest, Info)
+- **Deep-Dive Packet Inspector**: Click any packet to view full L2–L7 DPI details, including:
+  - Protocol headers (Ethernet, IP, TCP/UDP, etc.)
+  - Application protocol info (TLS SNI/ALPN, HTTP method/path, DNS entropy, SSH banner, etc.)
+  - Risk scoring and classification
+  - All 0.3.0 DPI fields (JA3, QUIC version, NTP mode, BGP ASN, tunnel inner frames, etc.)
+- **Connection Explorer**: Live connection list with GeoIP country, service name, TCP state, process i
+- **Statistics Dashboard**: Packet/byte breakdown by protocol, top talkers with GeoIP
+- **System Info Panel**: Kernel version, hostname, uptime, memory usage
+- **CLI Integration**: Start web server with `pktana web [interface] [--port 8080]`
 
 ---
 
