@@ -14,12 +14,34 @@ categories.workspace  = true
 default = []
 pcap = ["pktana-core/pcap"]
 tui = ["dep:ratatui", "dep:crossterm"]
+ai = ["dep:reqwest", "dep:serde", "dep:serde_json"]
 
 [dependencies]
-pktana-core = { path = "../pktana-core", version = "0.4.0" }
+pktana-core = { path = "../pktana-core", version = "0.5.0" }
 ratatui    = { version = "0.29", optional = true }
 crossterm  = { version = "0.28", optional = true }
+reqwest    = { version = "0.12", features = ["json", "blocking"], optional = true }
+serde      = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+lazy_static = "1.4"
+dashmap = "6.1"
 
 [[bin]]
 name = "pktana"
 path = "src/main.rs"
+
+# Configuration for `cargo deb` (used to build .deb packages for Ubuntu/Debian)
+[package.metadata.deb]
+name = "pktana"
+maintainer = "Om Nayak <omnayak27199@users.noreply.github.com>"
+copyright = "2025-2026, pktana contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = "pktana is a Rust-based Linux packet analyzer with deep packet inspection, flow analysis, a Wireshark-style TUI, and an embedded web UI."
+section = "net"
+priority = "optional"
+depends = "libpcap0.8, libc6"
+assets = [
+  ["../../target/release/pktana", "usr/bin/", "755"],
+  ["../../README.md", "usr/share/doc/pktana/README", "644"],
+]
+features = ["pcap", "tui"]

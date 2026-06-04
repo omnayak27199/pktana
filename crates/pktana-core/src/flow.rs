@@ -1,8 +1,9 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::net::Ipv4Addr;
 
 use crate::packet::{PacketSummary, TransportHeader};
@@ -14,6 +15,16 @@ pub struct FlowKey {
     pub source_port: u16,
     pub destination_port: u16,
     pub protocol: &'static str,
+}
+
+impl Hash for FlowKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.source_ip.hash(state);
+        self.destination_ip.hash(state);
+        self.source_port.hash(state);
+        self.destination_port.hash(state);
+        self.protocol.hash(state);
+    }
 }
 
 impl fmt::Display for FlowKey {
@@ -39,7 +50,7 @@ pub struct FlowRecord {
 
 #[derive(Debug, Default)]
 pub struct FlowTable {
-    records: BTreeMap<FlowKey, FlowRecord>,
+    records: HashMap<FlowKey, FlowRecord>,
 }
 
 impl FlowTable {
@@ -71,7 +82,7 @@ impl FlowTable {
         };
 
         // Use entry API to avoid double-lookup and unnecessary clone
-        use std::collections::btree_map::Entry;
+        use std::collections::hash_map::Entry;
         match self.records.entry(key) {
             Entry::Occupied(mut entry) => {
                 // Key already exists, just update stats

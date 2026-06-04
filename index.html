@@ -468,6 +468,53 @@
       min-width: max-content;
     }
 
+    .download-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+    .download-card {
+      padding: 20px;
+      border-radius: 18px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.10);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: transform .2s, border-color .2s, background .2s;
+    }
+    .download-card:hover {
+      transform: translateY(-3px);
+      border-color: rgba(249,115,22,0.55);
+      background: rgba(249,115,22,0.08);
+    }
+    .download-card .dl-os {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 800; font-size: 1rem; color: #ffffff;
+    }
+    .download-card .dl-os .dl-icon { font-size: 1.4rem; }
+    .download-card .dl-meta {
+      font-size: 0.8rem; color: rgba(255,255,255,0.65);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      word-break: break-all;
+    }
+    .download-card .dl-actions {
+      display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto;
+    }
+    .dl-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 14px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: #fff; font-weight: 700; font-size: 0.85rem;
+      border: none; cursor: pointer; text-decoration: none;
+    }
+    .dl-btn.secondary {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.18);
+    }
+    .dl-btn:hover { filter: brightness(1.1); }
+
     .stats {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1092,7 +1139,7 @@
     <section class="hero">
       <div class="hero-grid">
         <div class="hero-copy">
-          <div class="pill">Current release v0.4.0</div>
+          <div class="pill">Current release v0.5.0</div>
           <h1>See every packet with clarity.</h1>
           <p>
             pktana is a modern Linux packet analyzer built for network engineers, SREs, and infrastructure teams who need
@@ -1195,25 +1242,105 @@
       </div>
     </section>
 
-    <section>
-      <div class="section-tag">Install</div>
-      <h2>Install instantly on your Linux system.</h2>
+    <section id="download">
+      <div class="section-tag">Download · Install</div>
+      <h2>Download pktana for your Linux distribution.</h2>
       <p class="section-lead">
-        Current release: <strong>v0.4.0</strong>. Install pktana directly with a single RPM command on
-        RHEL 9, Rocky Linux, AlmaLinux, and CentOS Stream 9 compatible systems.
-        Also published on <a href="https://crates.io/users/omnayak27199" target="_blank" rel="noreferrer" style="color:var(--primary-dark);font-weight:700;">crates.io</a>.
+        Current release: <strong>v0.5.0</strong>. Native packages for RHEL/CentOS/Rocky/Alma 7 &amp; 9
+        and binary tarballs for Ubuntu 22.04 / 24.04 and Debian 12 — all built from source via the
+        <code>docker-build.sh</code> helper and published on
+        <a href="https://github.com/omnayak27199/pktana/releases" target="_blank" rel="noreferrer" style="color:var(--primary-dark);font-weight:700;">GitHub Releases</a>.
+        The crates are also on <a href="https://crates.io/users/omnayak27199" target="_blank" rel="noreferrer" style="color:var(--primary-dark);font-weight:700;">crates.io</a>.
       </p>
 
       <div class="install-panel">
-        <p>Install with <code>dnf</code>:</p>
-        <div class="code-block"><code>sudo dnf install \
-https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.4.0-1.el9.x86_64.rpm</code></div>
+        <p style="font-size:0.95rem;font-weight:700;color:#ffffff;margin-bottom:10px;">Pick your distro:</p>
+        <div class="download-grid">
 
-        <p style="margin-top:22px;">Use as a Rust library:</p>
+          <!-- RHEL 9 / Rocky 9 / Alma 9 / CentOS Stream 9 -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🟥</span> RHEL / Rocky / Alma 9</div>
+            <div class="dl-meta">pktana-0.5.0-1.el9.x86_64.rpm</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el9.x86_64.rpm">⬇ Download RPM</a>
+              <a class="dl-btn secondary" href="#install-el9">Install</a>
+            </div>
+          </div>
+
+          <!-- RHEL 7 / CentOS 7 -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🟥</span> RHEL / CentOS 7</div>
+            <div class="dl-meta">pktana-0.5.0-1.el7.x86_64.rpm</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el7.x86_64.rpm">⬇ Download RPM</a>
+              <a class="dl-btn secondary" href="#install-el7">Install</a>
+            </div>
+          </div>
+
+          <!-- Ubuntu 22.04 -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🟧</span> Ubuntu 22.04</div>
+            <div class="dl-meta">pktana_0.5.0_amd64_ubuntu22.04.deb</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu22.04.deb">⬇ Download .deb</a>
+              <a class="dl-btn secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-ubuntu22.04-x86_64.tar.gz">tar.gz</a>
+            </div>
+          </div>
+
+          <!-- Ubuntu 24.04 -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🟧</span> Ubuntu 24.04</div>
+            <div class="dl-meta">pktana_0.5.0_amd64_ubuntu24.04.deb</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu24.04.deb">⬇ Download .deb</a>
+              <a class="dl-btn secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-ubuntu24.04-x86_64.tar.gz">tar.gz</a>
+            </div>
+          </div>
+
+          <!-- Debian 12 -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🟪</span> Debian 12</div>
+            <div class="dl-meta">pktana_0.5.0_amd64_debian12.deb</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_debian12.deb">⬇ Download .deb</a>
+              <a class="dl-btn secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-debian12-x86_64.tar.gz">tar.gz</a>
+            </div>
+          </div>
+
+          <!-- Source / Cargo -->
+          <div class="download-card">
+            <div class="dl-os"><span class="dl-icon">🦀</span> Build from source (any distro)</div>
+            <div class="dl-meta">cargo install pktana-cli --features pcap,tui</div>
+            <div class="dl-actions">
+              <a class="dl-btn" href="https://crates.io/crates/pktana-cli" target="_blank" rel="noreferrer">crates.io</a>
+              <a class="dl-btn secondary" href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </div>
+
+        </div>
+<!--    
+        <p id="install-el9" style="margin-top:28px;">Install on RHEL/Rocky/Alma 9:</p>
+        <div class="code-block"><code>sudo dnf install -y \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el9.x86_64.rpm</code></div>
+
+        <p id="install-el7" style="margin-top:18px;">Install on RHEL/CentOS 7:</p>
+        <div class="code-block"><code>sudo yum install -y \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el7.x86_64.rpm</code></div>
+
+        <p style="margin-top:18px;">Install on Ubuntu / Debian (.deb):</p>
+        <div class="code-block"><code>curl -L -o pktana.deb \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu24.04.deb
+sudo apt install -y ./pktana.deb</code></div>
+ -->
+        <p style="margin-top:18px;">Use as a Rust library:</p>
         <div class="code-block"><code>cargo add pktana-core   # core DPI engine
 cargo add pktana-cli    # full CLI binary</code></div>
 
         <div style="margin-top:22px; display:flex; flex-wrap:wrap; gap:12px;">
+          <a href="https://github.com/omnayak27199/pktana/releases" target="_blank" rel="noreferrer"
+             style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:14px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.18);color:white;font-weight:700;font-size:0.9rem;">
+            📦 All releases on GitHub
+          </a>
           <a href="https://crates.io/crates/pktana-cli" target="_blank" rel="noreferrer"
              style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:14px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.18);color:white;font-weight:700;font-size:0.9rem;">
             📦 pktana-cli on crates.io
@@ -1234,7 +1361,7 @@ cargo add pktana-cli    # full CLI binary</code></div>
       <div class="section-tag">Core Features</div>
       <h2>Production-grade packet analysis, today.</h2>
       <p class="section-lead">
-        pktana v0.4.0 is a fully capable packet analysis platform. The core and CLI are split across two crates for reusability,
+        pktana v0.5.0 is a fully capable packet analysis platform. The core and CLI are split across two crates for reusability,
         with deep protocol coverage, live DPI, risk scoring, and a Wireshark-style TUI — all in a single static binary.
       </p>
 
@@ -1338,7 +1465,7 @@ cargo add pktana-cli    # full CLI binary</code></div>
       <div class="section-tag">Roadmap</div>
       <h2>Strong foundation. Clear path forward.</h2>
       <p class="section-lead">
-        v0.4.0 already delivers full L2–L7 DPI, JA3, tunnel re-inspection, risk scoring, TUI, and pcap support.
+        v0.5.0 already delivers full L2–L7 DPI, JA3, tunnel re-inspection, risk scoring, TUI, and pcap support.
         Here's what comes next.
       </p>
 
@@ -1473,7 +1600,7 @@ cargo add pktana-cli    # full CLI binary</code></div>
     <footer class="footer">
       <div>
         <strong>pktana</strong><br />
-        Linux-first packet analysis workspace written in Rust. Current release: v0.4.0.
+        Linux-first packet analysis workspace written in Rust. Current release: v0.5.0.
       </div>
       <div class="footer-links">
         <a href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
