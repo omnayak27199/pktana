@@ -2,24 +2,40 @@
 
 **A high-performance, zero-dependency network inspection toolkit for Linux — written in Rust.**
 
-> Replaces `tcpdump`, `ethtool`, `ss`, `ip route`, `iftop`, and Wireshark with a single binary.  
+> Replaces `tcpdump`, `ethtool`, `ss`, `ip route`, `iftop`, and Wireshark with a single binary,
+> plus a multi-window **browser UI** for parallel per-interface capture.
 > Built for production infrastructure, network security, and cloud-native environments.
 
 [![CI](https://github.com/omnayak27199/pktana/actions/workflows/ci.yml/badge.svg)](https://github.com/omnayak27199/pktana/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.4.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.4.0)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky-lightgrey.svg)]()
+[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.5.0)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky%20%2F%20Ubuntu%20%2F%20Debian-lightgrey.svg)]()
 [![crates.io](https://img.shields.io/crates/v/pktana-cli.svg)](https://crates.io/crates/pktana-cli)
 [![Website](https://img.shields.io/badge/website-pktana.online-orange.svg)](https://pktana.online)
 
-🌐 **Website**: [pktana.online](https://pktana.online)  
+🌐 **Website**: [pktana.online](https://pktana.online)
 📦 **crates.io**: [pktana-cli](https://crates.io/crates/pktana-cli) · [pktana-core](https://crates.io/crates/pktana-core)
+📥 **Downloads**: [GitHub Releases](https://github.com/omnayak27199/pktana/releases/tag/v0.5.0)
+
+---
+
+## What's new in v0.5.0
+
+- 🪟 **Multi-window Web UI** — open many interfaces in parallel, each in its own Chrome-tab-style window, with its own capture state, packet table, flows, protocols, and hardware tabs.
+- ⏯ **Per-interface Pause / Resume** — pause the active interface's capture without affecting other windows; resume restarts only that one.
+- 🎯 **Host-vs-window tab separation** — the main activity bar keeps only host-scoped views (Server Info, PCAP Analyzer, Connections, Terminal); per-interface views live inside each window.
+- 🟧 **Native packages for every major distro** — RPM for RHEL/Rocky/Alma 7 & 9, `.deb` for Ubuntu 22.04 / 24.04 and Debian 12, plus signed binary tarballs, all built automatically by GitHub Actions.
+- 🌓 **Polished light/dark theme** — every button, header, and table now meets ≥ 3:1 contrast in both themes.
+- 🏷 **Handshake tag filters** — one-click filters for TCP SYN, TLS handshake, DNS query, DHCP DORA.
+- 🦀 **Round-font branding refresh** — `pktana` logotype in Nunito; landing-page download grid linking directly to GitHub Release artifacts.
+
+See [v0.5.0_release_note.md](v0.5.0_release_note.md) and [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ---
 
 ## Why pktana?
 
-Modern infrastructure teams need deep network visibility without installing 5 separate tools. pktana is a **single signed RPM** that gives you:
+Modern infrastructure teams need deep network visibility without installing 5 separate tools. pktana is a **single signed package** that gives you:
 
 | What you need | Old way | pktana |
 |---|---|---|
@@ -35,8 +51,8 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 | Dataplane / XDP / DPDK / SR-IOV | custom scripts | `pktana dp eth0` |
 | Live bandwidth dashboard + GeoIP | `iftop` | `pktana stats eth0` |
 | Wireshark-like TUI | Wireshark (GUI only) | `pktana tui eth0` |
+| Multi-interface web dashboard | Wireshark | `pktana web 8080` |
 | Offline GeoIP lookup | `geoiplookup` binary | `pktana geoip <IP>` |
-|Web UI | web UI | `pktana web 8080` hit localhost with curl|
 
 ---
 
@@ -48,37 +64,72 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 - **L2**: Ethernet, ARP (request/reply/gratuitous), QinQ/802.1Q VLAN stacks, OUI vendor lookup
 - **L3**: IPv4 (DSCP, ECN, ID, DF/MF, TTL, fragmentation), **IPv6** (next header name, hop limit)
 - **L4**: TCP (full options: MSS, WSCALE, SACK, Timestamps), UDP, ICMP (30+ type/code messages)
-- **TLS 1.0–1.3**: SNI extraction, **JA3 fingerprint raw string** (MD5 → JA3 hash), **ALPN** list, cipher suites, elliptic curves, GREASE filtering, TLS 1.0/1.1 deprecation warning (RFC 8996)
+- **TLS 1.0–1.3**: SNI, **JA3** (raw string + MD5 hash), **ALPN** list, cipher suites, elliptic curves, GREASE filtering, deprecation warning for TLS 1.0/1.1 (RFC 8996)
 - **QUIC / HTTP3**: long/short header decode, version decode (RFC 9000 v1, RFC 9369 v2, gQUIC, drafts, GREASE)
 - **HTTP/2**: PRI magic + frame-type parsing, **gRPC** `:path` header extraction via HPACK
 - **HTTP/1.x**: method, URL, status code, key headers
-- **WebSocket**: Upgrade header detection + per-frame opcode (Text/Binary/Close/Ping/Pong), mask
+- **WebSocket**: Upgrade detection + per-frame opcode (Text/Binary/Close/Ping/Pong), mask
 - **DNS**: query name, QTYPE, RCode (NXDOMAIN), **Shannon entropy on longest label** for DGA/tunneling heuristic
-- **DHCP**: message type, client options
-- **SSH**: banner extraction (version + software), SSHv1 deprecation warning in red
-- **SIP / VoIP**: all methods (INVITE/BYE/REGISTER/OPTIONS/CANCEL/ACK), SIP URI, Call-ID, From, To, User-Agent
-- **NTP**: version, mode with name (Client/Server/Broadcast/monlist), stratum with description, **amplification risk flag** (mode 7 — DDoS vector)
+- **DHCP**: full DORA state machine and option decoding (with `dhcp-dora` tag filter)
+- **SSH**: banner extraction (version + software), SSHv1 deprecation warning
+- **SIP / VoIP**: INVITE/BYE/REGISTER/OPTIONS/CANCEL/ACK, SIP URI, Call-ID, From, To, User-Agent
+- **NTP**: version, mode with name (Client/Server/Broadcast/monlist), stratum, **amplification risk flag** (mode 7 — DDoS vector)
 - **BGP**: message type (OPEN/UPDATE/NOTIFICATION/KEEPALIVE), AS number, Router ID
 - **SMTP**, **RDP**, **MySQL**, **PostgreSQL**, **Redis**, **MongoDB**, **SNMP**, **LDAP**, **Kerberos**, **IKE**, **SSDP**, **Syslog**, **Geneve**
-- **Tunnel inner-frame re-inspection**: VXLAN (UDP/4789), GRE (IP proto 47), Geneve — re-decodes the inner Ethernet frame and extracts inner src/dst IP, protocol, ports, and application protocol
+- **Tunnel inner-frame re-inspection**: VXLAN (UDP/4789), GRE (IP proto 47), Geneve — re-decodes inner Ethernet frame and extracts inner src/dst IP, protocol, ports, and application protocol
 
 #### Anomaly Detection
-- SYN+FIN, NULL scan (no flags), SYN+RST, zero-window SYN, TTL=0, broadcast source MAC, malformed TCP data offset, fragmented packets, short ARP/UDP/ICMP headers, ARP MAC mismatch, ICMP redirect
+SYN+FIN, NULL scan (no flags), SYN+RST, zero-window SYN, TTL=0, broadcast source MAC, malformed TCP data offset, fragmented packets, short ARP/UDP/ICMP headers, ARP MAC mismatch, ICMP redirect.
 
 #### Risk Scoring & Classification
-- **Composite 0–100 risk score** with visual `█` bar — aggregates signals: deprecated TLS, SSHv1, NTP monlist, DNS entropy spike, NULL scan, zero-window SYN, tunneling, broadcast source
-- **App category**: Web Browsing, Encrypted Transport, VoIP / UC, Database, File Transfer, Tunneling / Overlay, Remote Access, DNS / Infrastructure, Monitoring / Mgmt, Generic TCP/UDP
+- **Composite 0–100 risk score** with visual `█` bar — aggregates signals: deprecated TLS, SSHv1, NTP monlist, DNS entropy spike, NULL scan, zero-window SYN, tunneling, broadcast source.
+- **App category**: Web Browsing, Encrypted Transport, VoIP / UC, Database, File Transfer, Tunneling / Overlay, Remote Access, DNS / Infrastructure, Monitoring / Mgmt, Generic TCP/UDP.
 
 #### Auto-Diagnosis Engine
-- OS fingerprinting via TTL (Linux=64 / Windows=128 / Cisco=255) and TCP options
-- DSCP/QoS class labelling, DNS rcode explanation, HTTP status classification, DHCP state machine, VLAN/QinQ tagging, fragmentation notice, DGA/tunneling entropy alert
+OS fingerprinting via TTL (Linux=64 / Windows=128 / Cisco=255) and TCP options. DSCP/QoS class labelling, DNS rcode explanation, HTTP status classification, DHCP state machine, VLAN/QinQ tagging, fragmentation notice, DGA/tunneling entropy alert.
+
+---
+
+### Multi-Window Web UI (`pktana web [PORT]`)
+
+The web UI brings full Wireshark-style packet analysis to your browser, with a unique **multi-window architecture** so you can monitor many interfaces simultaneously.
+
+#### Architecture
+- **Host-scoped activity bar** (left): Server Info, PCAP Analyzer, Connections, Terminal.
+- **Per-interface windows** (top strip): every interface you open becomes a Chrome-tab-style window with its own state, packet store, and flow tables.
+- **Per-window inner tabs**: 📊 Packets, 🔗 Flows, 📈 Protocols, ⚙️ Hardware.
+- **No auto-start**: opening a window doesn't start capture — click ▶ Start Capture per window.
+- **Per-window Pause / Resume**: pause stops only the current interface; the Resume button only appears in the paused window.
+- **Live SSE stream** for each session, independent backend session per window (DashMap-tracked).
+
+#### What you get per window
+- Wireshark-style packet table with WS-style protocol colors and per-row risk badges
+- Click-to-expand DPI decode (every L2–L7 field, every JA3/ALPN/QUIC/SIP/BGP/NTP field)
+- Flow table (proto · src · dst · pkts · bytes · category)
+- Protocol breakdown + top talkers with GeoIP
+- Hardware tab (per interface): NIC driver, ethtool, dataplane (XDP/DPDK/SR-IOV)
+- Toolbar filters: protocol, search, handshake tags (TCP SYN / TLS / DNS / DHCP DORA), copy & format helpers
+- Pause/Resume per window, Stop Capture per window, × Close window
+
+#### Host-scoped tools
+- **Connections**: TCP/UDP socket list + GeoIP + PID, refresh on demand.
+- **PCAP Analyzer**: drop a file path or upload a `.pcap` and it opens in a new analysis window.
+- **Terminal**: in-browser xterm.js shell (when enabled).
+- **Theme toggle**: polished light & dark themes with full contrast coverage.
+
+#### REST + SSE API
+- `GET  /api/nic` · `GET  /api/route` · `GET  /api/conn` · `GET  /api/geoip?ip=…`
+- `GET  /api/ethtool?iface=…` · `GET  /api/dp?iface=…` · `GET  /api/interfaces`
+- `POST /api/sessions/create` · `GET /api/sessions` · `POST /api/sessions/{id}/stop` · `DELETE /api/sessions/{id}`
+- `GET  /api/inspect?session=…&iface=…[&filter=…][&flow_analyze=true]` (Server-Sent Events)
+- `GET  /api/inspect?session=…&read=/path/to/file.pcap` (offline pcap stream)
 
 ---
 
 ### Wireshark-Like TUI (`pktana tui eth0`)
 - **5-tab layout**: Overview, Packets, Flows, Stats, Help
 - **Detail popup** with Original / Layers / Hex sub-tabs
-- All new DPI fields displayed: JA3, ALPN, QUIC version, SSH banner, SIP details, NTP amplification risk, BGP ASN, tunnel inner frame, DNS entropy, risk score with bar, app category
+- All DPI fields displayed: JA3, ALPN, QUIC version, SSH banner, SIP details, NTP amplification risk, BGP ASN, tunnel inner frame, DNS entropy, risk score with bar, app category
 - Per-protocol color coding: TLS=green, HTTP=blue, DNS=cyan, QUIC=bright-green, SIP=magenta, BGP/NTP=red
 - Real-time bandwidth sparkline, top-10 talkers with GeoIP country
 - BPF filter and interface selection
@@ -124,22 +175,6 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 - Private, loopback, CGNAT, link-local ranges labelled automatically
 - Bulk lookup: `pktana geoip 8.8.8.8 1.1.1.1 9.9.9.9`
 
-### Web UI Server
-- **HTTP Server**: Built-in lightweight web server accessible at `http://0.0.0.0:8080` (default)
-- **Live Interface Dashboard**: Real-time capture interface selection and live packet stream with 
-auto-refresh
-- **Interactive Packet Table**: Browse captured packets with sortable columns (Time, Bytes, Proto, 
-Source, Dest, Info)
-- **Deep-Dive Packet Inspector**: Click any packet to view full L2–L7 DPI details, including:
-  - Protocol headers (Ethernet, IP, TCP/UDP, etc.)
-  - Application protocol info (TLS SNI/ALPN, HTTP method/path, DNS entropy, SSH banner, etc.)
-  - Risk scoring and classification
-  - All 0.3.0 DPI fields (JA3, QUIC version, NTP mode, BGP ASN, tunnel inner frames, etc.)
-- **Connection Explorer**: Live connection list with GeoIP country, service name, TCP state, process i
-- **Statistics Dashboard**: Packet/byte breakdown by protocol, top talkers with GeoIP
-- **System Info Panel**: Kernel version, hostname, uptime, memory usage
-- **CLI Integration**: Start web server with `pktana web [interface] [--port 8080]`
-
 ---
 
 ### Other Commands
@@ -156,24 +191,40 @@ Source, Dest, Info)
 
 ### Automatic Install (Recommended)
 
-You can use the automatic installation script which detects your OS (Ubuntu/Debian vs RHEL/Rocky) and either installs the RPM or builds from source automatically:
+Detects your OS and installs the appropriate native package or builds from source:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/omnayak27199/pktana/main/install.sh | bash
 ```
 
-### RHEL / Rocky Linux / AlmaLinux / CentOS Stream 9
+### RHEL / Rocky / AlmaLinux / CentOS Stream 9
 
 ```bash
-sudo dnf install https://github.com/omnayak27199/pktana/releases/download/v0.3.0/pktana-0.3.0-1.el9.x86_64.rpm
+sudo dnf install -y \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el9.x86_64.rpm
 ```
 
-`libpcap` is installed automatically as a dependency.
+### RHEL / CentOS 7
+
+```bash
+sudo yum install -y \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el7.x86_64.rpm
+```
+
+### Ubuntu 22.04 / 24.04 · Debian 12
+
+```bash
+curl -L -o pktana.deb \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu24.04.deb
+sudo apt install -y ./pktana.deb
+```
+
+(Replace `ubuntu24.04` with `ubuntu22.04` or `debian12` for the matching `.deb`.)
 
 ### Verify the RPM signature
 
 ```bash
-rpm --checksig pktana-0.3.0-1.el9.x86_64.rpm
+rpm --checksig pktana-0.5.0-1.el9.x86_64.rpm
 ```
 
 ### Build from source
@@ -185,6 +236,13 @@ cargo build --release --features pcap,tui
 ./target/release/pktana --version
 ```
 
+### As a Rust dependency
+
+```bash
+cargo add pktana-core   # DPI engine library
+cargo add pktana-cli    # full CLI binary
+```
+
 ---
 
 ## Usage
@@ -193,14 +251,19 @@ cargo build --release --features pcap,tui
 # Live packet capture (color-coded, DPI-enriched)
 sudo pktana eth0
 sudo pktana eth0 100                     # stop after 100 packets
-sudo pktana capture eth0 'port 443'     # BPF filter
+sudo pktana capture eth0 'port 443'      # BPF filter
+
+# Web UI — multi-window per-interface dashboard
+sudo pktana web 8080                     # starts as background daemon
+sudo pktana web 8080 -f                  # foreground mode
+
+# Wireshark-like TUI dashboard
+sudo pktana tui eth0
+sudo pktana tui capture.pcap             # browse a pcap file
 
 # Deep packet inspection (hex input — all DPI fields)
 pktana inspect 45000028...
 pktana inspect -f packet.hex
-
-# Wireshark-like TUI dashboard
-sudo pktana tui eth0
 
 # Active connections (GeoIP + state colors + service names)
 pktana conn
@@ -234,7 +297,7 @@ pktana file packets.txt
 pktana help
 pktana help inspect
 pktana help tui
-pktana help stats
+pktana help web
 ```
 
 ---
@@ -252,6 +315,7 @@ pktana/
 │   │       │                   #   VXLAN/GRE inner-frame re-inspection, IPv6, DNS entropy,
 │   │       │                   #   risk scoring (0-100), app category classification
 │   │       ├── capture.rs      # Live capture (libpcap)
+│   │       ├── flow_analyzer.rs# Stateful flow analysis (handshakes, DHCP DORA, etc.)
 │   │       ├── nic.rs          # NIC info + XDP/DPDK/SR-IOV/AF_XDP detection
 │   │       ├── ethtool.rs      # Driver, offload, IRQ, queue, PCIe info
 │   │       ├── connections.rs  # TCP/UDP connection table (procfs)
@@ -262,9 +326,13 @@ pktana/
 │   └── pktana-cli/             # Binary: command dispatcher + output rendering
 │       └── src/
 │           ├── main.rs         # All CLI commands + DPI display helpers
-│           └── tui.rs          # Wireshark-like TUI (ratatui + crossterm)
+│           ├── tui.rs          # Wireshark-like TUI (ratatui + crossterm)
+│           └── web.rs          # Embedded HTTP server + multi-window Web UI
 ├── deploy/centos/              # RPM spec + install script
-└── .github/workflows/          # CI: fmt, clippy, build, sign RPM, publish
+├── .github/workflows/
+│   ├── ci.yml                  # fmt, clippy, test on push/PR
+│   └── release.yml             # Build & upload RPM + .deb + tarballs to GitHub Release
+└── docker-build.sh             # Local multi-distro build helper
 ```
 
 See [docs/architecture.md](docs/architecture.md) for detailed design notes.
@@ -275,7 +343,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed design notes.
 
 ```toml
 [dependencies]
-pktana-core = "0.3.0"
+pktana-core = "0.5.0"
 ```
 
 ```rust
@@ -300,6 +368,27 @@ for finding in dp.diagnose() {
 - Memory safe — written in Rust with no `unsafe` blocks in the core library
 - Reads NIC/connection/route data directly from `sysfs`/`procfs` — no external commands
 - Single static binary, minimal runtime footprint
+- Per-session DashMap state in the web server — many parallel captures without lock contention
+
+---
+
+## Building releases locally (optional)
+
+Pre-built artifacts are published automatically by GitHub Actions on every release tag. To reproduce a build locally:
+
+```bash
+# RPM (RHEL 9 example)
+./docker-build.sh el9
+
+# .deb (Ubuntu 24.04 example)
+./docker-build.sh ubuntu24
+
+# Manage build containers
+./docker-build.sh ls
+./docker-build.sh kill all
+```
+
+The CI workflow [`.github/workflows/release.yml`](.github/workflows/release.yml) builds all 5 artifacts in parallel and attaches them to the GitHub Release.
 
 ---
 
@@ -319,7 +408,7 @@ Issues and PRs welcome. Please run before submitting:
 
 ```bash
 cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --features pcap,tui -- -D warnings
 cargo test --all
 ```
 
@@ -327,198 +416,5 @@ cargo test --all
 
 ## License
 
-Copyright 2026 Omprakash (omnayak27199@gmail.com)  
-Licensed under the [Apache License 2.0](LICENSE).
-[![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky-lightgrey.svg)]()
-
----
-
-## Why pktana?
-
-Modern infrastructure teams need deep network visibility without installing 5 separate tools. pktana is a **single signed RPM** that gives you:
-
-| What you need | Old way | pktana |
-|---|---|---|
-| Packet capture & decode | `tcpdump` + Wireshark | `pktana capture eth0` |
-| NIC stats & offloads | `ethtool` | `pktana ethtool eth0` |
-| Active connections | `ss -tulnp` | `pktana conn` |
-| Routing table | `ip route` | `pktana route` |
-| Dataplane / XDP / DPDK info | custom scripts | `pktana dp eth0` |
-| Deep packet inspection | Wireshark + manual analysis | `pktana inspect` |
-| Live bandwidth dashboard | `iftop` | `pktana stats eth0` |
-
----
-
-## Features
-
-### Deep Packet Inspection (L2–L7)
-- Full decode: Ethernet → VLAN/QinQ → IPv4/IPv6 → TCP/UDP/ICMP
-- Application detection: HTTP, TLS+SNI, DNS, DHCP, SSH, SMTP, RDP, MySQL, PostgreSQL, Redis, MongoDB, BGP, NTP, SNMP, VXLAN, Geneve
-- Anomaly detection: SYN+FIN, NULL scan, zero-window, TTL=0, broadcast source, malformed headers
-- OS fingerprinting via TCP options (MSS, WSCALE, SACK)
-- DSCP/QoS classification, ICMP traceroute detection, TLS version deprecation warnings
-
-### NIC & Dataplane Inspection
-- XDP eBPF program detection, AF_XDP zero-copy socket detection
-- DPDK binding / userspace driver detection
-- SR-IOV VF/PF topology
-- Per-queue IRQ affinity, CPU NUMA mapping
-- Hardware offloads: checksum, TSO, LRO, RSS
-
-### Connection & Route Tables
-- TCP/UDP/UDP6/TCP6 connection state with PID → process name resolution
-- IPv4 + IPv6 routing table from `/proc/net/route` and `/proc/net/ipv6_route`
-
-### Live Capture & Stats
-- Packet capture with BPF filter support
-- Real-time bandwidth dashboard with per-protocol breakdown and top talkers
-- DNS query decode inline in capture output
-- Watch mode for continuous monitoring
-
----
-
-## Installation
-
-### RHEL / Rocky Linux / CentOS 9
-
-```bash
-sudo dnf install https://github.com/omnayak27199/pktana/releases/download/v0.1.0/pktana-0.1.0-1.el9.x86_64.rpm
-```
-
-`libpcap` is installed automatically as a dependency.
-
-### Verify the RPM signature
-
-```bash
-rpm --checksig pktana-0.1.0-1.el9.x86_64.rpm
-```
-
-### Build from source
-
-```bash
-git clone https://github.com/omnayak27199/pktana
-cd pktana
-cargo build --release --features pcap
-./target/release/pktana --version
-```
-
----
-
-## Usage
-
-```bash
-# Live packet capture
-pktana capture eth0
-
-# Deep packet inspection (hex input)
-pktana inspect 450000...
-
-# NIC information
-pktana nic eth0
-
-# Dataplane / XDP / DPDK
-pktana dp eth0
-
-# ethtool equivalent
-pktana ethtool eth0
-
-# Active connections (like ss -tulnp)
-pktana conn
-
-# Routing table (like ip route)
-pktana route
-
-# Live stats dashboard
-pktana stats eth0
-
-# Watch mode (refresh every N seconds)
-pktana watch eth0 5
-
-# Decode a hex packet file
-pktana file packets.txt
-
-# Full help
-pktana help
-pktana help <command>
-```
-
----
-
-## Architecture
-
-```
-pktana/
-├── crates/
-│   ├── pktana-core/        # Library: parser, DPI engine, NIC/route/conn inspection
-│   │   └── src/
-│   │       ├── dpi.rs      # L2–L7 deep packet inspection engine
-│   │       ├── capture.rs  # Live capture (libpcap)
-│   │       ├── nic.rs      # NIC info + XDP/DPDK/SR-IOV detection
-│   │       ├── ethtool.rs  # Driver, offload, IRQ, queue info
-│   │       ├── connections.rs  # TCP/UDP connection table
-│   │       ├── routes.rs   # IPv4/IPv6 routing table
-│   │       ├── parser.rs   # Ethernet frame parser
-│   │       └── packet.rs   # Packet data model
-│   └── pktana-cli/         # Binary: command dispatcher + output rendering
-├── deploy/centos/          # RPM spec + install script
-└── .github/workflows/      # CI: fmt, clippy, build, sign RPM, publish
-```
-
-See [docs/architecture.md](docs/architecture.md) for detailed design notes.
-
----
-
-## Performance
-
-- **Zero heap allocation** in the hot packet path
-- **Memory safe** — written in Rust with no `unsafe` blocks in the core library
-- Reads NIC/connection/route data directly from `sysfs`/`procfs` — no external commands
-- Single static binary, minimal runtime footprint
-
----
-
-## Embedding pktana-core in your project
-
-```toml
-[dependencies]
-pktana-core = "0.1.0"
-```
-
-```rust
-use pktana_core::inspect;
-
-let pkt = inspect(&raw_bytes);
-println!("{}", pkt.one_liner());
-for diagnosis in pkt.diagnose() {
-    println!("  {diagnosis}");
-}
-```
-
----
-
-## Commercial Use
-
-pktana is licensed under **Apache 2.0** — free for personal and open-source use.
-
-For **commercial licensing**, OEM embedding, support contracts, or custom feature development:
-
-📧 **omnayak27199@gmail.com**
-
----
-
-## Contributing
-
-Issues and PRs welcome. Please run before submitting:
-
-```bash
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
-```
-
----
-
-## License
-
-Copyright 2026 Omprakash (omnayak27199@gmail.com)  
+Copyright 2025–2026 Omprakash (omnayak27199@gmail.com)
 Licensed under the [Apache License 2.0](LICENSE).

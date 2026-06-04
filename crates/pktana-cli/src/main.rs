@@ -179,6 +179,16 @@ fn run() -> Result<(), CliError> {
                     child.id(),
                     port
                 );
+                println!();
+                println!("Access the Web UI:");
+                println!("  • Browser:   http://localhost:{}", port);
+                println!("  • curl:      curl http://localhost:{}/api/nic", port);
+                println!(
+                    "  • Inspect:   curl 'http://localhost:{}/api/inspect?iface=eth0'",
+                    port
+                );
+                println!("  • Flows:     curl 'http://localhost:{}/api/inspect?iface=eth0&flow_analyze=true'", port);
+                println!();
                 Ok(())
             } else {
                 web::inner::run_web_server(port).map_err(CliError::Usage)
@@ -475,9 +485,17 @@ fn is_pcap_path(s: &str) -> bool {
 fn run_capture(args: &[String]) -> Result<(), CliError> {
     if args.is_empty() {
         return Err(CliError::Usage(
-            "usage: pktana <INTERFACE> [COUNT] [BPF_FILTER]".into(),
+            "usage: pktana <INTERFACE> [COUNT] [BPF_FILTER] [--flow-analyze|-a]".into(),
         ));
     }
+
+    // Check for flow analysis flag
+    let flow_analyze = args.iter().any(|a| a == "--flow-analyze" || a == "-a");
+    let args: Vec<String> = args
+        .iter()
+        .filter(|a| *a != "--flow-analyze" && *a != "-a")
+        .cloned()
+        .collect();
 
     let interface = &args[0];
 
@@ -503,9 +521,16 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
     };
     let filter_label = filter.as_deref().unwrap_or("none");
 
-    println!(
-        "Capturing on {interface}  |  packets: {count_label}  |  filter: {filter_label}  |  Ctrl+C to stop"
-    );
+    if flow_analyze {
+        println!(
+            "Capturing on {interface}  |  mode: FLOW ANALYSIS  |  packets: {count_label}  |  filter: {filter_label}"
+        );
+        println!("Analyzing: TCP/TLS handshakes, DHCP DORA, DNS transactions");
+    } else {
+        println!(
+            "Capturing on {interface}  |  packets: {count_label}  |  filter: {filter_label}  |  Ctrl+C to stop"
+        );
+    }
     println!();
 
     let sep = "─".repeat(118);
@@ -533,6 +558,11 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
     let mut total_bytes: u64 = 0;
     let mut proto_counts: HashMap<String, u64> = HashMap::new();
     let mut src_counts: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut analyzer = if flow_analyze {
+        Some(pktana_core::FlowAnalyzer::new())
+    } else {
+        None
+    };
 
     let stats = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
         pkt_num += 1;
@@ -541,6 +571,25 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         total_bytes += bytes as u64;
 
         let dp = inspect(&pkt.data);
+
+        // Flow analysis mode
+        if let Some(ref mut analyzer) = analyzer {
+            let results = analyzer.analyze_packet(&dp);
+            for result in results {
+                println!("{:>5}  {:<17}  {}", pkt_num, ts, result);
+            }
+
+            // Print summary every 100 packets
+            if pkt_num.is_multiple_of(100) && pkt_num > 0 {
+                let summary = analyzer.get_summary();
+                println!("\x1b[1;34m────── Summary: {} TCP ({} complete), {} TLS ({} complete), {} DHCP ({} complete) ──────\x1b[0m", 
+                    summary.total_tcp_flows, summary.complete_tcp_handshakes,
+                    summary.total_tls_flows, summary.complete_tls_handshakes,
+                    summary.total_dhcp_flows, summary.complete_dhcp_dora);
+            }
+            return true;
+        }
+
         let proto = dp_proto_label(&dp);
         let src = dp_src_str(&dp);
         let dst = dp_dst_str(&dp);
@@ -1803,7 +1852,11 @@ fn print_usage() {
 
     println!("{C}QUICK EXAMPLES{R}");
     println!("  {DIM}${R} pktana eth0                               {DIM}# capture everything on eth0{R}");
+    println!("  {DIM}${R} pktana eth0 -a                            {DIM}# capture with flow analysis (TCP/TLS/DHCP){R}");
     println!("  {DIM}${R} pktana eth0 100 'tcp port 443'            {DIM}# 100 HTTPS packets{R}");
+    println!(
+        "  {DIM}${R} pktana eth0 0 'tcp port 443' -a           {DIM}# HTTPS with flow analysis{R}"
+    );
     println!(
         "  {DIM}${R} pktana record eth0 capture.pcap           {DIM}# save live traffic to file{R}"
     );
@@ -1839,6 +1892,8 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("  {Y}pktana <IFACE> <COUNT>{R}");
             println!("  {Y}pktana <IFACE> <BPF_FILTER>{R}");
             println!("  {Y}pktana <IFACE> <COUNT> <BPF_FILTER>{R}");
+            println!("  {Y}pktana <IFACE> [COUNT] [BPF_FILTER] --flow-analyze{R}");
+            println!("  {Y}pktana <IFACE> [COUNT] [BPF_FILTER] -a{R}  (flow analysis short form)");
             println!("  {Y}pktana capture <IFACE> ...{R}   (explicit form of the above)");
             println!();
             println!("{B}DESCRIPTION{R}");
@@ -1849,6 +1904,14 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("  Output contains one line per packet:");
             println!("  {DIM}  No.  |  Time           |  Bytes  |  Proto  |  Source  |  Dest  |  Info{R}");
             println!();
+            println!(
+                "  With {Y}--flow-analyze{R} or {Y}-a{R} flag, enables advanced flow analysis:"
+            );
+            println!("  • TCP Handshakes  — SYN → SYN-ACK → ACK tracking with RTT");
+            println!("  • TLS Handshakes  — ClientHello → ServerHello → Finished");
+            println!("  • DHCP DORA       — Discover → Offer → Request → Ack");
+            println!("  • DNS Queries     — Query/Response matching");
+            println!();
             println!("{B}ARGUMENTS{R}");
             println!("  {Y}IFACE{R}        Network interface name (eth0, ens3, bond0, etc.)");
             println!(
@@ -1858,6 +1921,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
                 "  {Y}BPF_FILTER{R}   Berkeley Packet Filter expression (same syntax as tcpdump)."
             );
             println!("               Quotes required for multi-word filters.");
+            println!("  {Y}-a, --flow-analyze{R}  Enable advanced flow analysis mode.");
             println!();
             println!("{B}BPF FILTER EXAMPLES{R}");
             println!("  tcp                          — TCP packets only");
@@ -1875,9 +1939,14 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("  pktana eth0                              # all traffic, unlimited");
             println!("  pktana eth0 50                           # first 50 packets");
             println!("  pktana eth0 tcp                          # TCP only");
+            println!("  pktana eth0 tcp -a                       # TCP with flow analysis");
             println!("  pktana eth0 100 udp                      # 100 UDP packets");
             println!("  pktana eth0 \"tcp port 443\"             # HTTPS, unlimited");
+            println!(
+                "  pktana eth0 \"tcp port 443\" -a          # HTTPS with TLS handshake tracking"
+            );
             println!("  pktana eth0 200 'host 8.8.8.8'          # 200 pkts to/from 8.8.8.8");
+            println!("  pktana eth0 'udp port 67' --flow-analyze  # DHCP DORA analysis");
             println!("  pktana interfaces                        # list available interfaces");
             println!();
             println!("{B}REQUIRES{R}");

@@ -12,4 +12,13 @@ fi
 install -m 0755 "./pktana" "${TARGET}"
 
 echo "Installed pktana to ${TARGET}"
-echo "Run: pktana --help"
+echo ""
+echo "========================================="
+echo "  Installation Complete!"
+echo "========================================="
+echo ""
+echo "Start the web UI:    pktana web 8080"
+echo "Install AI analysis: pktana ai install"
+echo "Check AI status:     pktana ai st"
+echo ""
+
