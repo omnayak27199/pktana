@@ -163,6 +163,10 @@ pub mod inner {
         bw_history: VecDeque<u64>,
         bw_last_bytes: u64,
         bw_last_tick: Instant,
+        // flow analysis
+        flow_analyze_mode: bool,
+        flow_analyzer: Option<pktana_core::FlowAnalyzer>,
+        flow_events: VecDeque<String>,
         // UI
         current_tab: Tab,
         flow_selected: usize,
@@ -206,6 +210,9 @@ pub mod inner {
                 bw_history: VecDeque::with_capacity(64),
                 bw_last_bytes: 0,
                 bw_last_tick: Instant::now(),
+                flow_analyze_mode: false,
+                flow_analyzer: None,
+                flow_events: VecDeque::with_capacity(100),
                 current_tab: Tab::Overview,
                 flow_selected: 0,
                 flow_table_state: fts,
@@ -237,6 +244,20 @@ pub mod inner {
                 }
                 self.bw_last_bytes = self.total_bytes;
                 self.bw_last_tick = Instant::now();
+            }
+
+            // Flow analysis if enabled
+            if self.flow_analyze_mode {
+                let dp = inspect(&pkt.data);
+                if let Some(ref mut analyzer) = self.flow_analyzer {
+                    let results = analyzer.analyze_packet(&dp);
+                    for result in results {
+                        self.flow_events.push_back(result);
+                        if self.flow_events.len() > 100 {
+                            self.flow_events.pop_front();
+                        }
+                    }
+                }
             }
 
             let Ok(parsed) = analyze_bytes(&pkt.data) else {
@@ -811,11 +832,16 @@ pub mod inner {
             format!(" pktana | PCAP: {} | {} pkts | ", fname, app.total_packets)
         } else {
             format!(
-                " pktana | {} | {} | {}/s {} | ",
+                " pktana | {} | {} | {}/s {} | {}",
                 app.interface,
                 elapsed,
                 fmt_bytes(bw_now * 4),
-                spark
+                spark,
+                if app.flow_analyze_mode {
+                    "[FLOW ANALYSIS ON]"
+                } else {
+                    ""
+                }
             )
         };
 
@@ -871,9 +897,9 @@ pub mod inner {
         } else {
             (
                 match app.current_tab {
-                    Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [1-5]Tab  [q]Quit".into(),
-                    Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [/]Filter  [q]Quit".into(),
-                    _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [s]Sort  [q]Quit".into(),
+                    Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalyze  [1-5]Tab  [q]Quit".into(),
+                    Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [a]FlowAnalyze  [/]Filter  [q]Quit".into(),
+                    _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalyze  [s]Sort  [q]Quit".into(),
                 },
                 Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD)
             )

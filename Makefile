@@ -89,21 +89,31 @@ fmt:
 ## Run clippy linter
 clippy:
 	@echo "==> Running clippy ..."
-	cargo clippy --all-targets --features pcap,tui -- -D warnings
+	cargo clippy --all-targets --features pcap,tui,ai -- -D warnings
 
 ## Run tests
 test:
 	@echo "==> Running tests ..."
-	cargo test --all --features pcap,tui
+	cargo test --all --features pcap,tui,ai
 
 ## Build the Rust release binary only
 binary: _check-cargo $(BINARY)
 
+## Build pktana with AI support (requires Ollama)
+binary-ai:
+	@echo "==> Compiling pktana with AI support ..."
+	@echo "    Note: Requires Ollama to be installed for AI analysis"
+	cargo build --release --features pcap,tui,ai -p pktana-cli
+	@echo "✅ pktana built with AI support!"
+	@echo "    Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
+	@echo "    Download model: ollama pull llama3.2:1b"
+
 $(BINARY):
 	@echo "==> Compiling pktana (debug check) ..."
-	cargo build --features pcap,tui -p pktana-cli
-	@echo "==> Compiling pktana (release) ..."
-	cargo build --release --features pcap,tui -p pktana-cli
+	cargo build --features pcap,tui,ai -p pktana-cli
+	@echo "==> Compiling pktana (release with AI) ..."
+	cargo build --release --features pcap,tui,ai -p pktana-cli
+	@echo "    ✓ AI support enabled (requires Ollama for analysis)"
 
 $(TARBALL): $(BINARY)
 	@echo "==> Creating source tarball for rpmbuild ..."

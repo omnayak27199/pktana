@@ -1,0 +1,168 @@
+name: Build & Upload Release Artifacts
+
+on:
+  release:
+    types: [created, published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to upload artifacts to (e.g. v0.5.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VERSION: "0.5.0"
+  RELEASE_NUM: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # RPM builds (RHEL/Rocky/Alma 9 + RHEL/CentOS 7)
+  # ---------------------------------------------------------------------------
+  rpm:
+    name: RPM (${{ matrix.os_type }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_type: el9
+            image: rockylinux:9
+          - os_type: el7
+            image: centos:7
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install build deps (el9)
+        if: matrix.os_type == 'el9'
+        run: |
+          dnf install -y epel-release dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y --allowerasing gcc libpcap-devel rpm-build make git curl tar gzip ca-certificates
+
+      - name: Install build deps (el7)
+        if: matrix.os_type == 'el7'
+        run: |
+          sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+          yum install -y gcc libpcap-devel rpm-build make git curl tar gzip ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build RPM
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # Override release.conf OS_TYPE for this matrix entry
+          sed -i "s/^OS_TYPE=.*/OS_TYPE=${{ matrix.os_type }}/" release.conf
+          make pktana
+          mkdir -p dist/upload
+          find dist/rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/upload/ \;
+          ls -la dist/upload/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.os_type }}
+          path: dist/upload/*.rpm
+
+  # ---------------------------------------------------------------------------
+  # .deb + tar.gz builds (Ubuntu 22.04, 24.04, Debian 12)
+  # ---------------------------------------------------------------------------
+  deb:
+    name: deb (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu22.04
+            image: ubuntu:22.04
+          - label: ubuntu24.04
+            image: ubuntu:24.04
+          - label: debian12
+            image: debian:12
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install build deps
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            gcc libpcap-dev make git curl ca-certificates \
+            dpkg-dev fakeroot pkg-config build-essential
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build release binary
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo build --release --features pcap,tui
+
+      - name: Build .deb with cargo-deb
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo install cargo-deb --locked
+          mkdir -p dist
+          cd crates/pktana-cli
+          cargo deb --no-build --no-strip --output "../../dist/pktana_${VERSION}_amd64_${{ matrix.label }}.deb"
+
+      - name: Build tarball
+        run: |
+          mkdir -p dist
+          tar -czf "dist/pktana-${VERSION}-${{ matrix.label }}-x86_64.tar.gz" -C target/release pktana
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.label }}
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # Publish all artifacts to the GitHub Release
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish artifacts to release
+    needs: [rpm, deb]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p upload
+          find artifacts -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' \) -exec cp {} upload/ \;
+          ls -la upload/
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: upload/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

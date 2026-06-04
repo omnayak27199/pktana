@@ -63,13 +63,13 @@ case "$OS" in
         ;;
     ubuntu*)
         IMAGE="ubuntu:${OS#ubuntu}"
-        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl"
-        BUILD_CMD="cargo build --release --features pcap,tui"
+        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl dpkg-dev fakeroot ca-certificates"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.4.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.4.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     debian*)
         IMAGE="debian:${OS#debian}"
-        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl"
-        BUILD_CMD="cargo build --release --features pcap,tui"
+        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl dpkg-dev fakeroot ca-certificates"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.4.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.4.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     *)
         echo "Unsupported OS option: $OS"

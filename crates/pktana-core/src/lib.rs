@@ -7,6 +7,7 @@ pub mod connections;
 pub mod dpi;
 pub mod ethtool;
 pub mod flow;
+pub mod flow_analyzer;
 pub mod geoip;
 pub mod nic;
 pub mod packet;
@@ -22,6 +23,11 @@ pub use connections::{list_connections, Connection};
 pub use dpi::{hex_dump, inspect, ArpDetail, DeepPacket, VlanTag};
 pub use ethtool::{get_ethtool_report, EthtoolReport, QueueIrq};
 pub use flow::{FlowKey, FlowRecord, FlowTable};
+pub use flow_analyzer::{
+    DhcpDoraAnalysis, DhcpDoraState, DnsTransactionAnalysis, FlowAnalyzer, FlowAnalyzerSummary,
+    FlowId, Protocol, TcpHandshakeAnalysis, TcpHandshakeState, TlsHandshakeAnalysis,
+    TlsHandshakeState,
+};
 pub use geoip::{lookup as geoip_lookup, lookup_str as geoip_lookup_str, GeoInfo};
 pub use nic::{get_nic_dataplane, get_nic_info, list_nics, BypassMode, NicDataplane, NicInfo};
 pub use packet::format_bytes;
