@@ -10,6 +10,58 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.0] — 2026-06-04
+
+### Added
+
+#### Web UI — Multi-Window Architecture
+- **Per-interface windows**: each opened interface lives in its own Chrome-tab-style window with its own packet store, flow tables, protocols, and hardware tabs. Many windows can run captures in parallel without interfering with each other.
+- **Host-scoped activity bar**: the left rail now only carries host-level views (Server Info, PCAP Analyzer, Connections, Terminal); all per-interface views moved into the windows.
+- **No auto-start on open**: opening an interface window does not start a capture — Start Capture must be clicked explicitly per window.
+- **Per-window Pause / Resume**: pause stops only the active interface's session; the Resume button only renders inside the paused window.
+- **Per-window Close (×)**: cleanly stops the backing capture session and removes the tab.
+- **Independent SSE sessions per window**, tracked via DashMap on the backend with full session lifecycle endpoints.
+
+#### Web UI — Filters & Tags
+- One-click **handshake tag filters** on the toolbar: TCP SYN, TLS Handshake, DNS Query, DHCP DORA.
+- Persistent protocol / search / format toolbar per window.
+
+#### Web UI — Visual Polish
+- **Light & dark theme** overhaul: every button, table header, form input, detail-header and active state now meets ≥ 3:1 contrast on both themes.
+- **Hardware icon** per interface in the window tab — rendered via attribute-selector CSS so it survives across theme changes.
+- **Rounded "pktana" wordmark** in Nunito 800 with orange gradient (replaces the prior bitmap logo).
+
+#### Distribution & Packaging
+- **Native `.deb` packages** for Ubuntu 22.04, Ubuntu 24.04, and Debian 12, produced via `cargo-deb` (`[package.metadata.deb]` block in `crates/pktana-cli/Cargo.toml`).
+- **RPM matrix** for RHEL/Rocky/Alma 7 (`el7`) and 9 (`el9`), produced via `rpmbuild` against `deploy/centos/pktana.spec`.
+- **Signed binary tarballs** for every distro target.
+- **Automated release workflow** at [`.github/workflows/release.yml`](.github/workflows/release.yml): triggered on GitHub Release creation (or `workflow_dispatch`), builds the full RPM + DEB + tarball matrix in parallel and uploads every artifact to the release page.
+
+#### Landing Page
+- New **download grid** in `index.html` with six cards (el9 RPM, el7 RPM, Ubuntu 22.04 .deb + tarball, Ubuntu 24.04 .deb + tarball, Debian 12 .deb + tarball), all linking directly to the latest GitHub Release artifacts.
+- Strict `/`-only HTTP routing — any unknown path or query returns 404 instead of falling through.
+
+### Changed
+- Workspace version bumped to **0.5.0** across `Cargo.toml`, `pktana-cli` dep on `pktana-core`, `release.conf`, `install.sh`, `scripts/build-rpm.sh`, `scripts/package-centos.sh`, `.github/workflows/release.yml`, `deploy/centos/pktana.spec`, `index.html`, `README.md`.
+- README rewritten to remove the duplicated v0.1.0 legacy section and document the multi-window Web UI as a first-class feature.
+
+### Fixed
+- Hardware-icon class was being stripped after re-render; now applied via attribute selector + `data-session-scope="true"` so it persists.
+- Pause from one window no longer pauses sibling windows; Resume only appears for the paused interface.
+- Dark-theme low-contrast issues on `.btn`, `.form-input`, table headers, and `.detail-header`.
+
+---
+
+## [0.4.0] — 2026-05-15
+
+### Added
+- **Web UI server** (`pktana web [PORT]`) with embedded HTTP + Server-Sent-Events streaming.
+- Live interface dashboard, interactive packet table, click-to-expand DPI inspector, connection explorer, statistics dashboard, system info panel.
+- REST endpoints for NIC / route / connections / GeoIP / ethtool / dataplane.
+- Inline pcap reader: `GET /api/inspect?session=…&read=/path/file.pcap`.
+
+---
+
 ## [0.3.0] — 2026-04-29
 
 ### Added

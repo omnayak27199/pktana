@@ -1,6 +1,6 @@
 # Version and release are injected by the Makefile via --define.
 # Defaults below are used only when building this spec file directly.
-%{!?pkg_version: %global pkg_version 0.3.0}
+%{!?pkg_version: %global pkg_version 0.5.0}
 %{!?pkg_release: %global pkg_release 1}
 
 # The binary is pre-compiled; disable debuginfo/debugsource sub-packages.
@@ -49,6 +49,15 @@ install -m 0644 README.md %{buildroot}/usr/share/doc/%{name}/README.md
 %files
 /usr/local/bin/pktana
 /usr/share/doc/%{name}/README.md
+
+%post
+echo "========================================="
+echo "  pktana Installation Complete!"
+echo "========================================="
+echo ""
+echo "For Help  : Just type pktana"
+echo "Reachout for suggestion or bug at pktana.online"
+echo ""
 
 %changelog
 * Fri Apr 24 2026 Omprakash <omprakash@example.com> - 0.1.0-1
