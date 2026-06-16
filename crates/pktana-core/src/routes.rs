@@ -67,7 +67,8 @@ fn read_ipv4_routes() -> Vec<RouteEntry> {
         let dest_n = u32::from_str_radix(cols[1], 16).unwrap_or(0);
         let gw_n = u32::from_str_radix(cols[2], 16).unwrap_or(0);
         let mask_n = u32::from_str_radix(cols[7], 16).unwrap_or(0);
-        let metric = u32::from_str_radix(cols[6], 16).unwrap_or(0);
+        // /proc/net/route prints Metric as decimal (%d), not hex
+        let metric = cols[6].parse::<u32>().unwrap_or(0);
 
         let dest_ip = Ipv4Addr::from(dest_n.to_le_bytes());
         let gw_ip = Ipv4Addr::from(gw_n.to_le_bytes());

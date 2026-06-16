@@ -47,7 +47,27 @@ pub fn list_connections() -> Vec<Connection> {
         }
     }
 
+    // Sort: ESTABLISHED first, LISTEN second, others by proto + state
+    conns.sort_by(|a, b| {
+        state_sort_key(a.state)
+            .cmp(&state_sort_key(b.state))
+            .then(a.proto.cmp(b.proto))
+            .then(a.local_port.cmp(&b.local_port))
+    });
     conns
+}
+
+fn state_sort_key(state: &str) -> u8 {
+    match state {
+        "ESTABLISHED" => 0,
+        "LISTEN" => 1,
+        "ACTIVE" => 2,
+        "SYN_SENT" | "SYN_RECV" => 3,
+        "CLOSE_WAIT" | "FIN_WAIT1" | "FIN_WAIT2" => 4,
+        "TIME_WAIT" | "CLOSING" | "LAST_ACK" => 5,
+        "CLOSE" => 6,
+        _ => 7,
+    }
 }
 
 // ─── internal ────────────────────────────────────────────────────────────────
@@ -122,7 +142,8 @@ fn tcp_state(code: u8, proto: &'static str) -> &'static str {
     if proto.starts_with("UDP") {
         return match code {
             7 => "CLOSE",
-            _ => "-",
+            10 => "LISTEN",
+            _ => "ACTIVE",
         };
     }
     match code {
