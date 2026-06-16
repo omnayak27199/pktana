@@ -5,7 +5,7 @@ pub mod inner {
     use dashmap::DashMap;
     use pktana_core::{
         build_socket_process_map, geoip_lookup_str, get_ethtool_report, get_nic_dataplane,
-        get_nic_info, inspect, list_connections, list_nics, list_routes, CaptureConfig,
+        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes, CaptureConfig,
         LinuxCaptureEngine, ProcessInfo, SocketId,
     };
     use std::io::{Read, Write};
@@ -570,7 +570,7 @@ pub mod inner {
     }
 
     fn handle_client(stream: &mut std::net::TcpStream) {
-        let mut buffer = [0; 1024];
+        let mut buffer = [0; 8192];
         if let Ok(bytes_read) = stream.read(&mut buffer) {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
 
@@ -587,7 +587,7 @@ pub mod inner {
                     // Check if interface is UP by reading /sys/class/net/{name}/operstate
                     let operstate_path = format!("/sys/class/net/{}/operstate", iface.name);
                     let is_up = std::fs::read_to_string(&operstate_path)
-                        .map(|s| s.trim() == "up" || s.trim() == "unknown")
+                        .map(|s| matches!(s.trim(), "up" | "unknown" | "dormant"))
                         .unwrap_or(false);
                     json.push_str(&format!(
                         r#"{{"name":"{}","description":"{}","address":"{}","is_up":{}}}"#,
@@ -1186,11 +1186,12 @@ pub mod inner {
                         }
                         let tags_str = tags.join(",");
 
-                        // Removed hex dump from SSE stream to reduce payload size
-                        // Hex dump can be added to details view on demand if needed
+                        // Hex dump: first 128 bytes (8 lines) for on-click display
+                        let hex_text = hex_dump(&pkt.data, pkt.data.len().min(128)).join("\n");
+
                         let msg = format!(
-                            "data: {{\"ts_sec\":{}, \"ts_usec\":{}, \"summary\":\"{}\", \"len\": {}, \"risk\": {}, \"category\": \"{}\", \"proto\": \"{}\", \"src\":\"{}\", \"dst\":\"{}\", \"tags\":\"{}\", \"details\":\"{}\"}}\n\n",
-                            pkt.timestamp_sec, pkt.timestamp_usec, escape_json(&dp.one_liner()), dp.frame_len, risk, escape_json(dp.app_category.as_deref().unwrap_or("Unknown")), escape_json(proto), escape_json(&src), escape_json(&dst), tags_str, escape_json(&detail_text)
+                            "data: {{\"ts_sec\":{}, \"ts_usec\":{}, \"summary\":\"{}\", \"len\": {}, \"risk\": {}, \"category\": \"{}\", \"proto\": \"{}\", \"src\":\"{}\", \"dst\":\"{}\", \"tags\":\"{}\", \"details\":\"{}\", \"hex\":\"{}\"}}\n\n",
+                            pkt.timestamp_sec, pkt.timestamp_usec, escape_json(&dp.one_liner()), dp.frame_len, risk, escape_json(dp.app_category.as_deref().unwrap_or("Unknown")), escape_json(proto), escape_json(&src), escape_json(&dst), tags_str, escape_json(&detail_text), escape_json(&hex_text)
                         );
 
                         // Update session stats if session_id is present
@@ -1232,6 +1233,42 @@ pub mod inner {
                         }
                     }
                 }
+            } else if request.starts_with("GET /api/wiki?page=") {
+                let start = "GET /api/wiki?page=".len();
+                let end = request[start..].find(' ').unwrap_or(request.len() - start) + start;
+                let page = request[start..end].trim_end_matches(" HTTP/1.1");
+                let content: Option<&str> = match page {
+                    "overview" | "01-overview" => Some(WIKI_OVERVIEW),
+                    "installation" | "02-installation" => Some(WIKI_INSTALLATION),
+                    "cli-reference" | "03-cli-reference" => Some(WIKI_CLI_REF),
+                    "tui-guide" | "04-tui-guide" => Some(WIKI_TUI),
+                    "web-ui-guide" | "05-web-ui-guide" => Some(WIKI_WEBUI),
+                    "dpi-engine" | "06-dpi-engine" => Some(WIKI_DPI),
+                    "flow-analyzer" | "07-flow-analyzer" => Some(WIKI_FLOW),
+                    "api-reference" | "08-api-reference" => Some(WIKI_API),
+                    "library-api" | "09-library-api" => Some(WIKI_LIB),
+                    "protocols" | "10-protocols" => Some(WIKI_PROTO),
+                    "architecture" | "11-architecture" => Some(WIKI_ARCH),
+                    "contributing" | "12-contributing" => Some(WIKI_CONTRIB),
+                    _ => None,
+                };
+                if let Some(md) = content {
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        md.len(), md
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                } else {
+                    let response = "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{\"error\":\"wiki page not found\"}";
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            } else if request.starts_with("GET /api/wiki ") {
+                let pages = r#"[{"id":"overview","title":"Overview"},{"id":"installation","title":"Installation"},{"id":"cli-reference","title":"CLI Reference"},{"id":"tui-guide","title":"TUI Guide"},{"id":"web-ui-guide","title":"Web UI Guide"},{"id":"dpi-engine","title":"DPI Engine"},{"id":"flow-analyzer","title":"Flow Analyzer"},{"id":"api-reference","title":"API Reference"},{"id":"library-api","title":"Library API (Rust)"},{"id":"protocols","title":"Protocol Coverage"},{"id":"architecture","title":"Architecture"},{"id":"contributing","title":"Contributing"}]"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    pages.len(), pages
+                );
+                let _ = stream.write_all(response.as_bytes());
             } else if request.starts_with("GET /logo.png ") {
                 // Serve logo.png
                 if let Ok(img_data) = std::fs::read("logo.png") {
@@ -1274,6 +1311,19 @@ pub mod inner {
             }
         }
     }
+
+    const WIKI_OVERVIEW: &str = include_str!("../../../wiki/01-overview.md");
+    const WIKI_INSTALLATION: &str = include_str!("../../../wiki/02-installation.md");
+    const WIKI_CLI_REF: &str = include_str!("../../../wiki/03-cli-reference.md");
+    const WIKI_TUI: &str = include_str!("../../../wiki/04-tui-guide.md");
+    const WIKI_WEBUI: &str = include_str!("../../../wiki/05-web-ui-guide.md");
+    const WIKI_DPI: &str = include_str!("../../../wiki/06-dpi-engine.md");
+    const WIKI_FLOW: &str = include_str!("../../../wiki/07-flow-analyzer.md");
+    const WIKI_API: &str = include_str!("../../../wiki/08-api-reference.md");
+    const WIKI_LIB: &str = include_str!("../../../wiki/09-library-api.md");
+    const WIKI_PROTO: &str = include_str!("../../../wiki/10-protocols.md");
+    const WIKI_ARCH: &str = include_str!("../../../wiki/11-architecture.md");
+    const WIKI_CONTRIB: &str = include_str!("../../../wiki/12-contributing.md");
 
     const HTML_TEMPLATE: &str = r##"
 <!DOCTYPE html>
@@ -1378,14 +1428,35 @@ pub mod inner {
         .pane-left { flex: 6; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); position: relative; overflow: hidden; display: flex; flex-direction: column; transition: box-shadow 0.3s; }
         .pane-left:hover { box-shadow: var(--shadow-xl); }
         #tableContainer { flex: 1; overflow: auto; }
-        .pane-right { flex: 4; display: flex; flex-direction: column; gap: 18px; min-width: 360px; overflow: hidden; }
+        .pane-right { flex: 4; display: flex; flex-direction: column; gap: 18px; min-width: 360px; min-height: 0; overflow: visible; }
         
         .section-label { font-weight: 800; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: -8px; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .pane-detail { flex: 3; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow); transition: all 0.3s; }
+        .pane-detail { flex: 3; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow); transition: all 0.3s; }
         .pane-detail:hover { box-shadow: var(--shadow-lg); }
-        .pane-hex { flex: 2; background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow-lg); transition: all 0.3s; }
+        .pane-hex { flex: 2; min-height: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow-lg); transition: all 0.3s; }
         .pane-hex:hover { box-shadow: var(--shadow-xl); border-color: var(--primary); }
-        
+        .docs-nav-item { display:block; width:100%; text-align:left; padding:8px 16px; font-size:13px; color:var(--text-muted); background:none; border:none; cursor:pointer; border-radius:6px; margin:1px 4px; transition:all 0.2s; font-family:inherit; }
+        .docs-nav-item:hover { background:var(--sidebar-hover); color:var(--text-main); }
+        .docs-nav-item.active { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:#fff; font-weight:600; }
+        .md-content h1 { font-size:1.8em; font-weight:700; color:var(--text-main); margin:0 0 16px; padding-bottom:10px; border-bottom:2px solid var(--border); }
+        .md-content h2 { font-size:1.3em; font-weight:700; color:var(--text-main); margin:28px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+        .md-content h3 { font-size:1.1em; font-weight:600; color:var(--primary); margin:20px 0 8px; }
+        .md-content h4 { font-size:1em; font-weight:600; color:var(--text-muted); margin:16px 0 6px; }
+        .md-content p { margin:0 0 12px; }
+        .md-content code { background:var(--accent-light,rgba(99,102,241,0.1)); color:#e879f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.88em; }
+        .md-content pre { background:#0f172a; border:1px solid var(--border); border-radius:8px; padding:14px 18px; overflow-x:auto; margin:12px 0; }
+        .md-content pre code { background:none; color:#94a3b8; font-size:0.85em; padding:0; }
+        .md-content ul, .md-content ol { margin:0 0 12px 20px; }
+        .md-content li { margin:4px 0; }
+        .md-content table { border-collapse:collapse; width:100%; margin:14px 0; font-size:13px; }
+        .md-content th { background:var(--accent-light,rgba(99,102,241,0.08)); color:var(--text-main); font-weight:700; padding:8px 12px; border:1px solid var(--border); text-align:left; }
+        .md-content td { padding:7px 12px; border:1px solid var(--border); color:var(--text-main); }
+        .md-content tr:nth-child(even) td { background:rgba(148,163,184,0.04); }
+        .md-content blockquote { border-left:4px solid var(--primary); padding:8px 14px; margin:12px 0; color:var(--text-muted); background:var(--accent-light,rgba(99,102,241,0.06)); border-radius:0 6px 6px 0; }
+        .md-content hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
+        .md-content a { color:var(--primary); text-decoration:underline; }
+        .md-content strong { color:var(--text-main); font-weight:700; }
+
         .ws-table { min-width: 100%; border-collapse: collapse; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; table-layout: auto; }
         .ws-table th { background: linear-gradient(180deg, #f8fafc, #f1f5f9); color: var(--text-main); border-bottom: 2px solid var(--primary); border-right: 1px solid var(--border); padding: 8px 10px; text-align: left; position: sticky; top: 0; z-index: 10; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px; font-weight: 700; box-shadow: var(--shadow-sm); }
         .ws-table td { border-bottom: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; padding: 6px 10px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
@@ -1422,7 +1493,7 @@ pub mod inner {
         .win-tab { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 10px 18px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-muted); transition: all .15s; }
         .win-tab:hover { color: var(--text); background: var(--surface); }
         .win-tab.active { color: var(--primary); border-bottom-color: var(--primary); background: var(--surface); }
-        .activity-icon.hidden-session-tab { display: none !important; }
+        .activity-icon.hidden-session-tab { display: none; }
         .scroll-toast:hover { opacity: 1; transform: translateX(-50%) translateY(-3px) scale(1.02); background: linear-gradient(135deg, #0f172a, #000000); box-shadow: 0 8px 20px rgba(0,0,0,0.3); border-color: var(--primary); }
         
         .statusbar { background: var(--surface); border-top: 2px solid var(--border); padding: 10px 24px; font-size: 13px; font-weight: 700; color: var(--text-muted); display: flex; justify-content: space-between; flex-shrink: 0; box-shadow: 0 -2px 8px rgba(0,0,0,0.05); backdrop-filter: blur(10px); }
@@ -1532,14 +1603,6 @@ pub mod inner {
             localStorage.setItem('pktana-theme', isDark ? 'dark' : 'light');
         }
 
-        function stopDaemon() {
-            if (confirm('Stop the pktana daemon?')) {
-                fetch('/api/shutdown', { method: 'POST' })
-                    .then(() => alert('Daemon stopped'))
-                    .catch(e => alert('Error: ' + e));
-            }
-        }
-
         function isSessionScopedTab(tabId) {
             return tabId === 'dashboard' || tabId === 'flows' || tabId === 'stats' || tabId === 'hardware';
         }
@@ -1578,11 +1641,12 @@ pub mod inner {
                 const res = await fetch('/api/server_info');
                 const data = await res.json();
                 const formatBytes = (b) => { const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; };
+                const formatUptime = (s) => { s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sc=s%60; return (d?d+'d ':'')+(h?h+'h ':'')+(m?m+'m ':'')+sc+'s'; };
                 const kvRow = (k,v) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #334155;"><strong>${k}:</strong><span>${v}</span></div>`;
-                document.getElementById('serverContent').innerHTML = 
+                document.getElementById('serverContent').innerHTML =
                     kvRow('Hostname', data.hostname) +
                     kvRow('Kernel Version', data.version) +
-                    kvRow('Uptime', formatBytes(parseFloat(data.uptime_sec) * 1024).replace('B','s').replace('KB','mins').replace('MB','hours')) +
+                    kvRow('Uptime', formatUptime(parseFloat(data.uptime_sec))) +
                     kvRow('Total Memory', formatBytes(parseInt(data.mem_total_kb) * 1024));
             } catch (e) { document.getElementById('serverContent').innerHTML = 'Error loading server info'; }
         }
@@ -1613,12 +1677,6 @@ pub mod inner {
             document.getElementById('currentIface').value = ifaceName;
             const bpf = document.getElementById('bpfFilter') ? document.getElementById('bpfFilter').value : '';
             addSession(ifaceName, bpf, false);
-            switchTab('dashboard');
-        }
-
-        function viewSession(sessionId, ifaceName) {
-            // Early stub - will be overridden by full implementation
-            document.getElementById('currentIface').value = ifaceName;
             switchTab('dashboard');
         }
 
@@ -1736,48 +1794,6 @@ pub mod inner {
                 </svg>
                 <div class="icon-label">PCAP File</div>
             </div>
-            <div class="activity-icon hidden-session-tab" onclick="switchTab('dashboard')" title="Live Capture (per session)" data-session-scope="true">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-                </svg>
-                <div class="icon-label">Live Capture</div>
-            </div>
-            <div class="activity-icon hidden-session-tab" onclick="switchTab('flows')" title="Network Flows (per session)" data-session-scope="true">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="6" height="6" rx="1"></rect>
-                    <rect x="15" y="3" width="6" height="6" rx="1"></rect>
-                    <rect x="3" y="15" width="6" height="6" rx="1"></rect>
-                    <rect x="15" y="15" width="6" height="6" rx="1"></rect>
-                    <path d="M9 6h6"></path>
-                    <path d="M9 18h6"></path>
-                    <path d="M6 9v6"></path>
-                    <path d="M18 9v6"></path>
-                </svg>
-                <div class="icon-label">Network Flows</div>
-            </div>
-            <div class="activity-icon hidden-session-tab" onclick="switchTab('stats')" title="Statistics (per session)" data-session-scope="true">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="20" x2="18" y2="10"></line>
-                    <line x1="12" y1="20" x2="12" y2="4"></line>
-                    <line x1="6" y1="20" x2="6" y2="14"></line>
-                </svg>
-                <div class="icon-label">Statistics</div>
-            </div>
-            <div class="activity-icon hidden-session-tab" onclick="switchTab('hardware')" title="Hardware (per session)" data-session-scope="true">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-                    <rect x="9" y="9" width="6" height="6"></rect>
-                    <line x1="9" y1="1" x2="9" y2="4"></line>
-                    <line x1="15" y1="1" x2="15" y2="4"></line>
-                    <line x1="9" y1="20" x2="9" y2="23"></line>
-                    <line x1="15" y1="20" x2="15" y2="23"></line>
-                    <line x1="20" y1="9" x2="23" y2="9"></line>
-                    <line x1="20" y1="14" x2="23" y2="14"></line>
-                    <line x1="1" y1="9" x2="4" y2="9"></line>
-                    <line x1="1" y1="14" x2="4" y2="14"></line>
-                </svg>
-                <div class="icon-label">Hardware</div>
-            </div>
             <div class="activity-icon" onclick="switchTab('connections')" title="Connections">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="18" cy="5" r="3"></circle>
@@ -1795,7 +1811,41 @@ pub mod inner {
                 </svg>
                 <div class="icon-label">Terminal</div>
             </div>
-            
+            <div class="activity-icon" onclick="switchTab('routes')" title="Routing Table">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 12 3 18"></polyline>
+                    <polyline points="21 6 19 12 21 18"></polyline>
+                    <line x1="8" y1="6" x2="16" y2="6"></line>
+                    <line x1="8" y1="12" x2="16" y2="12"></line>
+                    <line x1="8" y1="18" x2="16" y2="18"></line>
+                </svg>
+                <div class="icon-label">Routes</div>
+            </div>
+            <div class="activity-icon" onclick="switchTab('nics')" title="Network Interfaces (NIC Stats)">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="2" y="6" width="20" height="12" rx="2"></rect>
+                    <circle cx="8" cy="12" r="1.5" fill="#ff8c42"></circle>
+                    <circle cx="12" cy="12" r="1.5" fill="#ff8c42"></circle>
+                    <circle cx="16" cy="12" r="1.5" fill="#ff8c42"></circle>
+                </svg>
+                <div class="icon-label">NICs</div>
+            </div>
+            <div class="activity-icon" onclick="switchTab('geoip')" title="GeoIP Lookup">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="2" y1="12" x2="22" y2="12"></line>
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+                <div class="icon-label">GeoIP</div>
+            </div>
+            <div class="activity-icon" onclick="switchTab('docs')" title="Documentation">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                </svg>
+                <div class="icon-label">Docs</div>
+            </div>
+
             <!-- Bottom Controls -->
             <div class="activity-bar-bottom">
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Light/Dark Theme">Dark</button>
@@ -1827,7 +1877,7 @@ pub mod inner {
                 </div>
                 <div class="card" style="grid-column: span 2;">
                     <div class="card-title" style="font-size:13px; font-weight:600; color:var(--text-muted); margin-bottom:12px;">SELECT INTERFACE TO CAPTURE:</div>
-                    <div id="serverInterfacesList" style="display:flex; flex-wrap:wrap; gap:8px; min-height:100px;">Loading interfaces...</div>
+                    <div id="serverInterfacesList" style="display:flex; flex-wrap:wrap; gap:8px; min-height:100px; max-height:240px; overflow-y:auto;">Loading interfaces...</div>
                 </div>
             </div>
             
@@ -1840,7 +1890,7 @@ pub mod inner {
                         <button class="btn" onclick="loadSessions()">Refresh</button>
                     </div>
                 </div>
-                <div id="sessionsList" style="overflow-x:auto; min-height:200px;">
+                <div id="sessionsList" style="overflow-x:auto; overflow-y:auto; min-height:200px; max-height:360px;">
                     <div style="text-align:center; padding:40px; color:var(--text-muted);">
                         <div style="font-size:16px; margin-bottom:10px; font-weight:600;">No Active Sessions</div>
                         <div>Click "New Session" to start monitoring an interface.</div>
@@ -1921,6 +1971,10 @@ pub mod inner {
                     <span class="toolbar-label">Search</span>
                     <input type="text" id="displayFilter" class="form-input" placeholder="Search packets..." onkeyup="applyDisplayFilter()" style="width: 180px;">
                 </div>
+                <div class="toolbar-group">
+                    <span class="toolbar-label">BPF Filter</span>
+                    <input type="text" id="bpfFilter" class="form-input" placeholder="e.g. tcp port 80" title="Capture-time BPF filter (applied on next start)" style="width: 160px;">
+                </div>
                 <div class="toolbar-separator"></div>
                 <div class="toolbar-group" style="gap: 4px;">
                     <button class="btn" onclick="toggleLayoutDir()" title="Toggle Split Direction" style="padding: 8px 12px;">⇄</button>
@@ -1955,9 +2009,12 @@ pub mod inner {
                         <div class="section-label" style="margin-bottom:0;">Packet Details</div>
                     </div>
                     <div class="pane-detail" id="packetDetail">Select a packet to view its complete DPI decode layer by layer...</div>
-                    <div id="packetHexWrapper" style="display:none; flex-direction:column; flex:2;">
-                        <div class="section-label">Hex Dump</div>
-                        <div class="pane-hex" id="packetHex" style="flex:1;">0000  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00  ................</div>
+                    <div id="packetHexWrapper" style="display:none; flex-direction:column; flex:2; margin-top:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <div class="section-label" style="margin-bottom:0;">Hex Dump</div>
+                            <span id="hexByteInfo" style="font-size:11px; color:var(--text-muted); font-weight:600;"></span>
+                        </div>
+                        <div class="pane-hex" id="packetHex" style="flex:1; padding:14px 16px;"></div>
                     </div>
                 </div>
             </div>
@@ -1976,10 +2033,10 @@ pub mod inner {
                         <input type="text" id="flowSearch" class="form-input" placeholder="Search flows..." onkeyup="filterTable('flowContent', this.value)" style="padding: 4px 8px;">
                     </div>
                 </div>
-                <div style="overflow-x:auto;">
+                <div style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 200px);">
                     <table class="settings-table">
                         <thead>
-                            <tr><th>Proto</th><th>Source</th><th>Destination</th><th>Category</th><th>Packets</th><th>Bytes</th><th style="width:100px;">Actions</th></tr>
+                            <tr><th>Proto</th><th>Source</th><th>Destination</th><th>Category</th><th>Packets</th><th>Bytes</th></tr>
                         </thead>
                         <tbody id="flowContent"></tbody>
                     </table>
@@ -2027,7 +2084,7 @@ pub mod inner {
                         <button class="btn" onclick="loadConnections()">Refresh</button>
                     </div>
                 </div>
-                <div id="connContent" style="overflow-x:auto;">Loading...</div>
+                <div id="connContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
@@ -2041,7 +2098,7 @@ pub mod inner {
                         <button class="btn" onclick="loadRoutes()">Refresh</button>
                     </div>
                 </div>
-                <div id="routeContent" style="overflow-x:auto;">Loading...</div>
+                <div id="routeContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
@@ -2055,7 +2112,7 @@ pub mod inner {
                         <button class="btn" onclick="loadNics()">Refresh</button>
                     </div>
                 </div>
-                <div id="nicContent" style="overflow-x:auto;">Loading...</div>
+                <div id="nicContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
@@ -2096,6 +2153,20 @@ pub mod inner {
                 <div style="background:#0f172a; border-top:1px solid #334155; padding:6px 16px; font-size:11px; color:#64748b; display:flex; justify-content:space-between;">
                     <span>Full Linux terminal with xterm.js | Copy: <strong style="color:#94a3b8;">Ctrl+Shift+C</strong> | Paste: <strong style="color:#94a3b8;">Ctrl+Shift+V</strong></span>
                     <span id="xtermStatus">Ready</span>
+                </div>
+            </div>
+        </div>
+        <!-- Docs Panel -->
+        <div id="docs" class="panel">
+            <div style="display:flex; height:calc(100vh - 110px); gap:0; overflow:hidden;">
+                <div id="docsNav" style="width:210px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border); overflow-y:auto; padding:8px 0;">
+                    <div style="padding:10px 16px 6px; font-size:10px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">Documentation</div>
+                </div>
+                <div id="docsContent" style="flex:1; overflow-y:auto; padding:28px 36px; font-family:inherit; line-height:1.75; color:var(--text-main);">
+                    <div style="color:var(--text-muted); text-align:center; padding-top:80px;">
+                        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="display:block; margin:0 auto 16px; opacity:0.3;"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                        <p style="font-size:16px;">Select a page from the sidebar to read the documentation.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2141,7 +2212,7 @@ pub mod inner {
                 status: 'active', paused: false,
                 packetStore: [], flows: {}, protoStats: {}, talkerStats: {}, geoCache: {},
                 packetCount: 0, byteCount: 0, baseTs: null,
-                eventSource: null
+                eventSource: null, autoScroll: true
             };
         }
 
@@ -2166,6 +2237,7 @@ pub mod inner {
             eventSource = S.eventSource;
             isCapturing = (S.status === 'active');
             isPaused = S.paused;
+            autoScroll = S.autoScroll !== undefined ? S.autoScroll : true;
             packetBuffer = [];
             const ifaceEl = document.getElementById('currentIface');
             if (ifaceEl) ifaceEl.value = S.iface;
@@ -2329,15 +2401,18 @@ pub mod inner {
             const isAtBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 30;
             if (!isAtBottom && autoScroll) {
                 autoScroll = false;
+                if (activeId && Sessions[activeId]) Sessions[activeId].autoScroll = false;
                 document.getElementById('resumeScrollBtn').style.display = 'block';
             } else if (isAtBottom && !autoScroll) {
                 autoScroll = true;
+                if (activeId && Sessions[activeId]) Sessions[activeId].autoScroll = true;
                 document.getElementById('resumeScrollBtn').style.display = 'none';
             }
         });
 
         function resumeScroll() {
             autoScroll = true;
+            if (activeId && Sessions[activeId]) Sessions[activeId].autoScroll = true;
             document.getElementById('resumeScrollBtn').style.display = 'none';
             const container = document.getElementById('tableContainer');
             container.scrollTop = container.scrollHeight;
@@ -2506,6 +2581,9 @@ pub mod inner {
                 if (fitAddon) setTimeout(() => fitAddon.fit(), 100);
                 if (term) term.focus();
             }
+            if (tabId === 'docs') {
+                if (!window._wikiNavLoaded) loadWikiNav();
+            }
         };
 
         // ─── Multi-session capture API ───────────────────────────────────────
@@ -2591,14 +2669,16 @@ pub mod inner {
             if (!activeId || !Sessions[activeId]) return;
             const S = Sessions[activeId];
             if (S.status === 'active') {
-                // Pause: stop this interface's capture only
+                // Pause: freeze the render timer immediately, then stop the SSE stream
                 S.paused = true;
+                isPaused = true;
                 stopActiveCapture();
                 applyPauseButton(S);
                 document.getElementById('sb-status').textContent = `[${S.iface}] Paused. ${S.packetCount} packets captured.`;
             } else {
-                // Resume: restart capture for this interface
+                // Resume: unfreeze render timer, restart SSE stream
                 S.paused = false;
+                isPaused = false;
                 startActiveCapture();
                 applyPauseButton(S);
                 document.getElementById('sb-status').textContent = `[${S.iface}] Resumed.`;
@@ -3026,6 +3106,27 @@ pub mod inner {
                  .replace(/'/g, "&#039;");
         }
 
+        // Render a hex-dump string with syntax highlighting.
+        // hex_dump() format: "  OOOO  HH HH HH ...  |ASCII|"
+        function renderHex(hexText) {
+            if (!hexText) return '<span style="color:#475569;font-style:italic;">No hex data</span>';
+            return hexText.split('\n').filter(l => l.trim()).map(line => {
+                // Handle truncation note line
+                if (line.includes('truncated')) return '<span style="color:#64748b;font-style:italic;">' + escapeHtml(line.trim()) + '</span>';
+                // Match:  optional leading spaces, 4-char offset, 2 spaces, hex block (padded to ~48), 2 spaces, |ascii|
+                const m = line.match(/^ *([0-9a-fA-F]{4,8})  ([\da-fA-F ]{1,50})  \|([\x20-\x7e.]*)\|$/);
+                if (m) {
+                    return '<span style="color:#64748b">' + escapeHtml(m[1]) + '</span>'
+                         + '  '
+                         + '<span style="color:#38bdf8">' + escapeHtml(m[2]) + '</span>'
+                         + '  |'
+                         + '<span style="color:#4ade80">' + escapeHtml(m[3]) + '</span>'
+                         + '|';
+                }
+                return escapeHtml(line);
+            }).join('\n');
+        }
+
         function showDetail(index, trElement) {
             autoScroll = false;
             document.getElementById('resumeScrollBtn').style.display = 'block';
@@ -3034,16 +3135,39 @@ pub mod inner {
             trElement.classList.add('selected');
             const pkt = packetStore[index];
             if (!pkt) return;
-            
+
+            // ── Packet Details pane ──
             let safeDetails = escapeHtml(pkt.details);
             let formattedDetails = safeDetails.replace(/-- ([^\n]+)/g, '<div class="detail-header">$1</div>');
-            formattedDetails = formattedDetails.replace(/^  ([^:\[•]+): (.*)$/gm, '<div class="detail-row"><span class="detail-key">$1:</span> <span class="detail-val">$2</span></div>');
-            formattedDetails = formattedDetails.replace(/^  (\[!\] .*)$/gm, '<div class="detail-row"><span class="detail-val" style="color:var(--danger); font-weight:600;">$1</span></div>');
-            formattedDetails = formattedDetails.replace(/^  (• .*)$/gm, '<div class="detail-row"><span class="detail-val" style="color:var(--text-muted);">$1</span></div>');
-            
+            formattedDetails = formattedDetails.replace(/^  ([^:\[•]+): (.*)$/gm,
+                '<div class="detail-row"><span class="detail-key">$1:</span> <span class="detail-val">$2</span></div>');
+            formattedDetails = formattedDetails.replace(/^  (\[!\] .*)$/gm,
+                '<div class="detail-row"><span class="detail-val" style="color:var(--danger);font-weight:600;">$1</span></div>');
+            formattedDetails = formattedDetails.replace(/^  (• .*)$/gm,
+                '<div class="detail-row"><span class="detail-val" style="color:var(--text-muted);">$1</span></div>');
             document.getElementById('packetDetail').innerHTML = formattedDetails;
-            // Hex dump removed from live stream to improve performance
-            document.getElementById('packetHex').textContent = pkt.hex || '(Hex dump removed from stream for performance)';
+
+            // ── Hex Dump pane ──
+            const hexWrapper = document.getElementById('packetHexWrapper');
+            const hexEl     = document.getElementById('packetHex');
+            const hexInfo   = document.getElementById('hexByteInfo');
+            const hexVisible = hexWrapper.style.display !== 'none';
+            if (pkt.hex && pkt.hex.length > 4) {
+                const totalBytes = pkt.len || 0;
+                const shownBytes = Math.min(totalBytes, 128);
+                if (hexInfo) hexInfo.textContent =
+                    shownBytes < totalBytes
+                        ? `${shownBytes} / ${totalBytes} bytes (first ${shownBytes} shown)`
+                        : `${totalBytes} bytes`;
+                hexEl.innerHTML = '<pre style="margin:0;font-size:11px;line-height:1.7;white-space:pre;overflow-x:auto;">'
+                    + renderHex(pkt.hex) + '</pre>';
+                // Auto-show hex pane only if it hasn't been explicitly hidden by the user
+                if (!hexVisible) hexWrapper.style.display = 'flex';
+            } else {
+                if (hexInfo) hexInfo.textContent = '';
+                hexEl.innerHTML = '<span style="color:#475569;font-style:italic;font-size:12px;">Hex not available for this packet</span>';
+                // Don't force-show when no data
+            }
         }
 
         function kvRow(label, value, badgeClass = "") {
@@ -3069,45 +3193,51 @@ pub mod inner {
         }
         
         async function loadConnections() {
-            const res = await fetch('/api/conn'); const data = await res.json();
-            let html = '<table class="settings-table"><tr><th>Proto</th><th>Local Address</th><th>Remote Address</th><th>State</th><th>PID / Process</th></tr>';
-            data.forEach(c => {
-                let remote = c.remote_port === 0 ? "—" : `${c.remote_ip}:${c.remote_port}`;
-                let proc = c.pid === 0 ? "—" : `${c.process} (${c.pid})`;
-                let stateColor = c.state.includes("ESTABLISH") ? "green" : "inherit";
-                html += `<tr><td>${c.proto}</td><td>${c.local_ip}:${c.local_port}</td><td>${remote}</td><td style="color:${stateColor}; font-weight:bold;">${c.state}</td><td>${proc}</td></tr>`;
-            });
-            document.getElementById('connContent').innerHTML = html + '</table>';
+            try {
+                const res = await fetch('/api/conn'); const data = await res.json();
+                let html = '<table class="settings-table"><thead><tr><th>Proto</th><th>Local Address</th><th>Remote Address</th><th>State</th><th>PID / Process</th></tr></thead><tbody>';
+                data.forEach(c => {
+                    let remote = c.remote_port === 0 ? "—" : `${c.remote_ip}:${c.remote_port}`;
+                    let proc = c.pid === 0 ? "—" : `${c.process} (${c.pid})`;
+                    let stateColor = c.state.includes("ESTABLISH") ? "var(--success)" : "inherit";
+                    html += `<tr><td>${c.proto}</td><td>${c.local_ip}:${c.local_port}</td><td>${remote}</td><td style="color:${stateColor}; font-weight:bold;">${c.state}</td><td>${proc}</td></tr>`;
+                });
+                document.getElementById('connContent').innerHTML = html + '</tbody></table>';
+            } catch(e) { document.getElementById('connContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading connections: ' + e.message + '</div>'; }
         }
 
         async function loadRoutes() {
-            const res = await fetch('/api/route'); const data = await res.json();
-            let html = '<table class="settings-table"><tr><th>Interface</th><th>Destination</th><th>Gateway</th><th>Metric</th></tr>';
-            data.forEach(r => {
-                let dest = `${r.destination}/${r.prefix_len}`;
-                let gw = (r.gateway === "0.0.0.0" || r.gateway === "::") ? "Direct" : r.gateway;
-                html += `<tr><td>${r.interface}</td><td>${dest}</td><td>${gw}</td><td>${r.metric}</td></tr>`;
-            });
-            document.getElementById('routeContent').innerHTML = html + '</table>';
+            try {
+                const res = await fetch('/api/route'); const data = await res.json();
+                let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>Destination</th><th>Gateway</th><th>Metric</th></tr></thead><tbody>';
+                data.forEach(r => {
+                    let dest = `${r.destination}/${r.prefix_len}`;
+                    let gw = (r.gateway === "0.0.0.0" || r.gateway === "::") ? "Direct" : r.gateway;
+                    html += `<tr><td>${r.interface}</td><td>${dest}</td><td>${gw}</td><td>${r.metric}</td></tr>`;
+                });
+                document.getElementById('routeContent').innerHTML = html + '</tbody></table>';
+            } catch(e) { document.getElementById('routeContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading routes: ' + e.message + '</div>'; }
         }
 
         async function loadNics() {
-            const res = await fetch('/api/interfaces'); 
-            const data = await res.json();
-            let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>Description</th><th>State</th><th>Address</th></tr></thead><tbody>';
-            data.forEach(n => {
-                let stateColor = n.is_up ? "var(--success)" : "var(--danger)";
-                let stateText = n.is_up ? "UP" : "DOWN";
-                let desc = n.description || 'Network Interface';
-                let addr = n.address || 'N/A';
-                html += `<tr>
-                    <td><strong style="color:var(--primary);cursor:pointer;text-decoration:underline;" onclick="startCapture('${n.name}')">${n.name}</strong></td>
-                    <td>${desc}</td>
-                    <td style="color:${stateColor}; font-weight:bold;">${stateText}</td>
-                    <td>${addr}</td>
-                </tr>`;
-            });
-            document.getElementById('nicContent').innerHTML = html + '</tbody></table>';
+            try {
+                const res = await fetch('/api/nic');
+                const data = await res.json();
+                const fmtBytes = (b) => { const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; };
+                let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>State</th><th>MAC</th><th>MTU</th><th>RX</th><th>TX</th></tr></thead><tbody>';
+                data.forEach(n => {
+                    let stateColor = n.state === 'up' ? "var(--success)" : "var(--danger)";
+                    html += `<tr>
+                        <td><strong style="color:var(--primary);cursor:pointer;text-decoration:underline;" onclick="startCapture('${n.name}')">${n.name}</strong></td>
+                        <td style="color:${stateColor}; font-weight:bold;">${(n.state||'?').toUpperCase()}</td>
+                        <td style="font-family:monospace;">${n.mac||'—'}</td>
+                        <td>${n.mtu||'—'}</td>
+                        <td>${fmtBytes(n.rx_bytes||0)}</td>
+                        <td>${fmtBytes(n.tx_bytes||0)}</td>
+                    </tr>`;
+                });
+                document.getElementById('nicContent').innerHTML = html + '</tbody></table>';
+            } catch(e) { document.getElementById('nicContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading NIC data.</div>'; }
         }
 
         async function loadDataplane() {
@@ -3549,9 +3679,9 @@ pub mod inner {
                 // Write output with ANSI color codes preserved
                 if (output) {
                     const lines = output.split('\n');
-                    lines.forEach((line, index) => {
-                        term.writeln(line);
-                    });
+                    // strip trailing empty element produced by final newline
+                    const trimmed = (lines.length > 0 && lines[lines.length - 1] === '') ? lines.slice(0, -1) : lines;
+                    trimmed.forEach(line => term.writeln(line));
                 }
                 
                 document.getElementById('xtermStatus').textContent = 'Ready';
@@ -3710,6 +3840,224 @@ pub mod inner {
                 document.addEventListener('mouseup', mouseUpHandler);
             });
         });
+
+        // ─── Wiki / Docs Viewer ─────────────────────────────────────────────
+        const WIKI_PAGES = [
+            {id:'overview',       title:'Overview'},
+            {id:'installation',   title:'Installation'},
+            {id:'cli-reference',  title:'CLI Reference'},
+            {id:'tui-guide',      title:'TUI Guide'},
+            {id:'web-ui-guide',   title:'Web UI Guide'},
+            {id:'dpi-engine',     title:'DPI Engine'},
+            {id:'flow-analyzer',  title:'Flow Analyzer'},
+            {id:'api-reference',  title:'API Reference'},
+            {id:'library-api',    title:'Library API (Rust)'},
+            {id:'protocols',      title:'Protocol Coverage'},
+            {id:'architecture',   title:'Architecture'},
+            {id:'contributing',   title:'Contributing'},
+        ];
+
+        function loadWikiNav() {
+            window._wikiNavLoaded = true;
+            const nav = document.getElementById('docsNav');
+            if (!nav) return;
+            WIKI_PAGES.forEach(p => {
+                const btn = document.createElement('button');
+                btn.className = 'docs-nav-item';
+                btn.textContent = p.title;
+                btn.onclick = () => loadWikiPage(p.id);
+                nav.appendChild(btn);
+            });
+            // Auto-load first page
+            loadWikiPage(WIKI_PAGES[0].id);
+        }
+
+        async function loadWikiPage(id) {
+            const content = document.getElementById('docsContent');
+            if (!content) return;
+            // Update nav active state
+            document.querySelectorAll('.docs-nav-item').forEach(b => {
+                b.classList.toggle('active', b.textContent === (WIKI_PAGES.find(p => p.id === id) || {}).title);
+            });
+            content.innerHTML = '<div style="color:var(--text-muted);padding:40px;">Loading...</div>';
+            try {
+                const res = await fetch('/api/wiki?page=' + encodeURIComponent(id));
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const md = await res.text();
+                content.innerHTML = '<div class="md-content">' + markdownToHtml(md) + '</div>';
+                content.scrollTop = 0;
+            } catch(e) {
+                content.innerHTML = '<div style="color:#f87171;padding:40px;">Failed to load page: ' + e.message + '</div>';
+            }
+        }
+
+        function markdownToHtml(md) {
+            let html = '';
+            const lines = md.split('\n');
+            let i = 0;
+            let inCodeBlock = false;
+            let codeLines = [];
+            let inTable = false;
+            let tableHeader = false;
+            let inList = false;
+            let listLines = [];
+            let listOrdered = false;
+
+            function flushList() {
+                if (!inList) return;
+                inList = false;
+                const tag = listOrdered ? 'ol' : 'ul';
+                html += '<' + tag + '>' + listLines.map(l => '<li>' + inlineFormat(l) + '</li>').join('') + '</' + tag + '>';
+                listLines = [];
+            }
+            function flushTable() {
+                if (!inTable) return;
+                inTable = false;
+                tableHeader = false;
+            }
+
+            while (i < lines.length) {
+                const line = lines[i];
+
+                // Code blocks
+                if (line.startsWith('```')) {
+                    if (!inCodeBlock) {
+                        flushList();
+                        flushTable();
+                        inCodeBlock = true;
+                        codeLines = [];
+                    } else {
+                        inCodeBlock = false;
+                        const escaped = codeLines.map(l => escapeHtml(l)).join('\n');
+                        html += '<pre><code>' + escaped + '</code></pre>';
+                        codeLines = [];
+                    }
+                    i++; continue;
+                }
+                if (inCodeBlock) {
+                    codeLines.push(line);
+                    i++; continue;
+                }
+
+                // Headings
+                if (line.startsWith('#### ')) {
+                    flushList(); flushTable();
+                    html += '<h4>' + inlineFormat(line.slice(5)) + '</h4>';
+                    i++; continue;
+                }
+                if (line.startsWith('### ')) {
+                    flushList(); flushTable();
+                    html += '<h3>' + inlineFormat(line.slice(4)) + '</h3>';
+                    i++; continue;
+                }
+                if (line.startsWith('## ')) {
+                    flushList(); flushTable();
+                    html += '<h2>' + inlineFormat(line.slice(3)) + '</h2>';
+                    i++; continue;
+                }
+                if (line.startsWith('# ')) {
+                    flushList(); flushTable();
+                    html += '<h1>' + inlineFormat(line.slice(2)) + '</h1>';
+                    i++; continue;
+                }
+
+                // HR
+                if (/^---+$/.test(line.trim())) {
+                    flushList(); flushTable();
+                    html += '<hr>';
+                    i++; continue;
+                }
+
+                // Blockquote
+                if (line.startsWith('> ')) {
+                    flushList(); flushTable();
+                    html += '<blockquote>' + inlineFormat(line.slice(2)) + '</blockquote>';
+                    i++; continue;
+                }
+
+                // Tables
+                if (line.includes('|') && line.trim().startsWith('|')) {
+                    if (!inTable) {
+                        flushList();
+                        html += '<table>';
+                        inTable = true;
+                        tableHeader = true;
+                    }
+                    if (/^\|[\s\-:|]+\|/.test(line)) {
+                        // separator row — skip
+                        tableHeader = false;
+                        i++; continue;
+                    }
+                    const cells = line.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+                    if (tableHeader) {
+                        html += '<tr>' + cells.map(c => '<th>' + inlineFormat(c.trim()) + '</th>').join('') + '</tr>';
+                    } else {
+                        html += '<tr>' + cells.map(c => '<td>' + inlineFormat(c.trim()) + '</td>').join('') + '</tr>';
+                    }
+                    i++; continue;
+                } else if (inTable) {
+                    html += '</table>';
+                    inTable = false;
+                    tableHeader = false;
+                }
+
+                // Unordered list
+                if (/^[-*] /.test(line)) {
+                    if (inList && listOrdered) flushList();
+                    inList = true; listOrdered = false;
+                    listLines.push(line.slice(2));
+                    i++; continue;
+                }
+                // Ordered list
+                if (/^\d+\. /.test(line)) {
+                    if (inList && !listOrdered) flushList();
+                    inList = true; listOrdered = true;
+                    listLines.push(line.replace(/^\d+\. /, ''));
+                    i++; continue;
+                }
+                if (inList && line.startsWith('  ')) {
+                    // continuation indent — append to last list item
+                    listLines[listLines.length - 1] += ' ' + line.trim();
+                    i++; continue;
+                }
+                flushList();
+
+                // Empty line
+                if (line.trim() === '') {
+                    i++; continue;
+                }
+
+                // Regular paragraph
+                html += '<p>' + inlineFormat(line) + '</p>';
+                i++;
+            }
+            flushList();
+            if (inTable) html += '</table>';
+            return html;
+        }
+
+        function inlineFormat(text) {
+            let s = escapeHtml(text);
+            // Bold+italic ***text***
+            s = s.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
+            // Bold **text**
+            s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            // Italic *text*
+            s = s.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            // Inline code `text`
+            s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Links [text](url)
+            s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            return s;
+        }
+
+        function escapeHtml(str) {
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
     </script>
 </body>
 </html>

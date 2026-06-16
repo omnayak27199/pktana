@@ -13,10 +13,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use pktana_core::{
-    analyze_bytes, analyze_hex, analyze_hex_file, build_flow_table, format_bytes,
-    get_ethtool_report, get_nic_dataplane, get_nic_info, hex_dump, inspect, list_connections,
-    list_nics, list_routes, routes_for_iface, sample_packets, CaptureConfig, CaptureError,
-    LinuxCaptureEngine, NicInfo, ParseError, ParsedPacket,
+    analyze_hex, analyze_hex_file, build_flow_table, format_bytes, get_ethtool_report,
+    get_nic_dataplane, get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes,
+    routes_for_iface, sample_packets, CaptureConfig, CaptureError, LinuxCaptureEngine, NicInfo,
+    ParseError, ParsedPacket,
 };
 
 // ─── error type ─────────────────────────────────────────────────────────────
@@ -2967,7 +2967,27 @@ fn run_connections(args: &[String]) -> Result<(), CliError> {
     use pktana_core::geoip_lookup_str;
 
     let json = args.iter().any(|a| a == "--json" || a == "-j");
-    let conns = list_connections();
+    let only_tcp = args.iter().any(|a| a == "--tcp");
+    let only_udp = args.iter().any(|a| a == "--udp");
+    let only_established = args.iter().any(|a| a == "--established" || a == "-e");
+    let only_listen = args.iter().any(|a| a == "--listen" || a == "-l");
+
+    let mut conns = list_connections();
+
+    // Apply filters
+    if only_tcp {
+        conns.retain(|c| c.proto.starts_with("TCP"));
+    }
+    if only_udp {
+        conns.retain(|c| c.proto.starts_with("UDP"));
+    }
+    if only_established {
+        conns.retain(|c| c.state == "ESTABLISHED");
+    }
+    if only_listen {
+        conns.retain(|c| c.state == "LISTEN");
+    }
+
     if conns.is_empty() {
         if !json {
             println!("No connections found (run as root to see all processes).");
@@ -2982,8 +3002,8 @@ fn run_connections(args: &[String]) -> Result<(), CliError> {
                 .process
                 .as_deref()
                 .unwrap_or("")
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"");
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
             out.push_str(&format!(
                 r#"  {{"proto":"{}","local_ip":"{}","local_port":{},"remote_ip":"{}","remote_port":{},"state":"{}","pid":{},"process":"{}"}}"#,
                 c.proto, c.local_ip, c.local_port, c.remote_ip, c.remote_port, c.state, c.pid.unwrap_or(0), proc
@@ -2997,6 +3017,12 @@ fn run_connections(args: &[String]) -> Result<(), CliError> {
         out.push(']');
         println!("{out}");
         return Ok(());
+    }
+
+    // Build state summary counts
+    let mut state_counts: HashMap<&str, usize> = HashMap::new();
+    for c in &conns {
+        *state_counts.entry(c.state).or_insert(0) += 1;
     }
 
     println!("Active Connections ({})\n", conns.len());
@@ -3076,6 +3102,17 @@ fn run_connections(args: &[String]) -> Result<(), CliError> {
             svc_geo,
         );
     }
+
+    // State summary footer
+    if !state_counts.is_empty() {
+        println!("\x1b[1;36m{}\x1b[0m", "─".repeat(130));
+        let mut counts: Vec<(&str, usize)> = state_counts.into_iter().collect();
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        let parts: Vec<String> = counts.iter().map(|(s, n)| format!("{s}: {n}")).collect();
+        println!("  State summary  —  {}", parts.join("  ·  "));
+        println!("\x1b[2m  Filters: --tcp  --udp  --established  --listen\x1b[0m");
+    }
+
     Ok(())
 }
 
@@ -3241,15 +3278,14 @@ fn run_stats(args: &[String]) -> Result<(), CliError> {
     // initial clear so first render starts at top
     print!("\x1b[2J");
     LinuxCaptureEngine::capture_streaming(&config, |pkt| {
-        if let Ok(parsed) = analyze_bytes(&pkt.data) {
-            let s = &parsed.summary;
-            let src = s
-                .ipv4
-                .as_ref()
-                .map(|ip| ip.source.to_string())
-                .unwrap_or_else(|| s.ethernet.source_mac());
-            live.ingest(&src, s.proto_label(), pkt.data.len());
-        }
+        let dp = inspect(&pkt.data);
+        let src = dp
+            .ip_src
+            .map(|a| a.to_string())
+            .or_else(|| dp.ipv6_src.clone())
+            .unwrap_or_else(|| dp.eth_src.clone());
+        let proto = dp_proto_label(&dp);
+        live.ingest(&src, &proto, pkt.data.len());
         live.tick_and_render();
         true
     })?;

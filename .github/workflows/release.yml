@@ -39,14 +39,14 @@ jobs:
         run: |
           dnf install -y epel-release dnf-plugins-core
           dnf config-manager --set-enabled crb
-          dnf install -y --allowerasing gcc libpcap-devel rpm-build make git curl tar gzip ca-certificates
+          dnf install -y --allowerasing gcc libpcap-devel openssl-devel pkgconf-pkg-config perl-core rpm-build make git curl tar gzip ca-certificates
 
       - name: Install build deps (el7)
         if: matrix.os_type == 'el7'
         run: |
           sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
           sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
-          yum install -y gcc libpcap-devel rpm-build make git curl tar gzip ca-certificates
+          yum install -y gcc libpcap-devel openssl-devel pkgconfig perl-IPC-Cmd perl-Data-Dumper rpm-build make git curl tar gzip ca-certificates
 
       - uses: actions/checkout@v4
 
@@ -94,7 +94,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            gcc libpcap-dev make git curl ca-certificates \
+            gcc libpcap-dev libssl-dev make git curl ca-certificates \
             dpkg-dev fakeroot pkg-config build-essential
 
       - uses: actions/checkout@v4

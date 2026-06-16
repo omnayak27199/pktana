@@ -313,16 +313,17 @@ fn count_queues(name: &str) -> (usize, usize, usize) {
 
     let mut rx = 0usize;
     let mut tx = 0usize;
+    let mut combined = 0usize;
     for entry in entries.flatten() {
         let n = entry.file_name().to_string_lossy().to_string();
         if n.starts_with("rx-") {
             rx += 1;
-        }
-        if n.starts_with("tx-") {
+        } else if n.starts_with("tx-") {
             tx += 1;
+        } else if n.starts_with("combined-") {
+            combined += 1;
         }
     }
-    let combined = rx.min(tx);
     (rx, tx, combined)
 }
 

@@ -181,8 +181,10 @@ fn parse_socket_addr(addr_str: &str, is_ipv6: bool) -> Option<(IpAddr, u16)> {
         for i in 0..16 {
             bytes[i] = u8::from_str_radix(&ip_hex[i * 2..i * 2 + 2], 16).ok()?;
         }
-        // Reverse for little-endian
-        bytes.reverse();
+        // /proc/net/tcp6 stores each 4-byte group in little-endian order
+        for group in 0..4 {
+            bytes[group * 4..group * 4 + 4].reverse();
+        }
         Some((IpAddr::from(bytes), port))
     } else {
         // IPv4: 8 hex chars (32 bits) in little-endian byte order

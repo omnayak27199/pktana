@@ -53,23 +53,28 @@ CONTAINER_NAME="pktana-build-$OS"
 case "$OS" in
     rocky9|el9)
         IMAGE="rockylinux:9"
-        INSTALL_DEPS="dnf install -y epel-release dnf-plugins-core && dnf config-manager --set-enabled crb && dnf install -y --allowerasing gcc libpcap-devel rpm-build make git curl"
+        INSTALL_DEPS="dnf install -y epel-release dnf-plugins-core && dnf config-manager --set-enabled crb && dnf install -y --allowerasing gcc libpcap-devel openssl-devel pkgconf-pkg-config perl-core rpm-build make git curl"
         BUILD_CMD="make pktana OS_TYPE=el9"
         ;;
     centos7|el7)
         IMAGE="centos:7"
-        INSTALL_DEPS="sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && yum install -y gcc libpcap-devel rpm-build make git curl"
+        INSTALL_DEPS="sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* && yum install -y gcc libpcap-devel openssl-devel pkgconfig perl-IPC-Cmd perl-Data-Dumper rpm-build make git curl"
         BUILD_CMD="make pktana OS_TYPE=el7"
         ;;
-    ubuntu*)
-        IMAGE="ubuntu:${OS#ubuntu}"
-        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl dpkg-dev fakeroot ca-certificates"
-        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.4.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.4.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+    ubuntu22)
+        IMAGE="ubuntu:22.04"
+        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
-    debian*)
-        IMAGE="debian:${OS#debian}"
-        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev make git curl dpkg-dev fakeroot ca-certificates"
-        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.4.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.4.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+    ubuntu24)
+        IMAGE="ubuntu:24.04"
+        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+        ;;
+    debian12)
+        IMAGE="debian:12"
+        INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     *)
         echo "Unsupported OS option: $OS"
@@ -90,8 +95,14 @@ fi
 
 echo "🚀 Creating new session: $CONTAINER_NAME (Image: $IMAGE)"
 
+# Detect SELinux/podman so the bind mount works on Rocky/RHEL hosts
+MOUNT_OPTS=""
+if [ -x "$(command -v getenforce)" ] && [ "$(getenforce 2>/dev/null)" != "Disabled" ]; then
+    MOUNT_OPTS=":Z"
+fi
+
 # Start the container in the background so it stays alive after exiting the shell
-docker run -d --name "$CONTAINER_NAME" -v "$(pwd):/workspaces/pktana" -w /workspaces/pktana "$IMAGE" tail -f /dev/null > /dev/null
+docker run -d --name "$CONTAINER_NAME" -v "$(pwd):/workspaces/pktana${MOUNT_OPTS}" -w /workspaces/pktana "$IMAGE" tail -f /dev/null > /dev/null
 
 # Execute the setup, build, and drop into an interactive shell
 docker exec -it "$CONTAINER_NAME" bash -c "

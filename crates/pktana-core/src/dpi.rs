@@ -148,6 +148,8 @@ pub struct DeepPacket {
     /// Shannon entropy of the queried label (high = possible DGA / tunneling).
     pub dns_label_entropy: Option<f32>,
     pub dns_query_name: Option<String>,
+    /// DNS transaction ID (from bytes 0-1 of the DNS payload).
+    pub dns_txid: Option<u16>,
 
     // ── Risk / classification ─────────────────────────────────────────────────
     /// Composite 0-100 risk score  (0 = benign, 100 = high risk).
@@ -865,6 +867,7 @@ fn detect_dns(payload: &[u8], dp: &mut DeepPacket) {
     let ra = (flags & 0x0080) != 0;
     let aa = (flags & 0x0400) != 0;
     let txid = u16::from_be_bytes([payload[0], payload[1]]);
+    dp.dns_txid = Some(txid);
 
     dp.app_detail.push(format!("TxID     : 0x{txid:04x}"));
     dp.app_detail.push(format!(
@@ -2734,6 +2737,7 @@ impl DeepPacket {
             ipv6_hop_limit: None,
             dns_label_entropy: None,
             dns_query_name: None,
+            dns_txid: None,
             risk_score: 0,
             risk_reasons: Vec::new(),
             app_category: None,
