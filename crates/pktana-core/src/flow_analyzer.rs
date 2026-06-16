@@ -361,6 +361,7 @@ pub struct DhcpDoraAnalysis {
     pub assigned_ip: Option<Ipv4Addr>,
     pub server_ip: Option<Ipv4Addr>,
     pub lease_time: Option<u32>,
+    discover_timestamp: Option<Instant>,
 }
 
 impl Default for DhcpDoraAnalysis {
@@ -378,6 +379,7 @@ impl DhcpDoraAnalysis {
             assigned_ip: None,
             server_ip: None,
             lease_time: None,
+            discover_timestamp: None,
         }
     }
 
@@ -398,6 +400,7 @@ impl DhcpDoraAnalysis {
             DhcpDoraState::Init => {
                 for detail in details {
                     if detail.contains("DHCP Discover") || detail.contains("DHCPDiscover") {
+                        self.discover_timestamp = Some(timestamp);
                         self.state = DhcpDoraState::DiscoverSent {
                             timestamp,
                             xid: None,
@@ -472,14 +475,12 @@ impl DhcpDoraAnalysis {
                                 }
                             });
 
-                        let total_ms = if let DhcpDoraState::DiscoverSent {
-                            timestamp: start, ..
-                        } = self.state
-                        {
-                            timestamp.duration_since(start).as_micros() as f64 / 1000.0
-                        } else {
-                            0.0
-                        };
+                        let total_ms = self
+                            .discover_timestamp
+                            .map(|start| {
+                                timestamp.duration_since(start).as_micros() as f64 / 1000.0
+                            })
+                            .unwrap_or(0.0);
 
                         self.assigned_ip = assigned_ip.or(self.offered_ip);
                         self.state = DhcpDoraState::AckReceived {
@@ -667,8 +668,7 @@ impl FlowAnalyzer {
 
         // DNS query/response analysis
         if dp.udp_src_port == Some(53) || dp.udp_dst_port == Some(53) {
-            // Use a dummy transaction ID (would need to parse DNS header for real ID)
-            let tx_id = 0_u16;
+            let tx_id = dp.dns_txid.unwrap_or(0);
             let analysis = self.dns_flows.entry(tx_id).or_default();
 
             if let Some(result) = analysis.analyze(dp, timestamp) {

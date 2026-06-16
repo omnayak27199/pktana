@@ -891,17 +891,33 @@ pub mod inner {
             )
         } else if app.show_detail {
             (
-                " [Esc]Close Detail  [O]Overview  [L]Layers  [H]Hex  [←→]Sub-tabs  [PgUp/PgDn]Scroll Detail  [↑↓]Navigate Table".into(),
-                Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD)
+                " [Esc]Close Detail  [O]Overview  [L]Layers  [H]Hex  [←→]Sub-tabs  [PgUp/PgDn]Scroll  [↑↓]Navigate".into(),
+                Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD),
+            )
+        } else if app.flow_analyze_mode {
+            // Show most recent flow event when flow analysis is active
+            let event_text = app
+                .flow_events
+                .back()
+                .map(|ev| format!(" ▸ {ev}"))
+                .unwrap_or_else(|| " [FLOW ANALYSIS ON] Listening for handshakes/DORA/DNS…".into());
+            (
+                event_text,
+                Style::default()
+                    .fg(Color::LightGreen)
+                    .add_modifier(Modifier::BOLD),
             )
         } else {
+            let hint = match app.current_tab {
+                Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [1-5]Tab  [q]Quit",
+                Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [a]FlowAnalysis  [/]Filter  [q]Quit",
+                _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [s]Sort  [q]Quit",
+            };
             (
-                match app.current_tab {
-                    Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalyze  [1-5]Tab  [q]Quit".into(),
-                    Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [a]FlowAnalyze  [/]Filter  [q]Quit".into(),
-                    _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalyze  [s]Sort  [q]Quit".into(),
-                },
-                Style::default().fg(Color::Rgb(255, 136, 0)).add_modifier(Modifier::BOLD)
+                hint.into(),
+                Style::default()
+                    .fg(Color::Rgb(255, 136, 0))
+                    .add_modifier(Modifier::BOLD),
             )
         };
         f.render_widget(Paragraph::new(text).style(style), area);
@@ -2159,6 +2175,12 @@ pub mod inner {
                                 KeyCode::Char('h') | KeyCode::Char('H') if app.show_detail => {
                                     app.detail_sub = DetailSub::Hex
                                 }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    app.flow_analyze_mode = !app.flow_analyze_mode;
+                                    if app.flow_analyze_mode && app.flow_analyzer.is_none() {
+                                        app.flow_analyzer = Some(pktana_core::FlowAnalyzer::new());
+                                    }
+                                }
                                 KeyCode::Char('s') => {
                                     app.sort_column = match app.sort_column {
                                         SortColumn::Protocol => SortColumn::LocalAddr,
@@ -2378,6 +2400,12 @@ pub mod inner {
                                 }
                                 KeyCode::Char('h') | KeyCode::Char('H') if app.show_detail => {
                                     app.detail_sub = DetailSub::Hex
+                                }
+                                KeyCode::Char('a') | KeyCode::Char('A') => {
+                                    app.flow_analyze_mode = !app.flow_analyze_mode;
+                                    if app.flow_analyze_mode && app.flow_analyzer.is_none() {
+                                        app.flow_analyzer = Some(pktana_core::FlowAnalyzer::new());
+                                    }
                                 }
                                 KeyCode::Char('s') => {
                                     app.sort_column = match app.sort_column {
