@@ -25,6 +25,7 @@ serde      = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 lazy_static = "1.4"
 dashmap = "6.1"
+libc = "0.2"
 
 [[bin]]
 name = "pktana"
