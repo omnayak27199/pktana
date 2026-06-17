@@ -89,12 +89,12 @@ fmt:
 ## Run clippy linter
 clippy:
 	@echo "==> Running clippy ..."
-	cargo clippy --all-targets --features pcap,tui -- -D warnings
+	cargo clippy --all-targets --features pcap,tui,mcp -- -D warnings
 
 ## Run tests
 test:
 	@echo "==> Running tests ..."
-	cargo test --all --features pcap,tui
+	cargo test --all --features pcap,tui,mcp
 
 ## Build the Rust release binary only
 binary: _check-cargo $(BINARY)
@@ -110,9 +110,9 @@ binary-ai:
 
 $(BINARY):
 	@echo "==> Compiling pktana (debug check) ..."
-	cargo build --features pcap,tui -p pktana-cli
+	cargo build --features pcap,tui,mcp -p pktana-cli
 	@echo "==> Compiling pktana (release) ..."
-	cargo build --release --features pcap,tui -p pktana-cli
+	cargo build --release --features pcap,tui,mcp -p pktana-cli
 
 $(TARBALL): $(BINARY)
 	@echo "==> Creating source tarball for rpmbuild ..."

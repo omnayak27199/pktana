@@ -1209,13 +1209,15 @@ pub mod inner {
                     let bypass = format!("{:?}", dp.bypass_mode);
                     let driver = dp.userspace_driver.as_deref().unwrap_or("");
                     let xdp_ids = format!("{:?}", dp.xdp_prog_ids);
+                    let xdp_mode = dp.xdp_mode.as_deref().unwrap_or("");
                     let json = format!(
-                        r#"{{"bypass_mode":"{}","afxdp_sockets":{},"dpdk_bound":{},"driver":"{}","xdp_prog_ids":"{}","rx_queues":{},"tx_queues":{}}}"#,
+                        r#"{{"bypass_mode":"{}","afxdp_sockets":{},"dpdk_bound":{},"driver":"{}","xdp_prog_ids":"{}","xdp_mode":"{}","rx_queues":{},"tx_queues":{}}}"#,
                         bypass,
                         dp.afxdp_sockets,
                         dp.dpdk_bound,
                         driver,
                         xdp_ids,
+                        xdp_mode,
                         dp.rx_queues,
                         dp.tx_queues
                     );
@@ -1616,6 +1618,43 @@ pub mod inner {
                         "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nImage not found";
                     let _ = stream.write_all(response.as_bytes());
                 }
+            } else if request.starts_with("GET /api/learn?page=") {
+                let start = "GET /api/learn?page=".len();
+                let end = request[start..].find(' ').map(|i| start + i).unwrap_or(request.len());
+                let page = &request[start..end];
+                let content: Option<&str> = match page {
+                    "01-what-is-networking" => Some(LEARN_01),
+                    "02-osi-model" => Some(LEARN_02),
+                    "03-physical-layer" => Some(LEARN_03),
+                    "04-data-link-layer" => Some(LEARN_04),
+                    "05-network-layer" => Some(LEARN_05),
+                    "06-transport-layer" => Some(LEARN_06),
+                    "07-application-layer" => Some(LEARN_07),
+                    "08-topologies" => Some(LEARN_08),
+                    "09-wireless-networking" => Some(LEARN_09),
+                    "10-network-security" => Some(LEARN_10),
+                    "11-protocols-reference" => Some(LEARN_11),
+                    "12-modern-networking" => Some(LEARN_12),
+                    _ => None,
+                };
+                if let Some(md) = content {
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        md.len(),
+                        md
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                } else {
+                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+                }
+            } else if request.starts_with("GET /learn") {
+                let html = LEARN_HTML;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = stream.write_all(response.as_bytes());
             } else if request.starts_with("GET / ") {
                 let html = HTML_TEMPLATE;
                 let response = format!(
@@ -1643,6 +1682,20 @@ pub mod inner {
     const WIKI_PROTO: &str = include_str!("../../../wiki/10-protocols.md");
     const WIKI_ARCH: &str = include_str!("../../../wiki/11-architecture.md");
     const WIKI_CONTRIB: &str = include_str!("../../../wiki/12-contributing.md");
+
+    const LEARN_HTML: &str = include_str!("learn.html");
+    const LEARN_01: &str = include_str!("../../../learning/01-what-is-networking.md");
+    const LEARN_02: &str = include_str!("../../../learning/02-osi-model.md");
+    const LEARN_03: &str = include_str!("../../../learning/03-physical-layer.md");
+    const LEARN_04: &str = include_str!("../../../learning/04-data-link-layer.md");
+    const LEARN_05: &str = include_str!("../../../learning/05-network-layer.md");
+    const LEARN_06: &str = include_str!("../../../learning/06-transport-layer.md");
+    const LEARN_07: &str = include_str!("../../../learning/07-application-layer.md");
+    const LEARN_08: &str = include_str!("../../../learning/08-topologies.md");
+    const LEARN_09: &str = include_str!("../../../learning/09-wireless-networking.md");
+    const LEARN_10: &str = include_str!("../../../learning/10-network-security.md");
+    const LEARN_11: &str = include_str!("../../../learning/11-protocols-reference.md");
+    const LEARN_12: &str = include_str!("../../../learning/12-modern-networking.md");
 
     const HTML_TEMPLATE: &str = r##"
 <!DOCTYPE html>
@@ -2073,6 +2126,13 @@ pub mod inner {
         .risk-medium { background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; box-shadow:0 1px 4px rgba(245,158,11,0.4); }
         .risk-low    { background:linear-gradient(135deg,#6b7280,#4b5563); color:#fff; }
 
+        /* ── Flow table coloring ── */
+        .flow-rank-badge { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; font-size:9px; font-weight:900; flex-shrink:0; }
+        .flow-cat-badge  { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-weight:700; white-space:nowrap; }
+        .flow-bytes-cell { display:flex; align-items:center; gap:6px; min-width:90px; }
+        .flow-bytes-bar  { flex:1; height:4px; background:var(--border); border-radius:2px; overflow:hidden; min-width:30px; }
+        .flow-bytes-fill { height:100%; border-radius:2px; }
+
         /* ── Progress bar refinements ── */
         .proto-bar-wrap { margin-bottom:10px; }
         .proto-bar-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
@@ -2338,8 +2398,12 @@ pub mod inner {
             <span>LIVE</span>
             <span id="navLivePkts" style="opacity:0.75;font-weight:500;">0 pkts</span>
         </div>
-        <div class="nav-controls" style="font-size:12px; color:var(--text-muted); font-weight:500; letter-spacing:0.3px;">
-            Network Packet Analyzer
+        <div class="nav-controls" style="display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-muted); font-weight:500; letter-spacing:0.3px;">
+            <span>Network Packet Analyzer</span>
+            <a href="/learn" target="_blank" style="display:inline-flex; align-items:center; gap:5px; padding:5px 12px; background:rgba(249,115,22,0.1); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:var(--primary); font-size:11px; font-weight:700; text-decoration:none; letter-spacing:0.3px; transition:all 0.2s;" onmouseover="this.style.background='rgba(249,115,22,0.2)'" onmouseout="this.style.background='rgba(249,115,22,0.1)'">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+                Learn Networking
+            </a>
         </div>
     </div>
 
@@ -2816,11 +2880,17 @@ pub mod inner {
                 status: 'active', paused: false,
                 packetStore: [], flows: {}, protoStats: {}, talkerStats: {}, geoCache: {},
                 packetCount: 0, byteCount: 0, baseTs: null,
-                eventSource: null, autoScroll: true
+                eventSource: null, autoScroll: true,
+                streamFilter: ''
             };
         }
 
         function bindActive(id) {
+            // Save the outgoing session's protocol filter before switching
+            if (activeId && Sessions[activeId] && activeId !== id) {
+                const outFilter = document.getElementById('streamFilter');
+                if (outFilter) Sessions[activeId].streamFilter = outFilter.value;
+            }
             activeId = id;
             window.currentSessionId = id;
             const S = Sessions[id];
@@ -2845,6 +2915,9 @@ pub mod inner {
             packetBuffer = [];
             const ifaceEl = document.getElementById('currentIface');
             if (ifaceEl) ifaceEl.value = S.iface;
+            // Restore incoming session's protocol filter
+            const filterEl = document.getElementById('streamFilter');
+            if (filterEl) filterEl.value = S.streamFilter || '';
         }
 
         function ensureRenderTimer() {
@@ -2902,20 +2975,77 @@ pub mod inner {
             }
         }, 2000);
 
+        function flowAccentColor(proto) {
+            const p = (proto || '').toLowerCase();
+            if (['tls','ssl','https'].some(x => p.includes(x))) return '#3b82f6';
+            if (p.includes('quic'))   return '#6366f1';
+            if (p.includes('ssh'))    return '#6366f1';
+            if (['http','grpc','websocket'].some(x => p.includes(x))) return '#22c55e';
+            if (p.includes('dns'))    return '#06b6d4';
+            if (['icmp','arp','bgp','igmp','ospf'].some(x => p.includes(x))) return '#a855f7';
+            if (['sip','rtp','rtsp'].some(x => p.includes(x))) return '#f97316';
+            if (p === 'tcp')  return '#3b82f6';
+            if (p === 'udp')  return '#10b981';
+            return '#6b7280';
+        }
+        function flowRowBg(proto) {
+            const p = (proto || '').toLowerCase();
+            if (['tls','ssl','https','quic'].some(x => p.includes(x))) return 'rgba(59,130,246,0.06)';
+            if (p.includes('ssh'))    return 'rgba(99,102,241,0.06)';
+            if (['http','grpc','websocket'].some(x => p.includes(x))) return 'rgba(34,197,94,0.06)';
+            if (p.includes('dns'))    return 'rgba(6,182,212,0.06)';
+            if (['icmp','arp','bgp'].some(x => p.includes(x))) return 'rgba(168,85,247,0.06)';
+            if (['sip','rtp'].some(x => p.includes(x)))  return 'rgba(249,115,22,0.06)';
+            if (p === 'tcp') return 'rgba(59,130,246,0.03)';
+            if (p === 'udp') return 'rgba(16,185,129,0.03)';
+            return 'transparent';
+        }
+        function catBadgeStyle(cat) {
+            const c = (cat || '').toLowerCase();
+            if (c.includes('encrypt') || c.includes('tls') || c.includes('secure'))
+                return 'background:rgba(59,130,246,0.12);color:#2563eb;border:1px solid rgba(59,130,246,0.3)';
+            if (c.includes('web') || c.includes('http'))
+                return 'background:rgba(34,197,94,0.12);color:#15803d;border:1px solid rgba(34,197,94,0.3)';
+            if (c.includes('dns') || c.includes('resolv'))
+                return 'background:rgba(6,182,212,0.12);color:#0e7490;border:1px solid rgba(6,182,212,0.3)';
+            if (c.includes('tunnel') || c.includes('vpn'))
+                return 'background:rgba(168,85,247,0.12);color:#7e22ce;border:1px solid rgba(168,85,247,0.3)';
+            if (c.includes('voip') || c.includes('sip') || c.includes('rtp'))
+                return 'background:rgba(249,115,22,0.12);color:#c2410c;border:1px solid rgba(249,115,22,0.3)';
+            return 'background:rgba(107,114,128,0.1);color:var(--text-muted);border:1px solid var(--border)';
+        }
+
         function renderFlows() {
             const tbody = document.getElementById('flowContent');
             if (!tbody) return;
             const sortedFlows = Object.values(flows).sort((a, b) => b.bytes - a.bytes).slice(0, 100);
+            const maxBytes = sortedFlows.length > 0 ? sortedFlows[0].bytes : 1;
+            const RANK_COLORS = ['#f59e0b', '#94a3b8', '#b45309'];
             let html = '';
-            for (let f of sortedFlows) {
+            for (let i = 0; i < sortedFlows.length; i++) {
+                const f = sortedFlows[i];
                 const fpk = f.proto.toLowerCase().replace(/[^a-z0-9]/g,'');
-                html += `<tr style="cursor:pointer;" title="Click to view packets for this flow" onclick="viewFlowDetails('${f.src}', '${f.dst}')">
-                    <td><span class="proto-badge proto-${fpk}">${escapeHtml(f.proto)}</span></td>
-                    <td>${escapeHtml(f.src)}</td>
-                    <td>${escapeHtml(f.dst)}</td>
-                    <td>${escapeHtml(f.category)}</td>
-                    <td>${f.pkts}</td>
-                    <td>${formatBytes(f.bytes)}</td>
+                const accent  = flowAccentColor(f.proto);
+                const rowBg   = flowRowBg(f.proto);
+                const bytesPct = Math.max(3, Math.round(f.bytes / maxBytes * 100));
+                const rankBadge = i < 3
+                    ? `<span class="flow-rank-badge" style="background:${RANK_COLORS[i]};color:#fff;">${i+1}</span>`
+                    : '';
+                const catSty = catBadgeStyle(f.category);
+                html += `<tr style="cursor:pointer;background:${rowBg};" title="Click to filter packets for this flow" onclick="viewFlowDetails('${f.src}', '${f.dst}')">
+                    <td style="border-left:3px solid ${accent};padding-left:8px;">
+                        <div style="display:flex;align-items:center;gap:5px;">${rankBadge}<span class="proto-badge proto-${fpk}">${escapeHtml(f.proto)}</span></div>
+                    </td>
+                    <td style="font-family:monospace;font-size:12px;">${escapeHtml(f.src)}</td>
+                    <td style="font-family:monospace;font-size:12px;">${escapeHtml(f.dst)}</td>
+                    <td><span class="flow-cat-badge" style="${catSty}">${escapeHtml(f.category || 'Unknown')}</span></td>
+                    <td style="text-align:right;font-variant-numeric:tabular-nums;">${f.pkts}</td>
+                    <td>
+                        <div class="flow-bytes-cell">
+                            <span style="white-space:nowrap;font-variant-numeric:tabular-nums;">${formatBytes(f.bytes)}</span>
+                            <div class="flow-bytes-bar"><div class="flow-bytes-fill" style="width:${bytesPct}%;background:linear-gradient(90deg,${accent},${accent}99);"></div></div>
+                        </div>
+                    </td>
                 </tr>`;
             }
             tbody.innerHTML = html;
@@ -3581,6 +3711,7 @@ pub mod inner {
             if (!Sessions[id]) return;
             bindActive(id);
             rebuildTableFromActive();
+            applyStreamFilter();
             renderSessionTabs();
             const S = Sessions[id];
             const btn = document.getElementById('btnToggle');
@@ -3774,8 +3905,7 @@ pub mod inner {
                         : `${totalBytes} bytes`;
                 hexEl.innerHTML = '<pre style="margin:0;font-size:11px;line-height:1.7;white-space:pre;overflow-x:auto;">'
                     + renderHex(pkt.hex) + '</pre>';
-                // Auto-show hex pane only if it hasn't been explicitly hidden by the user
-                if (!hexVisible) hexWrapper.style.display = 'flex';
+                // Hex pane is only shown via the toggle button — never auto-show on row click
             } else {
                 if (hexInfo) hexInfo.textContent = '';
                 hexEl.innerHTML = '<span style="color:#475569;font-style:italic;font-size:12px;">Hex not available for this packet</span>';
@@ -4226,7 +4356,6 @@ pub mod inner {
             localStorage.setItem('pktana_pane_left_flex', leftPane.style.flex);
             localStorage.setItem('pktana_pane_right_flex', rightPane.style.flex);
             localStorage.setItem('pktana_pane_right_display', rightPane.style.display);
-            localStorage.setItem('pktana_hex_display', hexWrapper.style.display);
         }
 
         function loadLayout() {
@@ -4244,8 +4373,7 @@ pub mod inner {
                 document.getElementById('paneRight').style.display = rightDisplay;
                 document.getElementById('dragMe').style.display = rightDisplay === 'none' ? 'none' : 'block';
             }
-            const hexDisplay = localStorage.getItem('pktana_hex_display');
-            if (hexDisplay) document.getElementById('packetHexWrapper').style.display = hexDisplay;
+            // Hex dump always starts hidden; only shown via the toggle button
         }
 
         function toggleLayoutDir() {

@@ -84,6 +84,8 @@ pub struct NicDataplane {
     // ── XDP ──────────────────────────────────────────────────────────────────
     /// IDs of XDP programs attached to this interface.
     pub xdp_prog_ids: Vec<u32>,
+    /// XDP attachment mode: "generic", "native", or "offload" (None if no XDP).
+    pub xdp_mode: Option<String>,
 
     // ── AF_XDP ───────────────────────────────────────────────────────────────
     /// Number of AF_XDP sockets bound to this interface (reads /proc/net/xdp).
@@ -130,16 +132,20 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
     let base = format!("/sys/class/net/{name}");
 
     // ── XDP programs ─────────────────────────────────────────────────────────
-    // /sys/class/net/<ifc>/xdp_prog_ids — space-separated list of program IDs
-    let xdp_prog_ids: Vec<u32> = fs::read_to_string(format!("{base}/xdp_prog_ids"))
+    // Primary: /sys/class/net/<ifc>/xdp_prog_ids (sysfs, kernel ≥ 5.9)
+    let sysfs_ids: Vec<u32> = fs::read_to_string(format!("{base}/xdp_prog_ids"))
         .unwrap_or_default()
         .split_whitespace()
         .filter_map(|s| s.parse().ok())
         .collect();
 
-    // Also check /sys/class/net/<ifc>/xdp_features (kernel ≥ 6.3)
-    // If file exists and value != 0, at least one XDP feature is supported/active.
-    // The prog_ids file is more definitive — use it as primary indicator.
+    // Fallback: `ip link show <iface>` uses netlink (IFLA_XDP) — works on all kernels
+    // where XDP is supported, regardless of whether xdp_prog_ids sysfs file exists.
+    let (xdp_prog_ids, xdp_mode) = if !sysfs_ids.is_empty() {
+        (sysfs_ids, None)
+    } else {
+        xdp_from_ip_link(name)
+    };
 
     // ── AF_XDP sockets ───────────────────────────────────────────────────────
     // /proc/net/xdp lists all AF_XDP sockets; columns include the interface name.
@@ -223,6 +229,7 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
 
     Ok(NicDataplane {
         xdp_prog_ids,
+        xdp_mode,
         afxdp_sockets,
         dpdk_bound,
         userspace_driver,
@@ -243,6 +250,45 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
+
+/// Read XDP program IDs and mode by parsing `ip link show <iface>` output.
+/// The `ip` command reads XDP state via netlink IFLA_XDP, so this works on
+/// all kernels that support XDP — unlike the sysfs xdp_prog_ids file which
+/// may not exist on older kernels (< 5.9 or distro backports).
+///
+/// Parses tokens like: `xdp/id:21`  `xdpdrv/id:21`  `xdpoffload/id:21`
+fn xdp_from_ip_link(iface: &str) -> (Vec<u32>, Option<String>) {
+    // Try known absolute paths first to avoid PATH lookup failures in restricted envs.
+    let ip_bin = ["/sbin/ip", "/usr/sbin/ip", "/bin/ip", "/usr/bin/ip"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .copied()
+        .unwrap_or("ip");
+    let Ok(out) = std::process::Command::new(ip_bin)
+        .args(["link", "show", iface])
+        .output()
+    else {
+        return (Vec::new(), None);
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut ids = Vec::new();
+    let mut mode: Option<String> = None;
+    for token in text.split_whitespace() {
+        for (prefix, mode_name) in &[
+            ("xdp/id:", "generic"),
+            ("xdpdrv/id:", "native"),
+            ("xdpoffload/id:", "offload"),
+        ] {
+            if let Some(id_str) = token.strip_prefix(prefix) {
+                if let Ok(id) = id_str.parse::<u32>() {
+                    ids.push(id);
+                    mode = Some(mode_name.to_string());
+                }
+            }
+        }
+    }
+    (ids, mode)
+}
 
 /// Count AF_XDP sockets for this interface from /proc/net/xdp.
 /// Format (kernel ≥ 5.4):
