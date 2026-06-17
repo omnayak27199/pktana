@@ -1,6 +1,8 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(feature = "mcp")]
+mod mcp;
 mod tui;
 mod web;
 
@@ -193,6 +195,43 @@ fn run() -> Result<(), CliError> {
             } else {
                 web::inner::run_web_server(port).map_err(CliError::Usage)
             }
+        }
+
+        // ── MCP server for AI agent integration ──────────────────────────────
+        "mcp" => {
+            #[cfg(feature = "mcp")]
+            {
+                let mut port: u16 = 3456;
+                let mut host = "0.0.0.0".to_string();
+                let mut stdio = false;
+                let mut i = 2usize;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "--port" | "-p" => {
+                            i += 1;
+                            if let Some(p) = args.get(i) {
+                                port = p.parse().unwrap_or(port);
+                            }
+                        }
+                        "--host" | "-H" => {
+                            i += 1;
+                            if let Some(h) = args.get(i) {
+                                host = h.clone();
+                            }
+                        }
+                        "--stdio" => stdio = true,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                mcp::inner::run_mcp_server(port, &host, stdio).map_err(CliError::Usage)?;
+            }
+            #[cfg(not(feature = "mcp"))]
+            {
+                eprintln!("pktana was not built with MCP support.");
+                eprintln!("Rebuild:  cargo build --release --features mcp -p pktana-cli");
+            }
+            Ok(())
         }
 
         // ── GeoIP lookup ──────────────────────────────────────────────────────
@@ -1842,6 +1881,13 @@ fn print_usage() {
     );
     println!("  {G}pktana tui{R} {Y}<IFACE | PCAP>{R}       Terminal UI dashboard — realtime packets & flows");
     println!("  {G}pktana web{R} {Y}[PORT] [-f]{R}         Web UI dashboard (starts in background, -f for foreground)");
+    println!("  {G}pktana mcp{R} {Y}[--port N] [--stdio]{R}  MCP server for AI agent integration");
+    println!();
+
+    println!("{C}AI INTEGRATION{R} {DIM}(requires build --features mcp){R}");
+    println!("  {G}pktana mcp{R}                       Start MCP server on port 3456 (SSE/HTTP)");
+    println!("  {G}pktana mcp{R} {Y}--port 4000{R}           Custom port");
+    println!("  {G}pktana mcp{R} {Y}--stdio{R}               Stdio mode for local Claude Desktop");
     println!();
 
     println!("{C}GEOLOCATION{R}");
@@ -2402,6 +2448,75 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
         }
 
+        // ── mcp ───────────────────────────────────────────────────────────────
+        "mcp" => {
+            println!("{bar}");
+            println!("{B}  pktana mcp{R}  —  MCP server for AI agent integration");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana mcp{R}                           start on default port 3456");
+            println!("  {Y}pktana mcp --port <PORT>{R}             custom port");
+            println!("  {Y}pktana mcp --host <HOST> --port <N>{R}  custom bind address");
+            println!(
+                "  {Y}pktana mcp --stdio{R}                   stdio mode (local Claude Desktop)"
+            );
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Starts an MCP (Model Context Protocol) server that exposes pktana's");
+            println!("  network analysis capabilities as AI tools.  Connect Claude Desktop or");
+            println!("  any MCP-compatible AI agent to inspect packets, capture traffic,");
+            println!(
+                "  analyse connections, routes, NIC statistics, and more via natural language."
+            );
+            println!();
+            println!("{B}REMOTE CONNECTION (from Claude Desktop){R}");
+            println!("  On the server:   pktana mcp --port 3456");
+            println!("  On your laptop — edit claude_desktop_config.json:");
+            println!("    Linux:   ~/.config/claude/claude_desktop_config.json");
+            println!(
+                "    macOS:   ~/Library/Application Support/Claude/claude_desktop_config.json"
+            );
+            println!("    Windows: %APPDATA%\\Claude\\claude_desktop_config.json");
+            println!();
+            println!("  Add:");
+            println!("    {{");
+            println!("      \"mcpServers\": {{");
+            println!("        \"pktana\": {{");
+            println!("          \"url\": \"http://SERVER_IP:3456/mcp\"");
+            println!("        }}");
+            println!("      }}");
+            println!("    }}");
+            println!();
+            println!("  Restart Claude Desktop — pktana tools appear in the tool list.");
+            println!();
+            println!("{B}LOCAL CONNECTION (Claude CLI){R}");
+            println!("  claude mcp add pktana -- pktana mcp --stdio");
+            println!("  claude mcp list");
+            println!();
+            println!("{B}AVAILABLE TOOLS{R}");
+            println!("  inspect_packet      Deep packet inspection from hex bytes");
+            println!("  capture_live        Live capture on an interface (needs root)");
+            println!("  analyze_pcap_file   Analyse a .pcap file on disk");
+            println!("  list_connections    Active TCP/UDP connections");
+            println!("  list_routes         Kernel routing table");
+            println!("  list_interfaces     Network interfaces with state/stats");
+            println!("  get_nic_stats       Detailed NIC driver/queue/offload stats");
+            println!("  geoip_lookup        IP-to-country lookup (offline)");
+            println!("  get_server_info     Hostname, uptime, memory");
+            println!("  run_flow_analysis   TCP/TLS/DHCP/DNS flow analysis (needs root)");
+            println!();
+            println!("{B}OPTIONS{R}");
+            println!("  {Y}--port, -p <PORT>{R}   Bind port (default: 3456)");
+            println!("  {Y}--host, -H <HOST>{R}   Bind address (default: 0.0.0.0)");
+            println!("  {Y}--stdio{R}             Use stdio transport (local Claude Desktop)");
+            println!();
+            println!("{B}REQUIRES{R}");
+            println!("  Built with:  cargo build --release --features mcp -p pktana-cli");
+            println!("  Live capture tools need root or CAP_NET_RAW.");
+            println!("{bar}");
+        }
+
         // ── record ────────────────────────────────────────────────────────────
         "record" | "rec" => {
             println!("{bar}");
@@ -2754,9 +2869,11 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         println!("  XDP            : not attached");
     } else {
         let ids: Vec<String> = dp.xdp_prog_ids.iter().map(|id| id.to_string()).collect();
+        let mode_str = dp.xdp_mode.as_deref().unwrap_or("unknown");
         println!(
-            "  XDP            : ATTACHED  (prog IDs: {})",
-            ids.join(", ")
+            "  XDP            : ATTACHED  (prog IDs: {}  mode: {})",
+            ids.join(", "),
+            mode_str
         );
     }
 
