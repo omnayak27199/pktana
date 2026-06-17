@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Learn Networking — pktana</title>
+<style>
+:root {
+  --primary: #f97316;
+  --primary-dark: #ea580c;
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --sidebar-w: 280px;
+  --header-h: 60px;
+  --code-bg: #1e293b;
+  --accent-blue: #3b82f6;
+  --accent-green: #22c55e;
+  --accent-purple: #a855f7;
+  --accent-yellow: #f59e0b;
+}
+body.dark {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --border: #334155;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text-main); height: 100vh; overflow: hidden; }
+
+/* ── Header ── */
+.header {
+  position: fixed; top: 0; left: 0; right: 0; height: var(--header-h);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 20px; gap: 16px;
+  z-index: 100; box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+}
+.header-logo { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; color: var(--primary); text-decoration: none; }
+.header-title { font-size: 15px; font-weight: 700; color: var(--text-main); }
+.header-subtitle { font-size: 12px; color: var(--text-muted); }
+.header-back { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-decoration: none; border: 1px solid var(--border); padding: 5px 12px; border-radius: 6px; transition: all 0.2s; }
+.header-back:hover { color: var(--primary); border-color: var(--primary); background: rgba(249,115,22,0.06); }
+.header-search { flex: 1; max-width: 320px; margin-left: auto; position: relative; }
+.header-search input { width: 100%; padding: 7px 12px 7px 34px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--bg); color: var(--text-main); outline: none; transition: border 0.2s; }
+.header-search input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(249,115,22,0.1); }
+.header-search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); }
+.theme-btn { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; transition: all 0.2s; }
+.theme-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
+.progress-bar { position: fixed; top: var(--header-h); left: 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); z-index: 101; transition: width 0.3s; width: 0%; }
+
+/* ── Layout ── */
+.layout { display: flex; margin-top: var(--header-h); height: calc(100vh - var(--header-h)); }
+
+/* ── Sidebar ── */
+.sidebar { width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; flex-shrink: 0; padding: 16px 0 32px; }
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.sidebar-group { margin-bottom: 4px; }
+.sidebar-group-title { font-size: 10px; font-weight: 800; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-muted); padding: 12px 16px 4px; }
+.sidebar-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; cursor: pointer; font-size: 13px; color: var(--text-muted); border-left: 3px solid transparent; transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-item:hover { background: rgba(249,115,22,0.06); color: var(--text-main); }
+.sidebar-item.active { background: rgba(249,115,22,0.1); color: var(--primary); border-left-color: var(--primary); font-weight: 600; }
+.sidebar-item .num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 9px; font-weight: 800; flex-shrink: 0; }
+.sidebar-item.active .num { background: var(--primary); color: white; }
+.sidebar-item:not(.active) .num { background: var(--border); color: var(--text-muted); }
+.sidebar-divider { height: 1px; background: var(--border); margin: 8px 16px; }
+
+/* ── Content area ── */
+.content { flex: 1; overflow-y: auto; padding: 40px 48px; max-width: 900px; }
+.content::-webkit-scrollbar { width: 6px; }
+.content::-webkit-scrollbar-track { background: transparent; }
+.content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Search results overlay */
+.search-results { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; max-height: 320px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.12); z-index: 200; }
+.search-result-item { padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.search-result-item:last-child { border-bottom: none; }
+.search-result-item:hover { background: rgba(249,115,22,0.06); }
+.search-result-item .sr-title { font-size: 13px; font-weight: 600; color: var(--text-main); }
+.search-result-item .sr-excerpt { font-size: 11px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Markdown content styles ── */
+#mdContent h1 { font-size: 28px; font-weight: 800; margin-bottom: 8px; color: var(--text-main); border-bottom: 2px solid var(--primary); padding-bottom: 12px; }
+#mdContent h2 { font-size: 20px; font-weight: 700; margin-top: 36px; margin-bottom: 12px; color: var(--text-main); }
+#mdContent h2::before { content: ''; display: inline-block; width: 4px; height: 18px; background: var(--primary); border-radius: 2px; margin-right: 10px; vertical-align: middle; }
+#mdContent h3 { font-size: 16px; font-weight: 700; margin-top: 24px; margin-bottom: 8px; color: var(--text-main); }
+#mdContent p { line-height: 1.75; margin-bottom: 14px; font-size: 14px; color: var(--text-main); }
+#mdContent ul, #mdContent ol { margin: 0 0 14px 24px; }
+#mdContent li { line-height: 1.7; font-size: 14px; margin-bottom: 4px; }
+#mdContent li::marker { color: var(--primary); }
+#mdContent strong { font-weight: 700; color: var(--text-main); }
+#mdContent em { color: var(--text-muted); }
+#mdContent a { color: var(--primary); text-decoration: none; }
+#mdContent a:hover { text-decoration: underline; }
+#mdContent blockquote { border-left: 4px solid var(--primary); padding: 12px 16px; margin: 16px 0; background: rgba(249,115,22,0.06); border-radius: 0 8px 8px 0; font-size: 14px; color: var(--text-main); }
+#mdContent blockquote strong { color: var(--primary); }
+#mdContent code { font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; background: rgba(100,116,139,0.1); padding: 2px 6px; border-radius: 4px; color: #e11d48; }
+#mdContent pre { background: var(--code-bg); color: #e2e8f0; padding: 16px 20px; border-radius: 10px; overflow-x: auto; margin: 16px 0; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; line-height: 1.65; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+#mdContent pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+#mdContent table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+#mdContent th { background: rgba(249,115,22,0.1); color: var(--text-main); font-weight: 700; padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+#mdContent td { padding: 7px 12px; border: 1px solid var(--border); color: var(--text-main); }
+#mdContent tr:nth-child(even) td { background: rgba(100,116,139,0.04); }
+#mdContent hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+#mdContent .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: rgba(249,115,22,0.12); color: var(--primary); border: 1px solid rgba(249,115,22,0.2); margin: 1px; }
+
+/* Topic metadata bar */
+.topic-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; flex-wrap: wrap; }
+.topic-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px; }
+.badge-layer { background: rgba(59,130,246,0.12); color: #2563eb; border: 1px solid rgba(59,130,246,0.25); }
+.badge-foundation { background: rgba(34,197,94,0.12); color: #15803d; border: 1px solid rgba(34,197,94,0.25); }
+.badge-security { background: rgba(239,68,68,0.12); color: #dc2626; border: 1px solid rgba(239,68,68,0.25); }
+.badge-modern { background: rgba(168,85,247,0.12); color: #7e22ce; border: 1px solid rgba(168,85,247,0.25); }
+.badge-reference { background: rgba(245,158,11,0.12); color: #92400e; border: 1px solid rgba(245,158,11,0.25); }
+.badge-wireless { background: rgba(6,182,212,0.12); color: #0e7490; border: 1px solid rgba(6,182,212,0.25); }
+
+/* Bottom navigation */
+.bottom-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
+.nav-prev, .nav-next { display: flex; flex-direction: column; cursor: pointer; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; max-width: 45%; transition: all 0.2s; text-decoration: none; color: var(--text-main); }
+.nav-prev:hover, .nav-next:hover { border-color: var(--primary); background: rgba(249,115,22,0.06); }
+.nav-next { text-align: right; }
+.nav-direction { font-size: 11px; color: var(--text-muted); font-weight: 600; margin-bottom: 3px; }
+.nav-title { font-size: 13px; font-weight: 700; color: var(--text-main); }
+
+/* Loading state */
+.loading { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; gap: 12px; color: var(--text-muted); }
+.loading-spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Hamburger for mobile */
+.hamburger { display: none; background: none; border: none; cursor: pointer; padding: 4px; color: var(--text-main); }
+.sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 50; }
+@media (max-width: 768px) {
+  .sidebar { position: fixed; top: var(--header-h); bottom: 0; left: calc(-1 * var(--sidebar-w)); z-index: 60; transition: left 0.25s; }
+  .sidebar.open { left: 0; }
+  .sidebar-overlay.show { display: block; }
+  .hamburger { display: block; }
+  .content { padding: 24px 20px; }
+}
+
+/* pktana tip box */
+.pktana-tip { background: linear-gradient(135deg, rgba(249,115,22,0.08), rgba(234,88,12,0.05)); border: 1px solid rgba(249,115,22,0.25); border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
+.pktana-tip-title { font-size: 12px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; color: var(--primary); margin-bottom: 6px; }
+.pktana-tip-body { font-size: 13px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar"></div>
+
+<header class="header">
+  <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <a href="/" class="header-back">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+    pktana
+  </a>
+  <a class="header-logo" href="/learn">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+    Learn Networking
+  </a>
+  <div style="flex:1; display:flex; flex-direction:column; gap:1px;">
+    <div class="header-subtitle" id="headerSubtitle">Select a topic to start learning</div>
+  </div>
+  <div class="header-search">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="text" id="searchInput" placeholder="Search topics..." oninput="onSearch(this.value)" onkeydown="onSearchKey(event)">
+    <div class="search-results" id="searchResults" style="display:none;"></div>
+  </div>
+  <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">Dark</button>
+</header>
+
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<div class="layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">Getting Started</div>
+      <div class="sidebar-item" data-page="01-what-is-networking" onclick="loadTopic(this)">
+        <span class="num">1</span>What Is a Network?
+      </div>
+      <div class="sidebar-item" data-page="02-osi-model" onclick="loadTopic(this)">
+        <span class="num">2</span>The OSI Model
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">OSI Layers</div>
+      <div class="sidebar-item" data-page="03-physical-layer" onclick="loadTopic(this)">
+        <span class="num">3</span>Layer 1 — Physical
+      </div>
+      <div class="sidebar-item" data-page="04-data-link-layer" onclick="loadTopic(this)">
+        <span class="num">4</span>Layer 2 — Data Link
+      </div>
+      <div class="sidebar-item" data-page="05-network-layer" onclick="loadTopic(this)">
+        <span class="num">5</span>Layer 3 — Network
+      </div>
+      <div class="sidebar-item" data-page="06-transport-layer" onclick="loadTopic(this)">
+        <span class="num">6</span>Layer 4 — Transport
+      </div>
+      <div class="sidebar-item" data-page="07-application-layer" onclick="loadTopic(this)">
+        <span class="num">7</span>Layer 7 — Application
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">Infrastructure</div>
+      <div class="sidebar-item" data-page="08-topologies" onclick="loadTopic(this)">
+        <span class="num">8</span>Network Topologies
+      </div>
+      <div class="sidebar-item" data-page="09-wireless-networking" onclick="loadTopic(this)">
+        <span class="num">9</span>Wireless Networking
+      </div>
+      <div class="sidebar-item" data-page="10-network-security" onclick="loadTopic(this)">
+        <span class="num">10</span>Network Security
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-group">
+      <div class="sidebar-group-title">Reference</div>
+      <div class="sidebar-item" data-page="11-protocols-reference" onclick="loadTopic(this)">
+        <span class="num">11</span>Protocols Reference
+      </div>
+      <div class="sidebar-item" data-page="12-modern-networking" onclick="loadTopic(this)">
+        <span class="num">12</span>Modern Networking
+      </div>
+    </div>
+  </nav>
+
+  <main class="content" id="mainContent" onscroll="updateProgress()">
+    <div id="welcomeScreen" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; text-align:center; gap:20px;">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
+        <path d="M2 12h2M20 12h2M12 2v2M12 20v2"/>
+      </svg>
+      <div>
+        <h1 style="font-size:28px; font-weight:800; color:var(--text-main); margin-bottom:8px;">Learn Networking</h1>
+        <p style="color:var(--text-muted); font-size:15px; max-width:480px; line-height:1.6;">
+          A complete guide from the basics to modern networking — OSI layers, protocols, topologies, security, and beyond. All examples come to life in pktana.
+        </p>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:12px; max-width:480px; width:100%;">
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; cursor:pointer; transition:all 0.2s;" onclick="document.querySelector('[data-page=\'01-what-is-networking\']').click()">
+          <div style="font-weight:700; margin-bottom:4px;">Start Here</div>
+          <div style="font-size:12px; color:var(--text-muted);">What is a computer network?</div>
+        </div>
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; cursor:pointer; transition:all 0.2s;" onclick="document.querySelector('[data-page=\'02-osi-model\']').click()">
+          <div style="font-weight:700; margin-bottom:4px;">OSI Model</div>
+          <div style="font-size:12px; color:var(--text-muted);">The 7 layers explained</div>
+        </div>
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; cursor:pointer; transition:all 0.2s;" onclick="document.querySelector('[data-page=\'05-network-layer\']').click()">
+          <div style="font-weight:700; margin-bottom:4px;">IP &amp; Routing</div>
+          <div style="font-size:12px; color:var(--text-muted);">Layer 3 deep dive</div>
+        </div>
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; cursor:pointer; transition:all 0.2s;" onclick="document.querySelector('[data-page=\'06-transport-layer\']').click()">
+          <div style="font-weight:700; margin-bottom:4px;">TCP &amp; UDP</div>
+          <div style="font-size:12px; color:var(--text-muted);">Transport layer mastery</div>
+        </div>
+      </div>
+    </div>
+    <div id="mdContent" style="display:none;"></div>
+    <div class="bottom-nav" id="bottomNav" style="display:none;">
+      <a class="nav-prev" id="prevLink" style="display:none;">
+        <span class="nav-direction">← Previous</span>
+        <span class="nav-title" id="prevTitle"></span>
+      </a>
+      <span style="flex:1;"></span>
+      <a class="nav-next" id="nextLink" style="display:none;">
+        <span class="nav-direction">Next →</span>
+        <span class="nav-title" id="nextTitle"></span>
+      </a>
+    </div>
+  </main>
+</div>
+
+<script>
+const TOPICS = [
+  { id: '01-what-is-networking',  title: 'What Is a Network?',      badge: 'foundation' },
+  { id: '02-osi-model',           title: 'The OSI Model',           badge: 'foundation' },
+  { id: '03-physical-layer',      title: 'Layer 1 — Physical',      badge: 'layer' },
+  { id: '04-data-link-layer',     title: 'Layer 2 — Data Link',     badge: 'layer' },
+  { id: '05-network-layer',       title: 'Layer 3 — Network',       badge: 'layer' },
+  { id: '06-transport-layer',     title: 'Layer 4 — Transport',     badge: 'layer' },
+  { id: '07-application-layer',   title: 'Layer 7 — Application',   badge: 'layer' },
+  { id: '08-topologies',          title: 'Network Topologies',      badge: 'foundation' },
+  { id: '09-wireless-networking', title: 'Wireless Networking',     badge: 'wireless' },
+  { id: '10-network-security',    title: 'Network Security',        badge: 'security' },
+  { id: '11-protocols-reference', title: 'Protocols Reference',     badge: 'reference' },
+  { id: '12-modern-networking',   title: 'Modern Networking',       badge: 'modern' },
+];
+let currentIdx = -1;
+let contentCache = {};
+let searchIndex = [];
+
+// ── Theme ──────────────────────────────────────────────────────────────────
+function toggleTheme() {
+  const dark = document.body.classList.toggle('dark');
+  document.getElementById('themeBtn').textContent = dark ? 'Light' : 'Dark';
+  localStorage.setItem('learn_theme', dark ? 'dark' : 'light');
+}
+if (localStorage.getItem('learn_theme') === 'dark') {
+  document.body.classList.add('dark');
+  document.getElementById('themeBtn').textContent = 'Light';
+}
+
+// ── Sidebar toggle (mobile) ────────────────────────────────────────────────
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('show');
+}
+
+// ── Progress bar ───────────────────────────────────────────────────────────
+function updateProgress() {
+  const el = document.getElementById('mainContent');
+  const pct = el.scrollTop / (el.scrollHeight - el.clientHeight) * 100;
+  document.getElementById('progressBar').style.width = Math.min(100, pct) + '%';
+}
+
+// ── Markdown renderer ──────────────────────────────────────────────────────
+function renderMd(md) {
+  let html = md
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // code blocks (must come before inline code)
+    .replace(/```[\w]*\n?([\s\S]*?)```/g, (_,c) => `<pre><code>${c.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')}</code></pre>`)
+    // headings
+    .replace(/^#### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    // horizontal rule
+    .replace(/^---+$/gm, '<hr>')
+    // blockquote
+    .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
+    // bold, italic, inline code
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // links
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    // tables (handle after escaping)
+    .replace(/(^\|.+\|$\n?)+/gm, tbl => {
+      const rows = tbl.trim().split('\n').filter(r => !/^\|[-| :]+\|$/.test(r));
+      if (!rows.length) return tbl;
+      const [head, ...body] = rows;
+      const cells = r => r.replace(/^\||\|$/g,'').split('|').map(c => c.trim());
+      const th = cells(head).map(c => `<th>${c}</th>`).join('');
+      const tb = body.map(r => `<tr>${cells(r).map(c=>`<td>${c}</td>`).join('')}</tr>`).join('');
+      return `<table><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`;
+    })
+    // unordered lists
+    .replace(/(^[ \t]*[-*+] .+$\n?)+/gm, block => {
+      const items = block.trim().split('\n').map(l => `<li>${l.replace(/^[ \t]*[-*+] /,'')}</li>`).join('');
+      return `<ul>${items}</ul>`;
+    })
+    // ordered lists
+    .replace(/(^[ \t]*\d+\. .+$\n?)+/gm, block => {
+      const items = block.trim().split('\n').map(l => `<li>${l.replace(/^[ \t]*\d+\. /,'')}</li>`).join('');
+      return `<ol>${items}</ol>`;
+    })
+    // paragraphs — wrap lines not already wrapped in block tags
+    .replace(/^(?!<[huptboa]|<pre|<table|<hr|$)(.+)$/gm, '<p>$1</p>');
+  // post-process: highlight "Try It With pktana" sections
+  html = html.replace(/<h2>([^<]*[Pp]ktana[^<]*)<\/h2>/g,
+    '<h2 style="color:var(--primary);">$1</h2>');
+  return html;
+}
+
+// ── Load topic ─────────────────────────────────────────────────────────────
+async function loadTopic(el) {
+  const page = el.dataset.page;
+  const idx = TOPICS.findIndex(t => t.id === page);
+  if (idx < 0) return;
+  currentIdx = idx;
+
+  // Update sidebar active state
+  document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+  el.classList.add('active');
+
+  // Close mobile sidebar
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('show');
+
+  // Show loading
+  document.getElementById('welcomeScreen').style.display = 'none';
+  document.getElementById('mdContent').style.display = 'block';
+  document.getElementById('bottomNav').style.display = 'flex';
+  document.getElementById('mdContent').innerHTML =
+    '<div class="loading"><div class="loading-spinner"></div><div>Loading...</div></div>';
+  document.getElementById('mainContent').scrollTop = 0;
+  document.getElementById('progressBar').style.width = '0%';
+
+  // Update header subtitle
+  document.getElementById('headerSubtitle').textContent = TOPICS[idx].title;
+
+  // Update URL
+  history.pushState({ page }, '', `/learn#${page}`);
+
+  // Load content (cache it)
+  if (!contentCache[page]) {
+    try {
+      const r = await fetch(`/api/learn?page=${page}`);
+      contentCache[page] = await r.text();
+      // Index for search
+      searchIndex.push({ id: page, title: TOPICS[idx].title, text: contentCache[page] });
+    } catch(e) {
+      contentCache[page] = `# Error\nCould not load content for ${page}.`;
+    }
+  }
+
+  const topic = TOPICS[idx];
+  const badge = `<span class="topic-badge badge-${topic.badge}">${topic.badge}</span>`;
+  document.getElementById('mdContent').innerHTML =
+    `<div class="topic-meta">${badge}</div>` + renderMd(contentCache[page]);
+
+  // Bottom navigation
+  const prev = idx > 0 ? TOPICS[idx-1] : null;
+  const next = idx < TOPICS.length-1 ? TOPICS[idx+1] : null;
+  const prevLink = document.getElementById('prevLink');
+  const nextLink = document.getElementById('nextLink');
+  if (prev) {
+    prevLink.style.display = 'flex';
+    document.getElementById('prevTitle').textContent = prev.title;
+    prevLink.onclick = () => document.querySelector(`[data-page="${prev.id}"]`).click();
+  } else { prevLink.style.display = 'none'; }
+  if (next) {
+    nextLink.style.display = 'flex';
+    document.getElementById('nextTitle').textContent = next.title;
+    nextLink.onclick = () => document.querySelector(`[data-page="${next.id}"]`).click();
+  } else { nextLink.style.display = 'none'; }
+}
+
+// ── Search ─────────────────────────────────────────────────────────────────
+function onSearch(q) {
+  const box = document.getElementById('searchResults');
+  if (!q || q.length < 2) { box.style.display = 'none'; return; }
+  const lq = q.toLowerCase();
+  const hits = [];
+  // Search topic titles
+  TOPICS.forEach(t => {
+    if (t.title.toLowerCase().includes(lq)) hits.push({ id: t.id, title: t.title, excerpt: '' });
+  });
+  // Search cached content
+  searchIndex.forEach(s => {
+    if (!hits.find(h => h.id === s.id)) {
+      const i = s.text.toLowerCase().indexOf(lq);
+      if (i >= 0) {
+        const excerpt = s.text.substring(Math.max(0,i-30), i+80).replace(/[#*`>\n]/g,' ').trim();
+        hits.push({ id: s.id, title: s.title, excerpt: '...' + excerpt + '...' });
+      }
+    }
+  });
+  if (!hits.length) { box.style.display = 'none'; return; }
+  box.innerHTML = hits.slice(0,8).map(h =>
+    `<div class="search-result-item" onclick="document.querySelector('[data-page=\\'${h.id}\\']').click();document.getElementById('searchInput').value='';document.getElementById('searchResults').style.display='none';">
+      <div class="sr-title">${h.title}</div>
+      ${h.excerpt ? `<div class="sr-excerpt">${h.excerpt}</div>` : ''}
+    </div>`).join('');
+  box.style.display = 'block';
+}
+function onSearchKey(e) {
+  if (e.key === 'Escape') { document.getElementById('searchResults').style.display='none'; document.getElementById('searchInput').value=''; }
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.header-search')) document.getElementById('searchResults').style.display = 'none';
+});
+
+// ── Keyboard navigation ────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowRight' && currentIdx < TOPICS.length-1) {
+    document.querySelector(`[data-page="${TOPICS[currentIdx+1].id}"]`).click();
+  }
+  if (e.key === 'ArrowLeft' && currentIdx > 0) {
+    document.querySelector(`[data-page="${TOPICS[currentIdx-1].id}"]`).click();
+  }
+});
+
+// ── Load from URL hash ─────────────────────────────────────────────────────
+window.addEventListener('load', () => {
+  const hash = location.hash.slice(1);
+  const el = hash ? document.querySelector(`[data-page="${hash}"]`) : null;
+  if (el) el.click();
+});
+window.addEventListener('popstate', e => {
+  if (e.state?.page) {
+    const el = document.querySelector(`[data-page="${e.state.page}"]`);
+    if (el) el.click();
+  }
+});
+</script>
+</body>
+</html>
