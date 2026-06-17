@@ -968,6 +968,7 @@ dependencies = [
  "crossterm",
  "dashmap",
  "lazy_static",
+ "libc",
  "pktana-core",
  "ratatui",
  "reqwest",

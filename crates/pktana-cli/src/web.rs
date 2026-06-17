@@ -569,6 +569,321 @@ pub mod inner {
         lines.join("\n")
     }
 
+    // ── WebSocket PTY Terminal ───────────────────────────────────────────
+
+    fn sha1(input: &[u8]) -> [u8; 20] {
+        let mut h: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+        let bits = (input.len() as u64) * 8;
+        let mut msg = input.to_vec();
+        msg.push(0x80);
+        while msg.len() % 64 != 56 {
+            msg.push(0);
+        }
+        msg.extend_from_slice(&bits.to_be_bytes());
+        for block in msg.chunks_exact(64) {
+            let mut w = [0u32; 80];
+            for i in 0..16 {
+                w[i] = u32::from_be_bytes([
+                    block[i * 4],
+                    block[i * 4 + 1],
+                    block[i * 4 + 2],
+                    block[i * 4 + 3],
+                ]);
+            }
+            for i in 16..80 {
+                w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+            }
+            let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+            for (i, &wi) in w.iter().enumerate() {
+                let (f, k) = if i < 20 {
+                    ((b & c) | (!b & d), 0x5A827999u32)
+                } else if i < 40 {
+                    (b ^ c ^ d, 0x6ED9EBA1u32)
+                } else if i < 60 {
+                    ((b & c) | (b & d) | (c & d), 0x8F1BBCDCu32)
+                } else {
+                    (b ^ c ^ d, 0xCA62C1D6u32)
+                };
+                let t = a
+                    .rotate_left(5)
+                    .wrapping_add(f)
+                    .wrapping_add(e)
+                    .wrapping_add(k)
+                    .wrapping_add(wi);
+                e = d;
+                d = c;
+                c = b.rotate_left(30);
+                b = a;
+                a = t;
+            }
+            h[0] = h[0].wrapping_add(a);
+            h[1] = h[1].wrapping_add(b);
+            h[2] = h[2].wrapping_add(c);
+            h[3] = h[3].wrapping_add(d);
+            h[4] = h[4].wrapping_add(e);
+        }
+        let mut out = [0u8; 20];
+        for i in 0..5 {
+            out[i * 4..(i + 1) * 4].copy_from_slice(&h[i].to_be_bytes());
+        }
+        out
+    }
+
+    fn b64(data: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+        for c in data.chunks(3) {
+            let (aa, bb, cc) = (
+                c[0] as u32,
+                *c.get(1).unwrap_or(&0) as u32,
+                *c.get(2).unwrap_or(&0) as u32,
+            );
+            let n = (aa << 16) | (bb << 8) | cc;
+            out.push(T[((n >> 18) & 63) as usize] as char);
+            out.push(T[((n >> 12) & 63) as usize] as char);
+            if c.len() > 1 {
+                out.push(T[((n >> 6) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+            if c.len() > 2 {
+                out.push(T[(n & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+        out
+    }
+
+    fn ws_accept_key(key: &str) -> String {
+        let mut v = key.trim().as_bytes().to_vec();
+        v.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        b64(&sha1(&v))
+    }
+
+    fn ws_upgrade(stream: &mut std::net::TcpStream, request: &str) -> bool {
+        let key = request
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
+            .and_then(|l| l.split_once(':').map(|x| x.1))
+            .map(str::trim);
+        let key = match key {
+            Some(k) => k,
+            None => return false,
+        };
+        let resp = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+            ws_accept_key(key)
+        );
+        stream.write_all(resp.as_bytes()).is_ok()
+    }
+
+    fn ws_write_frame(w: &mut dyn std::io::Write, opcode: u8, data: &[u8]) -> std::io::Result<()> {
+        w.write_all(&[0x80 | opcode])?;
+        let len = data.len();
+        if len < 126 {
+            w.write_all(&[len as u8])?;
+        } else if len < 65536 {
+            w.write_all(&[126, (len >> 8) as u8, len as u8])?;
+        } else {
+            w.write_all(&[127])?;
+            w.write_all(&(len as u64).to_be_bytes())?;
+        }
+        w.write_all(data)?;
+        w.flush()
+    }
+
+    fn ws_read_frame(stream: &mut std::net::TcpStream) -> Option<(u8, Vec<u8>)> {
+        let mut hdr = [0u8; 2];
+        stream.read_exact(&mut hdr).ok()?;
+        let opcode = hdr[0] & 0x0F;
+        let masked = (hdr[1] & 0x80) != 0;
+        let plen = (hdr[1] & 0x7F) as usize;
+        let payload_len = match plen {
+            126 => {
+                let mut b2 = [0u8; 2];
+                stream.read_exact(&mut b2).ok()?;
+                u16::from_be_bytes(b2) as usize
+            }
+            127 => {
+                let mut b8 = [0u8; 8];
+                stream.read_exact(&mut b8).ok()?;
+                u64::from_be_bytes(b8) as usize
+            }
+            n => n,
+        };
+        let mask = if masked {
+            let mut k = [0u8; 4];
+            stream.read_exact(&mut k).ok()?;
+            Some(k)
+        } else {
+            None
+        };
+        let mut payload = vec![0u8; payload_len];
+        stream.read_exact(&mut payload).ok()?;
+        if let Some(key) = mask {
+            for (i, byte) in payload.iter_mut().enumerate() {
+                *byte ^= key[i % 4];
+            }
+        }
+        Some((opcode, payload))
+    }
+
+    fn pty_resize(master: libc::c_int, cols: u16, rows: u16) {
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        unsafe {
+            libc::ioctl(master, libc::TIOCSWINSZ, &ws as *const _);
+        }
+    }
+
+    fn handle_ws_terminal(stream: &mut std::net::TcpStream, request: &str) {
+        if !ws_upgrade(stream, request) {
+            return;
+        }
+
+        let (master, slave) = unsafe {
+            let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            if m < 0 {
+                return;
+            }
+            if libc::grantpt(m) != 0 {
+                libc::close(m);
+                return;
+            }
+            if libc::unlockpt(m) != 0 {
+                libc::close(m);
+                return;
+            }
+            let name_ptr = libc::ptsname(m);
+            if name_ptr.is_null() {
+                libc::close(m);
+                return;
+            }
+            let s = libc::open(name_ptr, libc::O_RDWR | libc::O_NOCTTY);
+            if s < 0 {
+                libc::close(m);
+                return;
+            }
+            (m, s)
+        };
+
+        pty_resize(master, 220, 50);
+
+        let pid = unsafe { libc::fork() };
+
+        if pid < 0 {
+            unsafe {
+                libc::close(master);
+                libc::close(slave);
+            }
+            return;
+        }
+
+        if pid == 0 {
+            // Child: wire PTY slave to stdio and exec bash.
+            unsafe {
+                libc::close(master);
+                libc::setsid();
+                libc::ioctl(slave, libc::TIOCSCTTY, 0i32);
+                libc::dup2(slave, 0);
+                libc::dup2(slave, 1);
+                libc::dup2(slave, 2);
+                if slave > 2 {
+                    libc::close(slave);
+                }
+                libc::setenv(c"TERM".as_ptr(), c"xterm-256color".as_ptr(), 1);
+                let argv: [*const libc::c_char; 2] = [c"bash".as_ptr(), std::ptr::null()];
+                libc::execv(c"/bin/bash".as_ptr(), argv.as_ptr() as _);
+                libc::_exit(1);
+            }
+        }
+
+        // Parent: bridge WebSocket ↔ PTY master.
+        unsafe {
+            libc::close(slave);
+        }
+
+        let master_r = unsafe { libc::dup(master) };
+        if master_r < 0 {
+            unsafe {
+                libc::kill(pid, libc::SIGHUP);
+                libc::close(master);
+            }
+            return;
+        }
+
+        let mut ws_tx = match stream.try_clone() {
+            Ok(s) => s,
+            Err(_) => {
+                unsafe {
+                    libc::kill(pid, libc::SIGHUP);
+                    libc::close(master_r);
+                    libc::close(master);
+                }
+                return;
+            }
+        };
+
+        // Reader thread: PTY output → WebSocket frames.
+        thread::spawn(move || {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                let n = unsafe {
+                    libc::read(master_r, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                };
+                if n <= 0 {
+                    break;
+                }
+                if ws_write_frame(&mut ws_tx, 2, &buf[..n as usize]).is_err() {
+                    break;
+                }
+            }
+            unsafe {
+                libc::close(master_r);
+            }
+        });
+
+        // Main loop: WebSocket frames → PTY master stdin.
+        loop {
+            match ws_read_frame(stream) {
+                None | Some((8, _)) => break,
+                Some((_, data)) if data.len() == 5 && data[0] == 0xFF => {
+                    // Resize: 0xFF cols_hi cols_lo rows_hi rows_lo
+                    let cols = ((data[1] as u16) << 8) | data[2] as u16;
+                    let rows = ((data[3] as u16) << 8) | data[4] as u16;
+                    pty_resize(master, cols, rows);
+                }
+                Some((_, data)) if !data.is_empty() => {
+                    let mut off = 0;
+                    while off < data.len() {
+                        let n = unsafe {
+                            libc::write(
+                                master,
+                                data[off..].as_ptr() as *const libc::c_void,
+                                data.len() - off,
+                            )
+                        };
+                        if n <= 0 {
+                            break;
+                        }
+                        off += n as usize;
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+
+        unsafe {
+            libc::kill(pid, libc::SIGHUP);
+            libc::close(master);
+        }
+    }
+
     fn handle_client(stream: &mut std::net::TcpStream) {
         let mut buffer = [0; 8192];
         if let Ok(bytes_read) = stream.read(&mut buffer) {
@@ -749,6 +1064,10 @@ pub mod inner {
                         let _ = stream.write_all(response.as_bytes());
                     }
                 }
+            } else if request.starts_with("GET /api/terminal/ws ") {
+                let req_str = request.to_string();
+                drop(request);
+                handle_ws_terminal(stream, &req_str);
             } else if request.starts_with("GET /api/terminal?cmd=") {
                 let start = "GET /api/terminal?cmd=".len();
                 let end = request[start..].find(' ').unwrap_or(0) + start;
@@ -1435,27 +1754,6 @@ pub mod inner {
         .pane-detail:hover { box-shadow: var(--shadow-lg); }
         .pane-hex { flex: 2; min-height: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow-lg); transition: all 0.3s; }
         .pane-hex:hover { box-shadow: var(--shadow-xl); border-color: var(--primary); }
-        .docs-nav-item { display:block; width:100%; text-align:left; padding:8px 16px; font-size:13px; color:var(--text-muted); background:none; border:none; cursor:pointer; border-radius:6px; margin:1px 4px; transition:all 0.2s; font-family:inherit; }
-        .docs-nav-item:hover { background:var(--sidebar-hover); color:var(--text-main); }
-        .docs-nav-item.active { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:#fff; font-weight:600; }
-        .md-content h1 { font-size:1.8em; font-weight:700; color:var(--text-main); margin:0 0 16px; padding-bottom:10px; border-bottom:2px solid var(--border); }
-        .md-content h2 { font-size:1.3em; font-weight:700; color:var(--text-main); margin:28px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
-        .md-content h3 { font-size:1.1em; font-weight:600; color:var(--primary); margin:20px 0 8px; }
-        .md-content h4 { font-size:1em; font-weight:600; color:var(--text-muted); margin:16px 0 6px; }
-        .md-content p { margin:0 0 12px; }
-        .md-content code { background:var(--accent-light,rgba(99,102,241,0.1)); color:#e879f9; padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.88em; }
-        .md-content pre { background:#0f172a; border:1px solid var(--border); border-radius:8px; padding:14px 18px; overflow-x:auto; margin:12px 0; }
-        .md-content pre code { background:none; color:#94a3b8; font-size:0.85em; padding:0; }
-        .md-content ul, .md-content ol { margin:0 0 12px 20px; }
-        .md-content li { margin:4px 0; }
-        .md-content table { border-collapse:collapse; width:100%; margin:14px 0; font-size:13px; }
-        .md-content th { background:var(--accent-light,rgba(99,102,241,0.08)); color:var(--text-main); font-weight:700; padding:8px 12px; border:1px solid var(--border); text-align:left; }
-        .md-content td { padding:7px 12px; border:1px solid var(--border); color:var(--text-main); }
-        .md-content tr:nth-child(even) td { background:rgba(148,163,184,0.04); }
-        .md-content blockquote { border-left:4px solid var(--primary); padding:8px 14px; margin:12px 0; color:var(--text-muted); background:var(--accent-light,rgba(99,102,241,0.06)); border-radius:0 6px 6px 0; }
-        .md-content hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
-        .md-content a { color:var(--primary); text-decoration:underline; }
-        .md-content strong { color:var(--text-main); font-weight:700; }
 
         .ws-table { min-width: 100%; border-collapse: collapse; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; table-layout: auto; }
         .ws-table th { background: linear-gradient(180deg, #f8fafc, #f1f5f9); color: var(--text-main); border-bottom: 2px solid var(--primary); border-right: 1px solid var(--border); padding: 8px 10px; text-align: left; position: sticky; top: 0; z-index: 10; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px; font-weight: 700; box-shadow: var(--shadow-sm); }
@@ -1578,6 +1876,253 @@ pub mod inner {
         .wireshark-view.vertical { flex-direction: column; }
         .wireshark-view.vertical .resizer { flex: 0 0 5px; width: 100%; cursor: row-resize; margin: -8px 0; }
         .wireshark-view.vertical .pane-left, .wireshark-view.vertical .pane-right { min-width: 100%; min-height: 100px; }
+
+        /* ── Custom scrollbars ── */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(249,115,22,0.35); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+
+        /* ── Subtle dot-grid background ── */
+        body:not(.dark-theme) { background-image: radial-gradient(rgba(0,0,0,0.055) 1px, transparent 1px); background-size: 22px 22px; }
+        body.dark-theme { background-image: radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px); background-size: 22px 22px; }
+
+        /* ── Landing page overhaul ── */
+        .landing-page { background: radial-gradient(ellipse at 25% 55%, #1c0540 0%, #0f172a 45%, #020d1a 100%) !important; overflow: hidden; }
+        .landing-bg-orb { position: absolute; border-radius: 50%; pointer-events: none; }
+        .landing-bg-orb.o1 { width:600px; height:600px; top:-200px; left:-150px; background: radial-gradient(circle, rgba(249,115,22,0.13) 0%, transparent 70%); animation: orbFloat 9s ease-in-out infinite alternate; }
+        .landing-bg-orb.o2 { width:480px; height:480px; bottom:-180px; right:-100px; background: radial-gradient(circle, rgba(56,189,248,0.09) 0%, transparent 70%); animation: orbFloat 12s ease-in-out infinite alternate-reverse; }
+        .landing-bg-orb.o3 { width:300px; height:300px; top:40%; left:60%; background: radial-gradient(circle, rgba(168,85,247,0.07) 0%, transparent 70%); animation: orbFloat 7s ease-in-out infinite alternate; }
+        @keyframes orbFloat { from { transform: translate(0,0) scale(1); } to { transform: translate(30px,25px) scale(1.08); } }
+        .landing-inner { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 20px; }
+        .landing-icon-wrap { width:88px; height:88px; border-radius: 26px; background: linear-gradient(135deg,#f97316,#ea580c); display:flex; align-items:center; justify-content:center; margin-bottom:20px; box-shadow: 0 0 50px rgba(249,115,22,0.55), 0 10px 40px rgba(0,0,0,0.5); animation: iconGlow 3s ease-in-out infinite, fadeInScale 0.7s ease-out; }
+        @keyframes iconGlow { 0%,100%{ box-shadow: 0 0 50px rgba(249,115,22,0.55), 0 10px 40px rgba(0,0,0,0.5); } 50%{ box-shadow: 0 0 80px rgba(249,115,22,0.8), 0 10px 40px rgba(0,0,0,0.5); } }
+        .landing-brand { font-family:'Nunito',system-ui,sans-serif; font-size:60px; font-weight:900; letter-spacing:-2px; background:linear-gradient(135deg,#f97316,#fb923c,#fde68a); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation: fadeInUp 0.7s ease-out 0.15s both; line-height:1; margin-bottom:10px; }
+        .landing-tagline { color:rgba(255,255,255,0.88); font-size:19px; font-weight:600; margin:0 0 8px; letter-spacing:0.3px; animation: fadeInUp 0.7s ease-out 0.25s both; }
+        .landing-sub { color:rgba(255,255,255,0.45); font-size:13px; margin:0 0 28px; animation: fadeInUp 0.7s ease-out 0.35s both; }
+        .landing-pills { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:38px; animation: fadeInUp 0.7s ease-out 0.45s both; }
+        .landing-pills span { padding:5px 13px; border-radius:20px; font-size:11px; font-weight:600; background:rgba(255,255,255,0.07); color:rgba(255,255,255,0.65); border:1px solid rgba(255,255,255,0.11); backdrop-filter:blur(8px); letter-spacing:0.3px; }
+        .landing-btn { font-size:15px !important; padding:14px 42px !important; border-radius:50px !important; letter-spacing:0.5px; animation: fadeInUp 0.7s ease-out 0.55s both !important; box-shadow: 0 0 32px rgba(249,115,22,0.45), 0 6px 20px rgba(0,0,0,0.35) !important; }
+        .landing-btn:hover { box-shadow: 0 0 55px rgba(249,115,22,0.75), 0 10px 28px rgba(0,0,0,0.45) !important; transform: translateY(-4px) scale(1.02) !important; }
+
+        /* ── Frosted-glass Navbar ── */
+        .navbar { background: rgba(255,255,255,0.88) !important; backdrop-filter: blur(24px) saturate(180%) !important; -webkit-backdrop-filter: blur(24px) saturate(180%) !important; border-bottom: 1px solid rgba(249,115,22,0.1) !important; border-image: none !important; box-shadow: 0 2px 24px rgba(0,0,0,0.07) !important; }
+        body.dark-theme .navbar { background: rgba(15,23,42,0.9) !important; border-bottom: 1px solid rgba(249,115,22,0.18) !important; box-shadow: 0 2px 24px rgba(0,0,0,0.35) !important; }
+
+        /* Live-capture indicator in navbar */
+        .nav-live-badge { display:none; align-items:center; gap:8px; padding:6px 14px; border-radius:22px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.28); font-size:12px; font-weight:700; color:#10b981; }
+        .nav-live-badge.on { display:flex; }
+        .nav-live-dot { width:8px; height:8px; border-radius:50%; background:#10b981; box-shadow:0 0 0 0 rgba(16,185,129,0.7); animation: livePing 1.4s ease-out infinite; }
+        @keyframes livePing { 0%{ box-shadow:0 0 0 0 rgba(16,185,129,0.7); } 70%{ box-shadow:0 0 0 8px rgba(16,185,129,0); } 100%{ box-shadow:0 0 0 0 rgba(16,185,129,0); } }
+
+        /* ── Activity bar glow on active ── */
+        .activity-icon.active { box-shadow: 3px 0 0 0 var(--primary) inset, 0 0 18px rgba(249,115,22,0.22) !important; }
+
+        /* ── Glassmorphism Cards ── */
+        body:not(.dark-theme) .card { background: rgba(255,255,255,0.88) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.7) !important; }
+        body.dark-theme .card { background: rgba(30,41,59,0.78) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.05) !important; }
+
+        /* ── Protocol row colors — richer palette ── */
+        .ws-bg-tcp  { background-color: #eff6ff !important; }
+        .ws-bg-udp  { background-color: #ecfdf5 !important; }
+        .ws-bg-http { background-color: #f0fdf4 !important; }
+        .ws-bg-dns  { background-color: #e0f2fe !important; }
+        .ws-bg-icmp { background-color: #fdf4ff !important; }
+        .ws-bg-arp  { background-color: #fefce8 !important; }
+        .ws-bg-bad  { background-color: #fff1f2 !important; }
+        body.dark-theme .ws-bg-tcp  { background-color: #1e3a5f !important; color:#bfdbfe !important; }
+        body.dark-theme .ws-bg-udp  { background-color: #134e3a !important; color:#bbf7d0 !important; }
+        body.dark-theme .ws-bg-http { background-color: #14532d !important; color:#dcfce7 !important; }
+        body.dark-theme .ws-bg-dns  { background-color: #0c4a6e !important; color:#bae6fd !important; }
+        body.dark-theme .ws-bg-icmp { background-color: #4a1d96 !important; color:#e9d5ff !important; }
+        body.dark-theme .ws-bg-arp  { background-color: #78350f !important; color:#fef08a !important; }
+        body.dark-theme .ws-bg-bad  { background-color: #7f1d1d !important; color:#fecaca !important; }
+
+        /* ── Session strip & chips ── */
+        .session-strip { background: linear-gradient(180deg, var(--surface), var(--bg-solid)) !important; }
+        .session-chip.active { box-shadow: 0 2px 14px rgba(249,115,22,0.38) !important; }
+        .chip-live-dot { width:7px; height:7px; border-radius:50%; background:#10b981; animation:livePing 1.4s ease-out infinite; flex-shrink:0; }
+
+        /* ── Toolbar ── */
+        body:not(.dark-theme) .panel-toolbar { background: rgba(255,255,255,0.96) !important; }
+        body.dark-theme .panel-toolbar { background: rgba(30,41,59,0.96) !important; }
+        .toolbar-group { border-radius: 10px !important; transition: all 0.2s !important; }
+        .toolbar-group:hover { border-color: rgba(249,115,22,0.5) !important; box-shadow: 0 0 0 3px rgba(249,115,22,0.08) !important; }
+
+        /* ── Status bar ── */
+        .statusbar { background: linear-gradient(180deg, var(--surface), rgba(249,115,22,0.03)) !important; border-top: 1px solid rgba(249,115,22,0.1) !important; }
+
+        /* ── Pane borders ── */
+        .pane-left, .pane-detail, .pane-hex { border-radius: 10px !important; }
+
+        /* ── Window tabs ── */
+        .win-tab { border-radius: 6px 6px 0 0; margin-top: 3px; }
+        .win-tab.active { box-shadow: 0 -2px 10px rgba(249,115,22,0.12); }
+
+        /* ── Scroll toast pill ── */
+        .scroll-toast { border-radius: 28px !important; backdrop-filter: blur(12px) !important; border: 1px solid rgba(249,115,22,0.25) !important; font-size: 12px !important; }
+
+        /* ── Badge pop on hover ── */
+        .badge:hover { transform: scale(1.08); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+
+        /* ── kv-item hover glow ── */
+        .kv-item:hover { background: rgba(249,115,22,0.04); border-radius: 6px; }
+
+        /* ── Table row hover ── */
+        .ws-table tr:not(:first-child):hover td { background: rgba(249,115,22,0.09) !important; }
+        .settings-table tbody tr:hover td { background: rgba(249,115,22,0.05) !important; }
+        /* ── Selected + hovered: keep text visible (hover bg must NOT wash out white text) ── */
+        .ws-table tr.selected:hover td { background: linear-gradient(135deg, #ea580c, #c2410c) !important; color: white !important; }
+        .settings-table tbody tr.selected td { background: linear-gradient(135deg, var(--primary), var(--primary-dark)) !important; color: white !important; font-weight: 600; }
+        .settings-table tbody tr.selected:hover td { background: linear-gradient(135deg, #ea580c, #c2410c) !important; color: white !important; }
+
+        /* ── Toast notifications ── */
+        #toastContainer { position:fixed; bottom:24px; right:24px; z-index:99999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+        .toast { pointer-events:all; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-radius:10px; font-size:13px; font-weight:600; box-shadow:0 8px 24px rgba(0,0,0,0.18); animation:toastIn 0.3s ease-out; max-width:380px; backdrop-filter:blur(8px); }
+        .toast-info    { background:rgba(15,23,42,0.95); color:#e2e8f0; border-left:4px solid #38bdf8; }
+        .toast-success { background:rgba(6,78,59,0.95);  color:#6ee7b7; border-left:4px solid #10b981; }
+        .toast-error   { background:rgba(127,29,29,0.95);color:#fca5a5; border-left:4px solid #ef4444; }
+        .toast-warn    { background:rgba(66,32,6,0.95);  color:#fde68a; border-left:4px solid #f59e0b; }
+        .toast-close   { background:none; border:none; color:inherit; opacity:0.6; cursor:pointer; font-size:16px; padding:0; line-height:1; flex-shrink:0; }
+        .toast-close:hover { opacity:1; }
+        @keyframes toastIn  { from{ opacity:0; transform:translateX(20px); } to{ opacity:1; transform:translateX(0); } }
+        @keyframes toastOut { from{ opacity:1; transform:translateX(0); }    to{ opacity:0; transform:translateX(20px); } }
+
+        /* ── Modal dialog ── */
+        .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:99998; display:flex; align-items:center; justify-content:center; animation:fadeIn 0.15s ease; backdrop-filter:blur(4px); }
+        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+        .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:28px 32px; min-width:340px; max-width:480px; box-shadow:0 20px 60px rgba(0,0,0,0.35); animation:modalIn 0.2s ease-out; }
+        @keyframes modalIn { from{opacity:0;transform:scale(0.95)translateY(-10px)} to{opacity:1;transform:scale(1)translateY(0)} }
+        .modal-title { font-size:16px; font-weight:800; color:var(--text-main); margin-bottom:10px; }
+        .modal-body  { font-size:13px; color:var(--text-muted); margin-bottom:20px; line-height:1.6; }
+        .modal-input-wrap { margin-bottom:20px; }
+        .modal-input { width:100%; padding:10px 14px; border:2px solid var(--border); border-radius:8px; font-size:13px; background:var(--surface); color:var(--text-main); outline:none; }
+        .modal-input:focus { border-color:var(--primary); }
+        .modal-footer { display:flex; gap:10px; justify-content:flex-end; }
+        .modal-confirm { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:white; border:none; border-radius:8px; padding:9px 22px; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.2s; }
+        .modal-confirm:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(249,115,22,0.4); }
+        .modal-cancel { background:transparent; color:var(--text-muted); border:2px solid var(--border); border-radius:8px; padding:9px 18px; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.2s; }
+        .modal-cancel:hover { border-color:var(--primary); color:var(--primary); }
+        .modal-confirm.danger { background:linear-gradient(135deg,#dc2626,#b91c1c); }
+        .modal-confirm.danger:hover { box-shadow:0 4px 12px rgba(220,38,38,0.4); }
+
+        /* ── Icon-only toolbar buttons ── */
+        .icon-btn { background:transparent; border:1.5px solid var(--border); border-radius:7px; color:var(--text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:5px; padding:6px 10px; font-size:12px; font-weight:600; transition:all 0.2s; }
+        .icon-btn:hover { border-color:var(--primary); color:var(--primary); background:rgba(249,115,22,0.06); }
+        .icon-btn svg { flex-shrink:0; }
+
+        /* ── Keyboard shortcut hint ── */
+        .kbd { display:inline-block; padding:1px 5px; border:1px solid var(--border); border-bottom-width:2px; border-radius:4px; font-size:10px; font-family:monospace; color:var(--text-muted); background:var(--surface); }
+
+        /* ── Improved empty state ── */
+        .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; color:var(--text-muted); gap:14px; }
+        .empty-state-icon { width:56px; height:56px; border-radius:16px; background:linear-gradient(135deg,rgba(249,115,22,0.1),rgba(249,115,22,0.05)); display:flex; align-items:center; justify-content:center; }
+        .empty-state-title { font-size:15px; font-weight:700; color:var(--text-main); }
+        .empty-state-sub { font-size:13px; text-align:center; max-width:280px; }
+
+        /* ── Route table enhancements ── */
+        .default-route-badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:9px; font-weight:800; background:linear-gradient(135deg,#f97316,#ea580c); color:white; letter-spacing:0.5px; margin-right:5px; vertical-align:middle; }
+        .direct-route { color:var(--text-muted); font-style:italic; }
+
+        /* ── NIC state badges ── */
+        .nic-up   { display:inline-flex; align-items:center; gap:4px; color:var(--success); font-weight:700; font-size:11px; }
+        .nic-down { display:inline-flex; align-items:center; gap:4px; color:var(--danger);  font-weight:700; font-size:11px; }
+        .nic-dot  { width:7px; height:7px; border-radius:50%; background:currentColor; }
+
+        /* ── PCAP drop zone ── */
+        .drop-zone { border:2px dashed var(--border); border-radius:12px; padding:32px 20px; text-align:center; cursor:pointer; transition:all 0.2s; color:var(--text-muted); background:var(--surface); }
+        .drop-zone:hover, .drop-zone.drag-over { border-color:var(--primary); background:rgba(249,115,22,0.04); color:var(--primary); }
+        .drop-zone-icon { font-size:28px; margin-bottom:8px; }
+        .drop-zone p { font-size:13px; font-weight:600; margin:0; }
+        .drop-zone small { font-size:11px; opacity:0.7; }
+
+        /* ── Protocol color badges ── */
+        .proto-badge { display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:800; letter-spacing:0.5px; text-transform:uppercase; white-space:nowrap; }
+        .proto-tcp    { background:#dbeafe; color:#1d4ed8; border:1px solid #93c5fd; }
+        .proto-udp    { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; }
+        .proto-http, .proto-https { background:#dcfce7; color:#14532d; border:1px solid #86efac; }
+        .proto-http2  { background:#bbf7d0; color:#14532d; border:1px solid #4ade80; }
+        .proto-dns    { background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; }
+        .proto-tls, .proto-ssl { background:#fef9c3; color:#713f12; border:1px solid #fde047; }
+        .proto-icmp   { background:#f3e8ff; color:#6b21a8; border:1px solid #d8b4fe; }
+        .proto-arp    { background:#fef3c7; color:#78350f; border:1px solid #fcd34d; }
+        .proto-quic   { background:#fce7f3; color:#9d174d; border:1px solid #f9a8d4; }
+        .proto-grpc   { background:#ede9fe; color:#4c1d95; border:1px solid #c4b5fd; }
+        .proto-ssh    { background:#f1f5f9; color:#1e3a5f; border:1px solid #94a3b8; }
+        .proto-ftp    { background:#fff7ed; color:#7c2d12; border:1px solid #fdba74; }
+        .proto-bgp    { background:#fef2f2; color:#7f1d1d; border:1px solid #fca5a5; }
+        .proto-ntp    { background:#ecfdf5; color:#064e3b; border:1px solid #6ee7b7; }
+        .proto-sip    { background:#fdf4ff; color:#701a75; border:1px solid #e879f9; }
+        .proto-ip     { background:#f8fafc; color:#334155; border:1px solid #cbd5e1; }
+        body.dark-theme .proto-tcp    { background:#1e3a5f; color:#bfdbfe; border-color:#3b82f6; }
+        body.dark-theme .proto-udp    { background:#064e3b; color:#6ee7b7; border-color:#10b981; }
+        body.dark-theme .proto-http, body.dark-theme .proto-https { background:#14532d; color:#86efac; border-color:#22c55e; }
+        body.dark-theme .proto-http2  { background:#14532d; color:#4ade80; border-color:#16a34a; }
+        body.dark-theme .proto-dns    { background:#0c4a6e; color:#7dd3fc; border-color:#0ea5e9; }
+        body.dark-theme .proto-tls, body.dark-theme .proto-ssl { background:#422006; color:#fde047; border-color:#ca8a04; }
+        body.dark-theme .proto-icmp   { background:#4a1d96; color:#d8b4fe; border-color:#9333ea; }
+        body.dark-theme .proto-arp    { background:#78350f; color:#fcd34d; border-color:#f59e0b; }
+        body.dark-theme .proto-quic   { background:#881337; color:#fda4af; border-color:#f43f5e; }
+        body.dark-theme .proto-grpc   { background:#3b0764; color:#c4b5fd; border-color:#7c3aed; }
+        body.dark-theme .proto-ssh    { background:#1e293b; color:#94a3b8; border-color:#475569; }
+        body.dark-theme .proto-ip     { background:#1e293b; color:#94a3b8; border-color:#475569; }
+
+        /* ── Risk pills ── */
+        .risk-badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; letter-spacing:0.4px; margin-right:5px; }
+        .risk-high   { background:linear-gradient(135deg,#dc2626,#b91c1c); color:#fff; box-shadow:0 1px 4px rgba(220,38,38,0.4); }
+        .risk-medium { background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; box-shadow:0 1px 4px rgba(245,158,11,0.4); }
+        .risk-low    { background:linear-gradient(135deg,#6b7280,#4b5563); color:#fff; }
+
+        /* ── Progress bar refinements ── */
+        .proto-bar-wrap { margin-bottom:10px; }
+        .proto-bar-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
+        .proto-bar-label strong { font-size:12px; }
+        .proto-bar-label span { font-size:11px; color:var(--text-muted); font-weight:600; }
+        .proto-bar-track { width:100%; background:var(--border); border-radius:6px; height:7px; overflow:hidden; }
+        .proto-bar-fill { height:100%; border-radius:6px; transition:width 0.4s ease; background:linear-gradient(90deg, var(--primary), var(--primary-dark)); }
+
+        /* ── Terminal traffic lights ── */
+        .term-traffic-lights { display:flex; gap:7px; align-items:center; margin-right:12px; }
+        .traffic-dot { width:13px; height:13px; border-radius:50%; cursor:pointer; transition:all 0.15s; flex-shrink:0; }
+        .traffic-dot.red    { background:#ff5f57; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
+        .traffic-dot.yellow { background:#febc2e; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
+        .traffic-dot.green  { background:#28c840; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
+        .traffic-dot:hover  { filter:brightness(1.15); transform:scale(1.1); }
+
+        /* ── Capture state badge in toolbar ── */
+        .capture-state { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:700; border:1px solid; transition:all 0.3s; }
+        .capture-state.idle    { background:rgba(100,116,139,0.1); color:var(--text-muted); border-color:var(--border); }
+        .capture-state.live    { background:rgba(16,185,129,0.1); color:#059669; border-color:#6ee7b7; animation:livePing 1.4s infinite; }
+        .capture-state.paused  { background:rgba(245,158,11,0.1); color:#d97706; border-color:#fcd34d; }
+        .capture-dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+
+        /* ── NIC card in server panel ── */
+        .iface-card { border:1.5px solid var(--border); border-radius:10px; padding:10px 14px; background:var(--surface); cursor:pointer; transition:all 0.2s; position:relative; overflow:hidden; }
+        .iface-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--danger); border-radius:4px 0 0 4px; transition:background 0.2s; }
+        .iface-card.up::before { background:var(--success); }
+        .iface-card:hover { border-color:var(--primary); transform:translateY(-2px); box-shadow:var(--shadow); }
+        .iface-card:hover::before { background:var(--primary); }
+        .iface-name { font-weight:800; color:var(--primary); font-size:14px; font-family:monospace; }
+        .iface-desc { font-size:11px; color:var(--text-muted); margin-top:2px; }
+        .iface-status { font-size:10px; font-weight:700; margin-top:5px; display:flex; align-items:center; gap:5px; letter-spacing:0.5px; text-transform:uppercase; }
+
+        /* ── Status bar pill ── */
+        .sb-pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; margin-right:6px; }
+        .sb-live { background:rgba(16,185,129,0.15); color:#059669; border:1px solid #6ee7b7; }
+        .sb-idle { background:rgba(100,116,139,0.1); color:var(--text-muted); border:1px solid var(--border); }
+
+        /* ── Connections/Routes table enhancements ── */
+        .state-badge { display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:700; letter-spacing:0.4px; }
+        .state-established { background:#d1fae5; color:#065f46; }
+        .state-listen       { background:#dbeafe; color:#1d4ed8; }
+        .state-time-wait    { background:#fef3c7; color:#78350f; }
+        .state-close-wait   { background:#f3e8ff; color:#6b21a8; }
+        .state-other        { background:#f1f5f9; color:#475569; }
+        body.dark-theme .state-established { background:#064e3b; color:#6ee7b7; }
+        body.dark-theme .state-listen       { background:#1e3a5f; color:#93c5fd; }
+        body.dark-theme .state-time-wait    { background:#422006; color:#fde68a; }
+        body.dark-theme .state-close-wait   { background:#3b0764; color:#c4b5fd; }
+        body.dark-theme .state-other        { background:#1e293b; color:#94a3b8; }
     </style>
     <script>
         // Define critical functions early so onclick handlers work
@@ -1599,7 +2144,7 @@ pub mod inner {
             const body = document.body;
             const isDark = body.classList.toggle('dark-theme');
             const themeBtn = document.querySelector('.theme-toggle');
-            if (themeBtn) themeBtn.textContent = isDark ? 'Light' : 'Dark';
+            if (themeBtn) themeBtn.textContent = isDark ? '☀️' : '🌙';
             localStorage.setItem('pktana-theme', isDark ? 'dark' : 'light');
         }
 
@@ -1657,15 +2202,18 @@ pub mod inner {
                 const ifaces = await res.json();
                 let html = '';
                 ifaces.forEach(iface => {
-                    const statusColor = iface.is_up ? 'var(--success)' : 'var(--danger)';
                     const desc = iface.description || 'Network Interface';
-                    html += `<div style="border:1px solid var(--border); border-radius:6px; padding:8px 12px; background:var(--surface); cursor:pointer; transition:all 0.2s;" 
-                                  onclick="selectInterfaceForCapture('${iface.name}')" 
-                                  onmouseover="this.style.borderColor='var(--primary)'" 
-                                  onmouseout="this.style.borderColor='var(--border)'">
-                        <div style="font-weight:700; color:var(--primary); font-size:13px;">${iface.name}</div>
-                        <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">${desc}</div>
-                        <div style="font-size:10px; margin-top:4px;"><span style="color:${statusColor}; font-weight:600;">${iface.is_up ? '●' : '○'} ${iface.is_up ? 'UP' : 'DOWN'}</span></div>
+                    const upClass = iface.is_up ? ' up' : '';
+                    const statusIcon = iface.is_up ? '▲' : '▼';
+                    const statusColor = iface.is_up ? 'var(--success)' : 'var(--danger)';
+                    html += `<div class="iface-card${upClass}" onclick="selectInterfaceForCapture('${iface.name}')">
+                        <div class="iface-name">${iface.name}</div>
+                        <div class="iface-desc">${desc}</div>
+                        <div class="iface-status" style="color:${statusColor};">
+                            <span>${statusIcon}</span>
+                            <span>${iface.is_up ? 'UP' : 'DOWN'}</span>
+                            ${iface.address ? `<span style="color:var(--text-muted);font-weight:500;margin-left:4px;">${iface.address}</span>` : ''}
+                        </div>
                     </div>`;
                 });
                 document.getElementById('serverInterfacesList').innerHTML = html;
@@ -1724,50 +2272,74 @@ pub mod inner {
         window.viewSession = viewSession;
         window.loadSessions = loadSessions;
 
-        function showCreateSessionDialog() {
-            const iface = prompt('Enter interface name (e.g., eth0):');
-            if (!iface) return;
-            fetch('/api/sessions/create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ interface: iface })
-            }).then(res => res.json()).then(data => {
-                alert('Session created: ' + data.id);
+        async function showCreateSessionDialog() {
+            const iface = await modal({ title: 'New Capture Session', body: 'Enter the interface name to monitor:', confirmText: 'Create', inputPlaceholder: 'e.g. eth0, any, ens3', inputDefault: '' });
+            if (!iface || !iface.trim()) return;
+            try {
+                const res = await fetch('/api/sessions/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ interface: iface.trim() }) });
+                const data = await res.json();
+                toast('Session created: ' + data.id, 'success');
                 loadSessions();
-            }).catch(e => alert('Error: ' + e));
+            } catch (e) { toast('Error creating session: ' + e, 'error'); }
         }
 
         function stopSession(id) {
             fetch(`/api/sessions/${id}/stop`, { method: 'POST' })
-                .then(() => loadSessions())
-                .catch(e => alert('Error: ' + e));
+                .then(() => { toast('Session stopped', 'warn'); loadSessions(); })
+                .catch(e => toast('Error: ' + e, 'error'));
         }
 
-        function deleteSession(id) {
-            if (confirm('Delete this session?')) {
-                fetch(`/api/sessions/${id}`, { method: 'DELETE' })
-                    .then(() => loadSessions())
-                    .catch(e => alert('Error: ' + e));
-            }
+        async function deleteSession(id) {
+            const ok = await modal({ title: 'Delete Session', body: 'Remove this session? Captured data will be lost.', confirmText: 'Delete', danger: true });
+            if (!ok) return;
+            fetch(`/api/sessions/${id}`, { method: 'DELETE' })
+                .then(() => { toast('Session deleted', 'info'); loadSessions(); })
+                .catch(e => toast('Error: ' + e, 'error'));
         }
     </script>
 </head>
 <body>
     <!-- Landing Page -->
     <div class="landing-page" id="landingPage">
-        <img src="/pktana.png" alt="pktana Network Analyzer" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22 font-size=%2224%22 fill=%22white%22%3Epktana%3C/text%3E%3C/svg%3E'">
-        <h1>Welcome to pktana</h1>
-        <p>Enterprise Network Packet Analyzer & Deep Inspection Tool</p>
-        <button class="landing-btn" onclick="enterDashboard()">Launch Dashboard</button>
+        <div class="landing-bg-orb o1"></div>
+        <div class="landing-bg-orb o2"></div>
+        <div class="landing-bg-orb o3"></div>
+        <div class="landing-inner">
+            <div class="landing-icon-wrap">
+                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                </svg>
+            </div>
+            <div class="landing-brand">pktana</div>
+            <div class="landing-tagline">Enterprise Network Packet Analyzer</div>
+            <div class="landing-sub">Real-time Deep Packet Inspection · Layer 2–7 · GeoIP · Flow Analysis</div>
+            <div class="landing-pills">
+                <span>100+ Protocols</span>
+                <span>TLS · QUIC · gRPC</span>
+                <span>Wireshark-style UI</span>
+                <span>Process Mapping</span>
+                <span>XDP / DPDK</span>
+                <span>BPF Filters</span>
+            </div>
+            <button class="landing-btn" onclick="enterDashboard()">Launch Dashboard →</button>
+        </div>
     </div>
 
     <!-- Top Navbar (Fixed at top) -->
     <div class="navbar" id="mainNavbar" style="display:none;">
-        <div class="logo">
+        <div class="logo" style="gap:10px;">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
             <span>pktana</span>
         </div>
-        <div class="nav-controls" style="font-size:13px; color:var(--text-muted);">
-            Network Traffic Analyzer
+        <div id="navLiveBadge" class="nav-live-badge">
+            <div class="nav-live-dot"></div>
+            <span>LIVE</span>
+            <span id="navLivePkts" style="opacity:0.75;font-weight:500;">0 pkts</span>
+        </div>
+        <div class="nav-controls" style="font-size:12px; color:var(--text-muted); font-weight:500; letter-spacing:0.3px;">
+            Network Packet Analyzer
         </div>
     </div>
 
@@ -1838,17 +2410,9 @@ pub mod inner {
                 </svg>
                 <div class="icon-label">GeoIP</div>
             </div>
-            <div class="activity-icon" onclick="switchTab('docs')" title="Documentation">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
-                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
-                </svg>
-                <div class="icon-label">Docs</div>
-            </div>
-
             <!-- Bottom Controls -->
             <div class="activity-bar-bottom">
-                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Light/Dark Theme">Dark</button>
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Light/Dark Theme">🌙</button>
                 <button class="stop-daemon-btn" onclick="stopDaemon()" title="Stop pktana Daemon">Stop</button>
             </div>
         </div>
@@ -1859,10 +2423,10 @@ pub mod inner {
             <div id="sessionStripGlobal" class="session-strip" style="display:none;"></div>
             <!-- Per-window inner tab bar (Packets/Flows/Stats/Hardware) -->
             <div id="windowTabs" class="window-tabs" style="display:none;">
-                <button class="win-tab active" data-tab="dashboard" onclick="switchTab('dashboard')">📊 Packets</button>
-                <button class="win-tab" data-tab="flows" onclick="switchTab('flows')">🔗 Flows</button>
-                <button class="win-tab" data-tab="stats" onclick="switchTab('stats')">📈 Protocols</button>
-                <button class="win-tab" data-tab="hardware" onclick="switchTab('hardware')">⚙️ Hardware</button>
+                <button class="win-tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Packets</button>
+                <button class="win-tab" data-tab="flows" onclick="switchTab('flows')">Flows</button>
+                <button class="win-tab" data-tab="stats" onclick="switchTab('stats')">Protocols</button>
+                <button class="win-tab" data-tab="hardware" onclick="switchTab('hardware')">Hardware</button>
             </div>
             <!-- Content Panels (no horizontal tabs) -->
     <div class="container">
@@ -1901,25 +2465,28 @@ pub mod inner {
 
         <!-- PCAP Panel -->
         <div id="pcap" class="panel">
-            <div class="card" style="margin: 20px; max-width: 600px;">
-                <div class="card-title">Analyze PCAP File</div>
-                <div style="display:flex; flex-direction:column; gap:15px;">
-                    <div>
-                        <label style="font-weight:bold; font-size:13px; color:var(--text-muted);">Path to PCAP on Server:</label><br>
-                        <div style="display:flex; gap:10px; margin-top:5px;">
-                            <input type="text" id="pcapRead" class="form-input" placeholder="/var/log/capture.pcap" style="flex-grow:1;">
-                            <button class="primary-btn" onclick="analyzePcap()">Analyze Server PCAP</button>
-                        </div>
+            <div style="padding:24px; display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start;">
+                <div class="card" style="flex:1; min-width:300px; max-width:560px;">
+                    <div class="card-title">Analyze PCAP on Server</div>
+                    <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">Provide an absolute path to a PCAP file on the server filesystem.</div>
+                    <div style="display:flex; gap:10px;">
+                        <input type="text" id="pcapRead" class="form-input" placeholder="/var/log/capture.pcap" style="flex-grow:1;">
+                        <button class="primary-btn" onclick="analyzePcap()">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:5px;vertical-align:middle;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Analyze
+                        </button>
                     </div>
-                    <hr style="border:0; border-top:1px dashed var(--border); margin:10px 0;">
-                    <div>
-                        <label style="font-weight:bold; font-size:13px; color:var(--text-muted);">Upload PCAP from Local Machine:</label><br>
-                        <div style="display:flex; gap:10px; margin-top:5px;">
-                            <input type="file" id="pcapUpload" class="form-input" style="flex-grow:1;" accept=".pcap,.pcapng,.cap">
-                            <button class="primary-btn" onclick="uploadPcap()">Upload & Analyze</button>
+                </div>
+                <div class="card" style="flex:1; min-width:300px; max-width:560px;">
+                    <div class="card-title">Upload PCAP from Browser</div>
+                    <div class="drop-zone" id="pcapDropZone" onclick="document.getElementById('pcapUpload').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="event.preventDefault();this.classList.remove('drag-over');document.getElementById('pcapUpload').files=event.dataTransfer.files;uploadPcap()">
+                        <div class="drop-zone-icon">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                         </div>
-                        <span style="font-size:11px; color:var(--text-muted);">(Upload requires backend multipart API update)</span>
+                        <p>Drop .pcap / .pcapng here</p>
+                        <small>or click to browse</small>
                     </div>
+                    <input type="file" id="pcapUpload" style="display:none;" accept=".pcap,.pcapng,.cap" onchange="uploadPcap()">
+                    <div style="font-size:11px; color:var(--text-muted); margin-top:8px; text-align:center;">Upload requires backend multipart API (planned)</div>
                 </div>
             </div>
         </div>
@@ -1977,9 +2544,25 @@ pub mod inner {
                 </div>
                 <div class="toolbar-separator"></div>
                 <div class="toolbar-group" style="gap: 4px;">
-                    <button class="btn" onclick="toggleLayoutDir()" title="Toggle Split Direction" style="padding: 8px 12px;">⇄</button>
-                    <button class="btn" onclick="togglePane('paneRight')" title="Toggle Details Panel" style="padding: 8px 12px;">📋</button>
-                    <button class="btn" onclick="toggleHex()" title="Toggle Hex View" style="padding: 8px 12px;">🔢</button>
+                    <button class="icon-btn" onclick="toggleLayoutDir()" title="Toggle Split Direction (Alt+L)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="18" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/></svg>
+                    </button>
+                    <button class="icon-btn" onclick="togglePane('paneRight')" title="Toggle Details Panel (Alt+D)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+                    </button>
+                    <button class="icon-btn" onclick="toggleHex()" title="Toggle Hex View (Alt+H)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h2v12H4zm6-1 4 7-4 7m8-13v12"/></svg>
+                    </button>
+                </div>
+                <div class="toolbar-group" style="gap: 4px;">
+                    <button class="icon-btn" onclick="clearPackets()" title="Clear packets (Alt+C)" id="btnClear">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4h6v2"/></svg>
+                        Clear
+                    </button>
+                    <button class="icon-btn" onclick="exportPacketsCsv()" title="Export as CSV (Alt+E)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        CSV
+                    </button>
                 </div>
             </div>
             
@@ -1997,7 +2580,18 @@ pub mod inner {
                                 <th>Info</th>
                             </tr>
                         </thead>
-                        <tbody id="pktTableBody"></tbody>
+                        <tbody id="pktTableBody">
+                            <tr id="emptyPacketState"><td colspan="7">
+                                <div class="empty-state">
+                                    <div class="empty-state-icon">
+                                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                                    </div>
+                                    <div class="empty-state-title">No packets captured yet</div>
+                                    <div class="empty-state-sub">Select an interface in <strong>Server Info</strong>, then click <strong>▶ Start Capture</strong></div>
+                                    <span class="kbd">Space</span><span style="font-size:11px;color:var(--text-muted);"> to start / pause</span>
+                                </div>
+                            </td></tr>
+                        </tbody>
                     </table></div>
                     <div id="resumeScrollBtn" class="scroll-toast" style="display: none;" onclick="resumeScroll()">
                         Auto-scroll paused. Click to resume.
@@ -2020,7 +2614,10 @@ pub mod inner {
             </div>
             <div class="statusbar">
                 <span id="sb-status">Idle. Ready to capture.</span>
-                <span id="sb-stats">Packets: 0 | Displayed: 0 | Bytes: 0 B</span>
+                <div style="display:flex;gap:20px;align-items:center;">
+                    <span id="sb-rate" style="color:var(--primary);font-weight:700;min-width:80px;text-align:right;"></span>
+                    <span id="sb-stats">Packets: 0 | Displayed: 0 | Bytes: 0 B</span>
+                </div>
             </div>
         </div>
 
@@ -2129,16 +2726,20 @@ pub mod inner {
         <!-- Terminal Panel -->
         <div id="terminal" class="panel">
             <div class="card" style="margin: 20px; display:flex; flex-direction:column; height: calc(100vh - 150px); background:#000; border-color:#1e293b; padding:0; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-                <div style="background: linear-gradient(135deg, #1e293b, #0f172a); color:#94a3b8; border-bottom:1px solid #334155; padding:12px 16px; margin-bottom:0; display: flex; justify-content: space-between; align-items: center;">
-                    <div style="display:flex; align-items:center; gap:12px;">
-                        <span style="font-weight:700; font-size:14px;">🖥️ Professional Terminal</span>
-                        <span style="font-size:11px; color:#64748b;">|</span>
-                        <span style="font-size:12px; color:#38bdf8;">Full Linux Terminal with xterm.js</span>
+                <div style="background: linear-gradient(135deg, #1e293b, #0f172a); color:#94a3b8; border-bottom:1px solid #334155; padding:10px 16px; margin-bottom:0; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display:flex; align-items:center; gap:0;">
+                        <div class="term-traffic-lights">
+                            <div class="traffic-dot red"    title="Close" onclick="switchTab('serverinfo')"></div>
+                            <div class="traffic-dot yellow" title="Clear"  onclick="clearXterm()"></div>
+                            <div class="traffic-dot green"  title="Reset"  onclick="resetXterm()"></div>
+                        </div>
+                        <span style="font-weight:700; font-size:13px; color:#e2e8f0; margin-right:10px;">bash</span>
+                        <span style="font-size:11px; color:#475569; margin-right:10px;">—</span>
+                        <span style="font-size:11px; color:#38bdf8;">pktana terminal</span>
                     </div>
-                    <div style="display:flex; gap:8px;">
-                        <button class="btn" onclick="clearXterm()" title="Clear terminal" style="padding:4px 10px; font-size:11px;">Clear</button>
-                        <button class="btn" onclick="resetXterm()" title="Reset terminal" style="padding:4px 10px; font-size:11px;">Reset</button>
-                        <select id="xtermTheme" onchange="changeXtermTheme()" class="form-input" style="padding:4px 8px; font-size:11px; width:120px;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button class="btn" onclick="connectTerminalWs()" title="Reconnect" style="padding:3px 10px; font-size:11px; background:transparent; color:#38bdf8; border-color:#334155;">↺ Reconnect</button>
+                        <select id="xtermTheme" onchange="changeXtermTheme()" class="form-input" style="padding:3px 8px; font-size:11px; width:130px; background:#0f172a; color:#94a3b8; border-color:#334155;">
                             <option value="default">Default</option>
                             <option value="matrix">Matrix Green</option>
                             <option value="monokai">Monokai</option>
@@ -2153,20 +2754,6 @@ pub mod inner {
                 <div style="background:#0f172a; border-top:1px solid #334155; padding:6px 16px; font-size:11px; color:#64748b; display:flex; justify-content:space-between;">
                     <span>Full Linux terminal with xterm.js | Copy: <strong style="color:#94a3b8;">Ctrl+Shift+C</strong> | Paste: <strong style="color:#94a3b8;">Ctrl+Shift+V</strong></span>
                     <span id="xtermStatus">Ready</span>
-                </div>
-            </div>
-        </div>
-        <!-- Docs Panel -->
-        <div id="docs" class="panel">
-            <div style="display:flex; height:calc(100vh - 110px); gap:0; overflow:hidden;">
-                <div id="docsNav" style="width:210px; flex-shrink:0; background:var(--surface); border-right:1px solid var(--border); overflow-y:auto; padding:8px 0;">
-                    <div style="padding:10px 16px 6px; font-size:10px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.08em;">Documentation</div>
-                </div>
-                <div id="docsContent" style="flex:1; overflow-y:auto; padding:28px 36px; font-family:inherit; line-height:1.75; color:var(--text-main);">
-                    <div style="color:var(--text-muted); text-align:center; padding-top:80px;">
-                        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="display:block; margin:0 auto 16px; opacity:0.3;"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
-                        <p style="font-size:16px;">Select a page from the sidebar to read the documentation.</p>
-                    </div>
                 </div>
             </div>
         </div>
@@ -2200,6 +2787,23 @@ pub mod inner {
         let isPaused = false;
         const MAX_PACKETS_IN_MEMORY = 10000;
         const UPDATE_INTERVAL_MS = 100;
+
+        let lastRateCheck = { time: 0, count: 0 };
+        setInterval(() => {
+            const rateEl = document.getElementById('sb-rate');
+            if (!rateEl) return;
+            if (!isCapturing || !activeId || !Sessions[activeId]) { rateEl.textContent = ''; return; }
+            const now = Date.now();
+            const S = Sessions[activeId];
+            if (lastRateCheck.time > 0) {
+                const elapsed = (now - lastRateCheck.time) / 1000;
+                const pktDelta = S.packetCount - lastRateCheck.count;
+                if (elapsed > 0) rateEl.textContent = Math.round(pktDelta / elapsed) + ' pkt/s';
+            }
+            lastRateCheck = { time: now, count: S.packetCount };
+            const navPkts = document.getElementById('navLivePkts');
+            if (navPkts && S) navPkts.textContent = S.packetCount.toLocaleString() + ' pkts';
+        }, 1000);
 
         // Legacy refs (no longer used for storage; kept so old code paths don't break)
         window.currentSessionId = null;
@@ -2304,14 +2908,14 @@ pub mod inner {
             const sortedFlows = Object.values(flows).sort((a, b) => b.bytes - a.bytes).slice(0, 100);
             let html = '';
             for (let f of sortedFlows) {
+                const fpk = f.proto.toLowerCase().replace(/[^a-z0-9]/g,'');
                 html += `<tr style="cursor:pointer;" title="Click to view packets for this flow" onclick="viewFlowDetails('${f.src}', '${f.dst}')">
-                    <td><strong>${escapeHtml(f.proto)}</strong></td>
+                    <td><span class="proto-badge proto-${fpk}">${escapeHtml(f.proto)}</span></td>
                     <td>${escapeHtml(f.src)}</td>
                     <td>${escapeHtml(f.dst)}</td>
                     <td>${escapeHtml(f.category)}</td>
                     <td>${f.pkts}</td>
                     <td>${formatBytes(f.bytes)}</td>
-                    <td style="text-align:center;"></td>
                 </tr>`;
             }
             tbody.innerHTML = html;
@@ -2333,13 +2937,14 @@ pub mod inner {
             for (let [p, s] of sortedProtos) {
                 if (filterTerm && !p.toLowerCase().includes(filterTerm)) continue;
                 let pct = totalProtoBytes > 0 ? (s.bytes / totalProtoBytes * 100).toFixed(1) : 0;
-                pHtml += `<div style="margin-bottom: 8px;">
-                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
-                        <strong>${p}</strong>
-                        <span>${formatBytes(s.bytes)} (${pct}%)</span>
+                const pk = p.toLowerCase().replace(/[^a-z0-9]/g,'');
+                pHtml += `<div class="proto-bar-wrap">
+                    <div class="proto-bar-label">
+                        <span class="proto-badge proto-${pk}">${p}</span>
+                        <span>${formatBytes(s.bytes)} &nbsp;${pct}%</span>
                     </div>
-                    <div style="width:100%; background:var(--border); border-radius:4px; height:8px; overflow:hidden;">
-                        <div style="width:${pct}%; background:var(--primary); height:100%;"></div>
+                    <div class="proto-bar-track">
+                        <div class="proto-bar-fill" style="width:${pct}%;"></div>
                     </div>
                 </div>`;
             }
@@ -2383,6 +2988,8 @@ pub mod inner {
             if (savedTheme === 'dark') {
                 body.classList.add('dark-theme');
                 if (themeBtn) themeBtn.textContent = '☀️';
+            } else {
+                if (themeBtn) themeBtn.textContent = '🌙';
             }
         });
 
@@ -2581,9 +3188,6 @@ pub mod inner {
                 if (fitAddon) setTimeout(() => fitAddon.fit(), 100);
                 if (term) term.focus();
             }
-            if (tabId === 'docs') {
-                if (!window._wikiNavLoaded) loadWikiNav();
-            }
         };
 
         // ─── Multi-session capture API ───────────────────────────────────────
@@ -2638,7 +3242,7 @@ pub mod inner {
             const tbody = document.getElementById('pktTableBody');
             const visibleRows = Array.from(tbody.children).filter(row => row.style.display !== 'none');
             if (visibleRows.length === 0) {
-                alert('No packets to export. Capture some packets first.');
+                toast('No packets to export. Capture some first.', 'warn');
                 return;
             }
             const filename = prompt('Enter PCAP filename to save on server:', '/tmp/filtered-packets.pcap');
@@ -2680,8 +3284,9 @@ pub mod inner {
                 S.paused = false;
                 isPaused = false;
                 startActiveCapture();
-                applyPauseButton(S);
-                document.getElementById('sb-status').textContent = `[${S.iface}] Resumed.`;
+                const pb = document.getElementById('btnPause');
+                if (pb) { pb.style.display = 'inline-block'; pb.textContent = '⏸ Pause'; pb.style.background = ''; }
+                document.getElementById('sb-status').textContent = `[${S.iface}] Resuming…`;
             }
         }
 
@@ -2706,6 +3311,8 @@ pub mod inner {
                 return;
             }
             const tbody = document.getElementById('pktTableBody');
+            const emptyRow = document.getElementById('emptyPacketState');
+            if (emptyRow) emptyRow.remove();
             const fragment = document.createDocumentFragment();
             const terms = getDisplayFilterTerms();
             const requiredTag = getRequiredTag();
@@ -2720,11 +3327,11 @@ pub mod inner {
 
                 const tr = document.createElement('tr');
                 tr.className = getWsClass(data.proto, data.risk);
-                const riskBadge = data.risk > 0 ? `<span style="color:var(--danger);font-weight:bold;">[Risk: ${data.risk}]</span> ` : '';
-                tr.innerHTML = `<td>${data.index}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><strong>${escapeHtml(data.proto)}</strong></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
+                const riskBadge = data.risk >= 70 ? `<span class="risk-badge risk-high">HIGH ${data.risk}</span>` : data.risk >= 35 ? `<span class="risk-badge risk-medium">MED ${data.risk}</span>` : data.risk > 0 ? `<span class="risk-badge risk-low">LOW ${data.risk}</span>` : '';
+                const protoKey = escapeHtml(data.proto).toLowerCase().replace(/[^a-z0-9]/g,'');
+                tr.innerHTML = `<td>${data.index}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
                 if (data.tags) tr.setAttribute('data-tags', data.tags);
-                const currentIndex = data.index - 1;
-                tr.onclick = function() { showDetail(currentIndex, tr); };
+                (function(p, row) { row.onclick = function() { showDetail(p, row); }; })(data, tr);
                 if (!packetMatchesFilter(tr, terms, requiredTag)) tr.style.display = 'none';
                 fragment.appendChild(tr);
             }
@@ -2841,6 +3448,8 @@ pub mod inner {
                 btn.classList.add('stop');
                 applyPauseButton(S);
                 document.getElementById('sb-status').textContent = `Capturing on ${S.iface}…`;
+                const nb = document.getElementById('navLiveBadge');
+                if (nb) nb.classList.add('on');
             }
             renderSessionTabs();
             if (typeof loadSessions === 'function') loadSessions();
@@ -2893,7 +3502,8 @@ pub mod inner {
             const tbody = document.getElementById('pktTableBody');
             tbody.innerHTML = '';
             const S = Sessions[activeId];
-            if (!S) {
+            if (!S || S.packetStore.length === 0) {
+                tbody.innerHTML = '<tr id="emptyPacketState"><td colspan="7" style="text-align:center;padding:48px 20px;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">📡</div><div style="font-weight:700;font-size:15px;margin-bottom:6px;">No packets captured yet</div><div style="font-size:13px;">Click <strong>▶ Start Capture</strong> to begin</div></td></tr>';
                 document.getElementById('sb-stats').textContent = 'Packets: 0 | Displayed: 0 | Bytes: 0 B';
                 document.getElementById('packetDetail').textContent = 'Select a packet to view its complete DPI decode layer by layer...';
                 return;
@@ -2909,10 +3519,10 @@ pub mod inner {
                 const tr = document.createElement('tr');
                 tr.className = getWsClass(data.proto, data.risk);
                 const riskBadge = data.risk > 0 ? `<span style="color:var(--danger);font-weight:bold;">[Risk: ${data.risk}]</span> ` : '';
-                tr.innerHTML = `<td>${i+1}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><strong>${escapeHtml(data.proto)}</strong></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
+                const protoKey2 = escapeHtml(data.proto).toLowerCase().replace(/[^a-z0-9]/g,'');
+                tr.innerHTML = `<td>${i+1}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey2}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
                 if (data.tags) tr.setAttribute('data-tags', data.tags);
-                const idx = i;
-                tr.onclick = function() { showDetail(idx, tr); };
+                (function(p, row) { row.onclick = function() { showDetail(p, row); }; })(data, tr);
                 if (!packetMatchesFilter(tr, terms, requiredTag)) tr.style.display = 'none';
                 fragment.appendChild(tr);
             });
@@ -2936,8 +3546,8 @@ pub mod inner {
                 html = ids.map(id => {
                     const S = Sessions[id];
                     const dot = S.status === 'active'
-                        ? '<span style="color:#10b981;font-size:14px;line-height:0;">●</span>'
-                        : '<span style="color:#94a3b8;font-size:14px;line-height:0;">○</span>';
+                        ? '<span class="chip-live-dot"></span>'
+                        : '<span style="width:7px;height:7px;border-radius:50%;background:#94a3b8;display:inline-block;flex-shrink:0;"></span>';
                     const cls = (id === activeId) ? 'session-chip active' : 'session-chip';
                     const ifaceLabel = escapeHtml(S.iface) + (S.isOffline ? ' (pcap)' : '');
                     return `<span class="${cls}" onclick="switchSession('${id}')" title="Window: ${escapeHtml(id)}">`
@@ -3026,6 +3636,8 @@ pub mod inner {
                     document.getElementById('sb-status').textContent = 'No active window';
                     document.getElementById('sb-stats').textContent = 'Packets: 0 | Displayed: 0 | Bytes: 0 B';
                     document.getElementById('btnPause').style.display = 'none';
+                    const nb2 = document.getElementById('navLiveBadge');
+                    if (nb2) nb2.classList.remove('on');
                     const btn = document.getElementById('btnToggle');
                     btn.textContent = '▶ Start Capture';
                     btn.classList.remove('stop');
@@ -3050,6 +3662,8 @@ pub mod inner {
             if (S.eventSource) { try { S.eventSource.close(); } catch (e) {} S.eventSource = null; }
             S.status = 'stopped';
             isCapturing = false;
+            const nb = document.getElementById('navLiveBadge');
+            if (nb) nb.classList.remove('on');
             const bid = S.backendId || S.id;
             fetch(`/api/sessions/${bid}/stop`, { method: 'POST' }).catch(() => {});
             renderSessionTabs();
@@ -3127,13 +3741,12 @@ pub mod inner {
             }).join('\n');
         }
 
-        function showDetail(index, trElement) {
+        function showDetail(pkt, trElement) {
             autoScroll = false;
-            document.getElementById('resumeScrollBtn').style.display = 'block';
+            if (isCapturing) document.getElementById('resumeScrollBtn').style.display = 'block';
 
             document.querySelectorAll('#pktTableBody tr').forEach(row => row.classList.remove('selected'));
             trElement.classList.add('selected');
-            const pkt = packetStore[index];
             if (!pkt) return;
 
             // ── Packet Details pane ──
@@ -3188,7 +3801,7 @@ pub mod inner {
                     kvRow("Speed", data.speed) +
                     kvRow("RX", `${formatBytes(data.rx_bytes)} (${data.rx_packets} pkts)`) +
                     kvRow("TX", `${formatBytes(data.tx_bytes)} (${data.tx_packets} pkts)`) +
-                    kvRow("IPs", data.ips.join(', ') || "None");
+                    kvRow("IPs", (data.ips || []).join(', ') || "None");
             } catch (e) { document.getElementById('hwStatus').innerHTML = "Error loading hardware info."; }
         }
         
@@ -3199,8 +3812,9 @@ pub mod inner {
                 data.forEach(c => {
                     let remote = c.remote_port === 0 ? "—" : `${c.remote_ip}:${c.remote_port}`;
                     let proc = c.pid === 0 ? "—" : `${c.process} (${c.pid})`;
-                    let stateColor = c.state.includes("ESTABLISH") ? "var(--success)" : "inherit";
-                    html += `<tr><td>${c.proto}</td><td>${c.local_ip}:${c.local_port}</td><td>${remote}</td><td style="color:${stateColor}; font-weight:bold;">${c.state}</td><td>${proc}</td></tr>`;
+                    let stateClass = c.state.includes("ESTABLISH") ? "state-established" : c.state.includes("LISTEN") ? "state-listen" : c.state.includes("TIME_WAIT") ? "state-time-wait" : c.state.includes("CLOSE_WAIT") ? "state-close-wait" : "state-other";
+                    const cprotoKey = (c.proto || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+                    html += `<tr><td><span class="proto-badge proto-${cprotoKey}">${c.proto}</span></td><td>${c.local_ip}:${c.local_port}</td><td>${remote}</td><td><span class="state-badge ${stateClass}">${c.state}</span></td><td>${proc}</td></tr>`;
                 });
                 document.getElementById('connContent').innerHTML = html + '</tbody></table>';
             } catch(e) { document.getElementById('connContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading connections: ' + e.message + '</div>'; }
@@ -3209,11 +3823,12 @@ pub mod inner {
         async function loadRoutes() {
             try {
                 const res = await fetch('/api/route'); const data = await res.json();
-                let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>Destination</th><th>Gateway</th><th>Metric</th></tr></thead><tbody>';
-                data.forEach(r => {
+                let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>Destination / Prefix</th><th>Gateway</th><th>Metric</th></tr></thead><tbody>';
+                data.sort((a,b) => (b.is_default?1:0)-(a.is_default?1:0)).forEach(r => {
                     let dest = `${r.destination}/${r.prefix_len}`;
-                    let gw = (r.gateway === "0.0.0.0" || r.gateway === "::") ? "Direct" : r.gateway;
-                    html += `<tr><td>${r.interface}</td><td>${dest}</td><td>${gw}</td><td>${r.metric}</td></tr>`;
+                    let gw = (r.gateway === "0.0.0.0" || r.gateway === "::") ? '<span class="direct-route">Direct</span>' : r.gateway;
+                    let defBadge = r.is_default ? '<span class="default-route-badge">DEFAULT</span>' : '';
+                    html += `<tr style="${r.is_default ? 'font-weight:600;' : ''}"><td>${r.interface}</td><td>${defBadge}${dest}</td><td>${gw}</td><td>${r.metric}</td></tr>`;
                 });
                 document.getElementById('routeContent').innerHTML = html + '</tbody></table>';
             } catch(e) { document.getElementById('routeContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading routes: ' + e.message + '</div>'; }
@@ -3226,11 +3841,14 @@ pub mod inner {
                 const fmtBytes = (b) => { const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; };
                 let html = '<table class="settings-table"><thead><tr><th>Interface</th><th>State</th><th>MAC</th><th>MTU</th><th>RX</th><th>TX</th></tr></thead><tbody>';
                 data.forEach(n => {
-                    let stateColor = n.state === 'up' ? "var(--success)" : "var(--danger)";
+                    const isUp = (n.state||'').toLowerCase() === 'up';
+                    const stateEl = isUp
+                        ? `<span class="nic-up"><span class="nic-dot"></span>UP</span>`
+                        : `<span class="nic-down"><span class="nic-dot"></span>DOWN</span>`;
                     html += `<tr>
-                        <td><strong style="color:var(--primary);cursor:pointer;text-decoration:underline;" onclick="startCapture('${n.name}')">${n.name}</strong></td>
-                        <td style="color:${stateColor}; font-weight:bold;">${(n.state||'?').toUpperCase()}</td>
-                        <td style="font-family:monospace;">${n.mac||'—'}</td>
+                        <td><strong style="color:var(--primary);cursor:pointer;" onclick="selectInterfaceForCapture('${n.name}')" title="Click to open capture window">${n.name}</strong></td>
+                        <td>${stateEl}</td>
+                        <td style="font-family:monospace;font-size:12px;">${n.mac||'—'}</td>
                         <td>${n.mtu||'—'}</td>
                         <td>${fmtBytes(n.rx_bytes||0)}</td>
                         <td>${fmtBytes(n.tx_bytes||0)}</td>
@@ -3293,23 +3911,105 @@ pub mod inner {
             if (typeof saveLayout === 'function') saveLayout();
         }
 
+        function clearPackets() {
+            if (!activeId || !Sessions[activeId]) return;
+            const S = Sessions[activeId];
+            S.packetStore = []; S.packetCount = 0; S.byteCount = 0; S.baseTs = null;
+            S.flows = {}; S.protoStats = {}; S.talkerStats = {};
+            packetStore = S.packetStore; flows = S.flows;
+            protoStats = S.protoStats; talkerStats = S.talkerStats;
+            packetCount = 0; byteCount = 0; baseTs = null; packetBuffer = [];
+            lastRateCheck = { time: 0, count: 0 };
+            document.getElementById('pktTableBody').innerHTML = '<tr id="emptyPacketState"><td colspan="7" style="text-align:center;padding:48px 20px;color:var(--text-muted);"><div style="font-size:32px;margin-bottom:12px;">📡</div><div style="font-weight:700;font-size:15px;margin-bottom:6px;">Cleared</div><div style="font-size:13px;">Click <strong>▶ Start Capture</strong> to capture new packets</div></td></tr>';
+            document.getElementById('packetDetail').textContent = 'Select a packet to view its complete DPI decode layer by layer...';
+            document.getElementById('packetHex').innerHTML = '';
+            document.getElementById('packetHexWrapper').style.display = 'none';
+            document.getElementById('sb-stats').textContent = 'Packets: 0 | Displayed: 0 | Bytes: 0 B';
+            document.getElementById('sb-rate').textContent = '';
+            renderFlows(); renderStats();
+        }
+        window.clearPackets = clearPackets;
+
+        function exportPacketsCsv() {
+            const tbody = document.getElementById('pktTableBody');
+            const visibleRows = Array.from(tbody.children).filter(r => r.style.display !== 'none');
+            if (visibleRows.length === 0) {
+                alert('No packets to export. Capture some packets first.');
+                return;
+            }
+            const headers = ['No.', 'Time', 'Source', 'Destination', 'Protocol', 'Length', 'Info'];
+            const rows = visibleRows.map(tr => {
+                return Array.from(tr.cells).map(td => {
+                    const v = td.textContent.replace(/"/g, '""');
+                    return '"' + v + '"';
+                }).join(',');
+            });
+            const csv = [headers.join(','), ...rows].join('\r\n');
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'pktana-capture.csv';
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+            toast(`Exported ${visibleRows.length} packets as CSV`, 'success');
+            document.getElementById('sb-status').textContent = `Exported ${visibleRows.length} packets as CSV.`;
+        }
+        window.exportPacketsCsv = exportPacketsCsv;
+
+        // ── Toast & Modal system ─────────────────────────────────────────────
+        function toast(msg, type = 'info', duration = 3500) {
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+            const t = document.createElement('div');
+            t.className = `toast toast-${type}`;
+            const icons = { success:'✓', error:'✕', warn:'!', info:'ℹ' };
+            t.innerHTML = `<span style="display:flex;align-items:center;gap:8px;"><strong style="opacity:0.8">${icons[type]||'ℹ'}</strong>${msg}</span><button class="toast-close" onclick="this.parentElement.remove()">×</button>`;
+            container.appendChild(t);
+            setTimeout(() => { t.style.animation = 'toastOut 0.3s ease forwards'; setTimeout(() => t.remove(), 300); }, duration);
+        }
+
+        function modal({ title = 'Confirm', body = '', confirmText = 'OK', cancelText = 'Cancel', danger = false, inputPlaceholder = null, inputDefault = '' } = {}) {
+            return new Promise(resolve => {
+                const overlay = document.createElement('div');
+                overlay.className = 'modal-overlay';
+                overlay.innerHTML = `<div class="modal-box">
+                    <div class="modal-title">${title}</div>
+                    <div class="modal-body">${body}</div>
+                    ${inputPlaceholder !== null ? `<div class="modal-input-wrap"><input class="modal-input" type="text" placeholder="${inputPlaceholder}" value="${inputDefault}" /></div>` : ''}
+                    <div class="modal-footer">
+                        <button class="modal-cancel">${cancelText}</button>
+                        <button class="modal-confirm${danger ? ' danger' : ''}">${confirmText}</button>
+                    </div>
+                </div>`;
+                const close = (val) => { overlay.remove(); resolve(val); };
+                overlay.querySelector('.modal-cancel').onclick = () => close(null);
+                overlay.querySelector('.modal-confirm').onclick = () => {
+                    const inp = overlay.querySelector('.modal-input');
+                    close(inp ? inp.value : true);
+                };
+                overlay.addEventListener('keydown', e => { if (e.key === 'Escape') close(null); if (e.key === 'Enter' && !overlay.querySelector('.modal-input')) close(true); });
+                document.body.appendChild(overlay);
+                const inp = overlay.querySelector('.modal-input');
+                if (inp) { inp.focus(); inp.select(); } else overlay.querySelector('.modal-confirm').focus();
+            });
+        }
+
         async function stopDaemon() {
-            if (!confirm("Are you sure you want to stop the pktana background daemon?")) return;
+            const ok = await modal({ title: 'Stop pktana Daemon', body: 'This will terminate the background daemon and close all active captures. Are you sure?', confirmText: 'Stop Daemon', cancelText: 'Cancel', danger: true });
+            if (!ok) return;
             try {
                 await fetch('/api/stop', { method: 'POST' });
-                alert("pktana daemon stopped. You can safely close this page.");
+                toast('pktana daemon stopped. You can safely close this page.', 'success', 6000);
             } catch (e) {
-                alert("Error: " + e);
+                toast('Error stopping daemon: ' + e, 'error');
             }
         }
 
         let term = null;
         let fitAddon = null;
-        let currentCommand = '';
-        let commandHistory = [];
-        let historyIndex = -1;
-        let currentWorkingDir = '/root/pktana'; // Track current directory
-        let homeDir = '/root/pktana';
+        let termWs = null;
+        let termReconnectAttempts = 0;
+        const TERM_MAX_RECONNECTS = 5;
 
         const xtermThemes = {
             'default': {
@@ -3424,7 +4124,8 @@ pub mod inner {
 
         function initXterm() {
             if (!window.Terminal) {
-                console.error('xterm.js not loaded');
+                document.getElementById('xtermContainer').innerHTML =
+                    '<div style="color:var(--danger);padding:20px;">Failed to load terminal library. Refresh the page.</div>';
                 return;
             }
 
@@ -3432,281 +4133,78 @@ pub mod inner {
                 cursorBlink: true,
                 cursorStyle: 'block',
                 fontSize: 14,
-                fontFamily: '"Cascadia Code", "Fira Code", "Courier New", monospace',
+                fontFamily: '"Cascadia Code","Fira Code","Courier New",monospace',
                 theme: xtermThemes['default'],
                 allowProposedApi: true,
                 scrollback: 10000,
-                convertEol: true
+                convertEol: false,
             });
 
             fitAddon = new FitAddon.FitAddon();
             term.loadAddon(fitAddon);
-            
             const webLinksAddon = new WebLinksAddon.WebLinksAddon();
             term.loadAddon(webLinksAddon);
 
             term.open(document.getElementById('xtermContainer'));
             fitAddon.fit();
 
-            // Get initial working directory from server
-            fetch('/api/terminal?cmd=' + encodeURIComponent('pwd'))
-                .then(res => res.json())
-                .then(data => {
-                    if (data.output) {
-                        const pwd = data.output.trim();
-                        if (pwd && pwd.startsWith('/')) {
-                            currentWorkingDir = pwd;
-                            homeDir = pwd;
-                        }
-                    }
-                    displayWelcomeMessage();
-                })
-                .catch(err => {
-                    console.error('Failed to get pwd:', err);
-                    displayWelcomeMessage();
-                });
-        }
-
-        function displayWelcomeMessage() {
-            // Welcome message
-            term.writeln('\x1b[1;32m╔═══════════════════════════════════════════════════════════════╗\x1b[0m');
-            term.writeln('\x1b[1;32m║\x1b[0m  \x1b[1;36mpktana Professional Terminal\x1b[0m powered by \x1b[1;33mxterm.js\x1b[0m            \x1b[1;32m║\x1b[0m');
-            term.writeln('\x1b[1;32m║\x1b[0m  Full Linux terminal experience in your browser              \x1b[1;32m║\x1b[0m');
-            term.writeln('\x1b[1;32m╚═══════════════════════════════════════════════════════════════╝\x1b[0m');
-            term.writeln('');
-            term.writeln('Type \x1b[1;36mhelp\x1b[0m for available commands');
-            term.writeln('');
-
-            writePrompt();
-
-            // Handle input
-            term.onData(data => {
-                const code = data.charCodeAt(0);
-
-                if (code === 13) { // Enter
-                    term.write('\r\n');
-                    executeXtermCommand(currentCommand.trim());
-                    currentCommand = '';
-                } else if (code === 127) { // Backspace
-                    if (currentCommand.length > 0) {
-                        currentCommand = currentCommand.slice(0, -1);
-                        term.write('\b \b');
-                    }
-                } else if (code === 27) { // Escape sequence
-                    if (data === '\x1b[A') { // Arrow Up
-                        if (commandHistory.length > 0 && historyIndex < commandHistory.length - 1) {
-                            historyIndex++;
-                            replaceCommandLine(commandHistory[commandHistory.length - 1 - historyIndex]);
-                        }
-                    } else if (data === '\x1b[B') { // Arrow Down
-                        if (historyIndex > 0) {
-                            historyIndex--;
-                            replaceCommandLine(commandHistory[commandHistory.length - 1 - historyIndex]);
-                        } else if (historyIndex === 0) {
-                            historyIndex = -1;
-                            replaceCommandLine('');
-                        }
-                    } else if (data === '\x1b[D') { // Arrow Left (ignore for simplicity)
-                        // Do nothing
-                    } else if (data === '\x1b[C') { // Arrow Right (ignore for simplicity)
-                        // Do nothing
-                    }
-                } else if (code === 3) { // Ctrl+C
-                    term.write('^C\r\n');
-                    currentCommand = '';
-                    writePrompt();
-                } else if (code === 12) { // Ctrl+L
-                    clearXterm();
-                } else if (code >= 32 && code < 127) { // Printable characters
-                    currentCommand += data;
-                    term.write(data);
+            // Register input/resize handlers once; they close over termWs.
+            term.onData((data) => {
+                if (termWs && termWs.readyState === WebSocket.OPEN) {
+                    termWs.send(new TextEncoder().encode(data));
                 }
             });
+            term.onResize((sz) => { sendTermResize(sz.cols, sz.rows); });
 
-            // Auto-resize on window resize
-            window.addEventListener('resize', () => {
-                if (fitAddon) fitAddon.fit();
-            });
+            window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
 
-            // Load saved theme
-            const savedTheme = localStorage.getItem('pktana_xterm_theme');
-            if (savedTheme && xtermThemes[savedTheme]) {
-                document.getElementById('xtermTheme').value = savedTheme;
-                changeXtermTheme();
+            const saved = localStorage.getItem('pktana_xterm_theme');
+            if (saved && xtermThemes[saved]) {
+                document.getElementById('xtermTheme').value = saved;
+                term.options.theme = xtermThemes[saved];
             }
+
+            connectTerminalWs();
         }
 
-        function writePrompt() {
-            // Shorten path display
-            let displayPath = currentWorkingDir;
-            if (displayPath === homeDir) {
-                displayPath = '~';
-            } else if (displayPath.startsWith(homeDir + '/')) {
-                displayPath = '~' + displayPath.substring(homeDir.length);
-            } else if (displayPath.length > 30) {
-                // Truncate long paths
-                const parts = displayPath.split('/');
-                if (parts.length > 3) {
-                    displayPath = '.../' + parts.slice(-2).join('/');
-                }
-            }
-            term.write('\x1b[1;32m➜\x1b[0m \x1b[1;36m' + displayPath + '\x1b[0m \x1b[1;90m$\x1b[0m ');
-        }
+        function connectTerminalWs() {
+            if (termWs) { try { termWs.close(1000); } catch(_) {} termWs = null; }
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            termWs = new WebSocket(`${proto}//${location.host}/api/terminal/ws`);
+            termWs.binaryType = 'arraybuffer';
+            document.getElementById('xtermStatus').textContent = 'Connecting…';
 
-        function replaceCommandLine(newCommand) {
-            // Clear current line
-            term.write('\r\x1b[K');
-            writePrompt();
-            currentCommand = newCommand;
-            term.write(newCommand);
-        }
-
-        async function executeXtermCommand(cmd) {
-            if (!cmd) {
-                writePrompt();
-                return;
-            }
-
-            // Add to history
-            if (commandHistory.length === 0 || commandHistory[commandHistory.length - 1] !== cmd) {
-                commandHistory.push(cmd);
-                if (commandHistory.length > 100) commandHistory.shift();
-            }
-            historyIndex = -1;
-
-            // Built-in commands
-            if (cmd === 'clear' || cmd === 'cls') {
-                term.clear();
-                writePrompt();
-                return;
-            }
-
-            if (cmd === 'help') {
-                term.writeln('\x1b[1;33m━━━ Available Commands ━━━\x1b[0m');
-                term.writeln('  \x1b[36mclear\x1b[0m              Clear terminal screen');
-                term.writeln('  \x1b[36mhelp\x1b[0m               Show this help message');
-                term.writeln('  \x1b[36mhistory\x1b[0m            Show command history');
-                term.writeln('  \x1b[36mls\x1b[0m, \x1b[36mpwd\x1b[0m, \x1b[36mcd\x1b[0m      Basic file operations');
-                term.writeln('  \x1b[36mps\x1b[0m, \x1b[36mtop\x1b[0m           Process information');
-                term.writeln('  \x1b[36mifconfig\x1b[0m, \x1b[36mip\x1b[0m     Network configuration');
-                term.writeln('  \x1b[36mss\x1b[0m, \x1b[36mnetstat\x1b[0m       Network connections');
-                term.writeln('  \x1b[36mpktana\x1b[0m             Packet analyzer commands');
-                term.writeln('  \x1b[36muname\x1b[0m, \x1b[36muptime\x1b[0m    System information');
-                term.writeln('');
-                term.writeln('\x1b[1;33m━━━ Keyboard Shortcuts ━━━\x1b[0m');
-                term.writeln('  \x1b[32m↑/↓\x1b[0m                Navigate command history');
-                term.writeln('  \x1b[32mCtrl+L\x1b[0m             Clear screen');
-                term.writeln('  \x1b[32mCtrl+C\x1b[0m             Cancel current command');
-                term.writeln('  \x1b[32mCtrl+Shift+C\x1b[0m       Copy selected text');
-                term.writeln('  \x1b[32mCtrl+Shift+V\x1b[0m       Paste from clipboard');
-                term.writeln('');
-                writePrompt();
-                return;
-            }
-
-            if (cmd === 'history') {
-                commandHistory.forEach((histCmd, idx) => {
-                    term.writeln(`  \x1b[90m${(idx + 1).toString().padStart(4)}\x1b[0m  ${histCmd}`);
-                });
-                term.writeln('');
-                writePrompt();
-                return;
-            }
-
-            // Handle cd command specially
-            if (cmd.trim().startsWith('cd ') || cmd.trim() === 'cd') {
-                const parts = cmd.trim().split(/\s+/);
-                let targetDir = '';
-                
-                if (parts.length === 1 || parts[1] === '~') {
-                    targetDir = homeDir;
-                } else if (parts[1] === '-') {
-                    // cd - not implemented yet, just go home
-                    targetDir = homeDir;
-                } else if (parts[1].startsWith('/')) {
-                    targetDir = parts[1];
-                } else if (parts[1] === '..') {
-                    const pathParts = currentWorkingDir.split('/').filter(p => p);
-                    pathParts.pop();
-                    targetDir = '/' + pathParts.join('/');
-                    if (!targetDir) targetDir = '/';
-                } else if (parts[1] === '.') {
-                    targetDir = currentWorkingDir;
-                } else {
-                    targetDir = currentWorkingDir + (currentWorkingDir.endsWith('/') ? '' : '/') + parts[1];
-                }
-
-                // Verify directory exists
-                try {
-                    const testCmd = `cd "${currentWorkingDir}" && cd "${parts.slice(1).join(' ') || '~'}" && pwd`;
-                    const res = await fetch(`/api/terminal?cmd=${encodeURIComponent(testCmd)}`);
-                    const data = await res.json();
-                    
-                    if (data.output && !data.output.includes('No such file or directory')) {
-                        const newPath = data.output.trim();
-                        if (newPath && newPath.startsWith('/')) {
-                            currentWorkingDir = newPath;
-                        }
-                    } else {
-                        term.writeln('\x1b[1;31mbash: cd: ' + (parts[1] || '~') + ': No such file or directory\x1b[0m');
-                    }
-                } catch (e) {
-                    term.writeln('\x1b[1;31mError: ' + e.message + '\x1b[0m');
-                }
-                
-                writePrompt();
-                return;
-            }
-
-            // Handle pwd command
-            if (cmd.trim() === 'pwd') {
-                term.writeln(currentWorkingDir);
-                writePrompt();
-                return;
-            }
-
-            // Execute remote command with proper working directory
-            document.getElementById('xtermStatus').textContent = 'Executing...';
-            
-            try {
-                // Prefix command with cd to working directory
-                const fullCmd = `cd "${currentWorkingDir}" && ${cmd}`;
-                const res = await fetch(`/api/terminal?cmd=${encodeURIComponent(fullCmd)}`);
-                const data = await res.json();
-                
-                const output = data.output || "";
-                
-                // Write output with ANSI color codes preserved
-                if (output) {
-                    const lines = output.split('\n');
-                    // strip trailing empty element produced by final newline
-                    const trimmed = (lines.length > 0 && lines[lines.length - 1] === '') ? lines.slice(0, -1) : lines;
-                    trimmed.forEach(line => term.writeln(line));
-                }
-                
-                document.getElementById('xtermStatus').textContent = 'Ready';
-            } catch (e) {
-                term.writeln(`\x1b[1;31mError: ${e.message}\x1b[0m`);
+            termWs.onopen = () => {
+                document.getElementById('xtermStatus').textContent = 'Connected';
+                sendTermResize(term.cols, term.rows);
+            };
+            termWs.onmessage = (ev) => {
+                term.write(ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : ev.data);
+            };
+            termWs.onerror = () => {
                 document.getElementById('xtermStatus').textContent = 'Error';
-            }
-            
-            writePrompt();
+            };
+            termWs.onclose = () => {
+                document.getElementById('xtermStatus').textContent = 'Reconnecting…';
+                term.writeln('\r\n\x1b[1;33m[connection closed – reconnecting in 3 s…]\x1b[0m');
+                setTimeout(connectTerminalWs, 3000);
+            };
+        }
+
+        function sendTermResize(cols, rows) {
+            if (!termWs || termWs.readyState !== WebSocket.OPEN) return;
+            const b = new Uint8Array(5);
+            b[0] = 0xFF; b[1] = cols >> 8; b[2] = cols & 0xFF; b[3] = rows >> 8; b[4] = rows & 0xFF;
+            termWs.send(b.buffer);
         }
 
         function clearXterm() {
-            if (term) {
-                term.clear();
-                writePrompt();
-            }
+            if (term) term.clear();
         }
 
         function resetXterm() {
-            if (term) {
-                term.reset();
-                term.writeln('\x1b[1;32m━━━ Terminal Reset ━━━\x1b[0m');
-                term.writeln('');
-                writePrompt();
-            }
+            if (term) term.reset();
+            connectTerminalWs();
         }
 
         function changeXtermTheme() {
@@ -3841,224 +4339,41 @@ pub mod inner {
             });
         });
 
-        // ─── Wiki / Docs Viewer ─────────────────────────────────────────────
-        const WIKI_PAGES = [
-            {id:'overview',       title:'Overview'},
-            {id:'installation',   title:'Installation'},
-            {id:'cli-reference',  title:'CLI Reference'},
-            {id:'tui-guide',      title:'TUI Guide'},
-            {id:'web-ui-guide',   title:'Web UI Guide'},
-            {id:'dpi-engine',     title:'DPI Engine'},
-            {id:'flow-analyzer',  title:'Flow Analyzer'},
-            {id:'api-reference',  title:'API Reference'},
-            {id:'library-api',    title:'Library API (Rust)'},
-            {id:'protocols',      title:'Protocol Coverage'},
-            {id:'architecture',   title:'Architecture'},
-            {id:'contributing',   title:'Contributing'},
-        ];
-
-        function loadWikiNav() {
-            window._wikiNavLoaded = true;
-            const nav = document.getElementById('docsNav');
-            if (!nav) return;
-            WIKI_PAGES.forEach(p => {
-                const btn = document.createElement('button');
-                btn.className = 'docs-nav-item';
-                btn.textContent = p.title;
-                btn.onclick = () => loadWikiPage(p.id);
-                nav.appendChild(btn);
-            });
-            // Auto-load first page
-            loadWikiPage(WIKI_PAGES[0].id);
-        }
-
-        async function loadWikiPage(id) {
-            const content = document.getElementById('docsContent');
-            if (!content) return;
-            // Update nav active state
-            document.querySelectorAll('.docs-nav-item').forEach(b => {
-                b.classList.toggle('active', b.textContent === (WIKI_PAGES.find(p => p.id === id) || {}).title);
-            });
-            content.innerHTML = '<div style="color:var(--text-muted);padding:40px;">Loading...</div>';
-            try {
-                const res = await fetch('/api/wiki?page=' + encodeURIComponent(id));
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                const md = await res.text();
-                content.innerHTML = '<div class="md-content">' + markdownToHtml(md) + '</div>';
-                content.scrollTop = 0;
-            } catch(e) {
-                content.innerHTML = '<div style="color:#f87171;padding:40px;">Failed to load page: ' + e.message + '</div>';
+        // ── Keyboard shortcuts ───────────────────────────────────────────────
+        document.addEventListener('keydown', e => {
+            const tag = document.activeElement ? document.activeElement.tagName : '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (e.altKey) {
+                if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleLayoutDir(); }
+                if (e.key === 'd' || e.key === 'D') { e.preventDefault(); togglePane('paneRight'); }
+                if (e.key === 'h' || e.key === 'H') { e.preventDefault(); toggleHex(); }
+                if (e.key === 'c' || e.key === 'C') { e.preventDefault(); clearPackets(); }
+                if (e.key === 'e' || e.key === 'E') { e.preventDefault(); exportPacketsCsv(); }
             }
-        }
-
-        function markdownToHtml(md) {
-            let html = '';
-            const lines = md.split('\n');
-            let i = 0;
-            let inCodeBlock = false;
-            let codeLines = [];
-            let inTable = false;
-            let tableHeader = false;
-            let inList = false;
-            let listLines = [];
-            let listOrdered = false;
-
-            function flushList() {
-                if (!inList) return;
-                inList = false;
-                const tag = listOrdered ? 'ol' : 'ul';
-                html += '<' + tag + '>' + listLines.map(l => '<li>' + inlineFormat(l) + '</li>').join('') + '</' + tag + '>';
-                listLines = [];
+            if (e.key === ' ' && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                const panel = document.getElementById('dashboard');
+                if (panel && panel.classList.contains('active')) { e.preventDefault(); isCapturing ? togglePause() : toggleCapture(); }
             }
-            function flushTable() {
-                if (!inTable) return;
-                inTable = false;
-                tableHeader = false;
+            if (e.key === 'Escape') {
+                const df = document.getElementById('displayFilter');
+                if (df && df.value) { df.value = ''; applyDisplayFilter(); }
             }
+        });
 
-            while (i < lines.length) {
-                const line = lines[i];
-
-                // Code blocks
-                if (line.startsWith('```')) {
-                    if (!inCodeBlock) {
-                        flushList();
-                        flushTable();
-                        inCodeBlock = true;
-                        codeLines = [];
-                    } else {
-                        inCodeBlock = false;
-                        const escaped = codeLines.map(l => escapeHtml(l)).join('\n');
-                        html += '<pre><code>' + escaped + '</code></pre>';
-                        codeLines = [];
-                    }
-                    i++; continue;
+        // Ctrl+F focuses the search box
+        document.addEventListener('keydown', e => {
+            if (e.ctrlKey && e.key === 'f') {
+                const panel = document.getElementById('dashboard');
+                if (panel && panel.classList.contains('active')) {
+                    e.preventDefault();
+                    const df = document.getElementById('displayFilter');
+                    if (df) { df.focus(); df.select(); }
                 }
-                if (inCodeBlock) {
-                    codeLines.push(line);
-                    i++; continue;
-                }
-
-                // Headings
-                if (line.startsWith('#### ')) {
-                    flushList(); flushTable();
-                    html += '<h4>' + inlineFormat(line.slice(5)) + '</h4>';
-                    i++; continue;
-                }
-                if (line.startsWith('### ')) {
-                    flushList(); flushTable();
-                    html += '<h3>' + inlineFormat(line.slice(4)) + '</h3>';
-                    i++; continue;
-                }
-                if (line.startsWith('## ')) {
-                    flushList(); flushTable();
-                    html += '<h2>' + inlineFormat(line.slice(3)) + '</h2>';
-                    i++; continue;
-                }
-                if (line.startsWith('# ')) {
-                    flushList(); flushTable();
-                    html += '<h1>' + inlineFormat(line.slice(2)) + '</h1>';
-                    i++; continue;
-                }
-
-                // HR
-                if (/^---+$/.test(line.trim())) {
-                    flushList(); flushTable();
-                    html += '<hr>';
-                    i++; continue;
-                }
-
-                // Blockquote
-                if (line.startsWith('> ')) {
-                    flushList(); flushTable();
-                    html += '<blockquote>' + inlineFormat(line.slice(2)) + '</blockquote>';
-                    i++; continue;
-                }
-
-                // Tables
-                if (line.includes('|') && line.trim().startsWith('|')) {
-                    if (!inTable) {
-                        flushList();
-                        html += '<table>';
-                        inTable = true;
-                        tableHeader = true;
-                    }
-                    if (/^\|[\s\-:|]+\|/.test(line)) {
-                        // separator row — skip
-                        tableHeader = false;
-                        i++; continue;
-                    }
-                    const cells = line.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
-                    if (tableHeader) {
-                        html += '<tr>' + cells.map(c => '<th>' + inlineFormat(c.trim()) + '</th>').join('') + '</tr>';
-                    } else {
-                        html += '<tr>' + cells.map(c => '<td>' + inlineFormat(c.trim()) + '</td>').join('') + '</tr>';
-                    }
-                    i++; continue;
-                } else if (inTable) {
-                    html += '</table>';
-                    inTable = false;
-                    tableHeader = false;
-                }
-
-                // Unordered list
-                if (/^[-*] /.test(line)) {
-                    if (inList && listOrdered) flushList();
-                    inList = true; listOrdered = false;
-                    listLines.push(line.slice(2));
-                    i++; continue;
-                }
-                // Ordered list
-                if (/^\d+\. /.test(line)) {
-                    if (inList && !listOrdered) flushList();
-                    inList = true; listOrdered = true;
-                    listLines.push(line.replace(/^\d+\. /, ''));
-                    i++; continue;
-                }
-                if (inList && line.startsWith('  ')) {
-                    // continuation indent — append to last list item
-                    listLines[listLines.length - 1] += ' ' + line.trim();
-                    i++; continue;
-                }
-                flushList();
-
-                // Empty line
-                if (line.trim() === '') {
-                    i++; continue;
-                }
-
-                // Regular paragraph
-                html += '<p>' + inlineFormat(line) + '</p>';
-                i++;
             }
-            flushList();
-            if (inTable) html += '</table>';
-            return html;
-        }
+        });
 
-        function inlineFormat(text) {
-            let s = escapeHtml(text);
-            // Bold+italic ***text***
-            s = s.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
-            // Bold **text**
-            s = s.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            // Italic *text*
-            s = s.replace(/\*(.*?)\*/g, '<em>$1</em>');
-            // Inline code `text`
-            s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-            // Links [text](url)
-            s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-            return s;
-        }
-
-        function escapeHtml(str) {
-            return str
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-        }
     </script>
+    <div id="toastContainer"></div>
 </body>
 </html>
 "##;
