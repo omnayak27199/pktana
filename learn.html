@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Learn Networking — pktana</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #fff8f2;
+      --primary: #ea580c;
+      --primary-dark: #c2410c;
+      --secondary: #fb923c;
+      --dark: #101828;
+      --dark-soft: #1f2937;
+      --text: #334155;
+      --muted: #64748b;
+      --line: rgba(148,163,184,0.18);
+      --panel: #ffffff;
+      --shadow: 0 4px 24px rgba(15,23,42,0.10);
+      --shadow-sm: 0 2px 8px rgba(15,23,42,0.07);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; scroll-behavior: smooth; }
+
+    body {
+      font-family: "Inter", sans-serif;
+      color: var(--text);
+      background: linear-gradient(135deg, #fff7ed 0%, #fffdfb 50%, #ffffff 100%);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* ── Topbar ─────────────────────────────────────────────── */
+    .topbar {
+      position: sticky; top: 0; z-index: 30;
+      display: flex; align-items: center; gap: 20px;
+      padding: 14px 32px;
+      background: rgba(255,255,255,0.92);
+      backdrop-filter: blur(18px);
+      border-bottom: 1px solid var(--line);
+      box-shadow: var(--shadow-sm);
+      flex-shrink: 0;
+    }
+
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 900; font-size: 1.1rem; color: var(--dark);
+      letter-spacing: -0.03em; text-decoration: none;
+    }
+
+    .brand-mark {
+      width: 38px; height: 38px;
+      display: grid; place-items: center;
+      border-radius: 12px; color: white;
+      font-weight: 900; font-size: 1.1rem;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      box-shadow: 0 8px 20px rgba(234,88,12,0.26);
+      flex-shrink: 0;
+    }
+
+    .topbar-title { font-size: 1rem; font-weight: 700; color: var(--muted); letter-spacing: -0.01em; }
+    .topbar-title span { color: var(--primary-dark); }
+
+    .topbar-right { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 10px;
+      font-weight: 700; font-size: 0.88rem;
+      color: var(--primary-dark);
+      background: rgba(234,88,12,0.08);
+      border: 1px solid rgba(234,88,12,0.18);
+      transition: all 0.2s;
+    }
+    .back-btn:hover { background: rgba(234,88,12,0.14); transform: translateY(-1px); }
+
+    .docs-link {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 10px;
+      font-weight: 700; font-size: 0.88rem;
+      color: var(--dark);
+      background: rgba(0,0,0,0.06);
+      border: 1px solid rgba(0,0,0,0.1);
+      transition: all 0.2s;
+    }
+    .docs-link:hover { background: rgba(0,0,0,0.1); }
+
+    /* ── Search bar ─────────────────────────────────────────── */
+    .search-wrap { flex: 1; max-width: 340px; }
+
+    .search-input {
+      width: 100%; padding: 8px 14px 8px 36px;
+      border-radius: 10px; border: 1px solid var(--line);
+      font: inherit; font-size: 0.9rem; color: var(--dark);
+      background: rgba(255,255,255,0.9);
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'%3E%3C/circle%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'%3E%3C/line%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: 10px center;
+    }
+    .search-input:focus {
+      border-color: rgba(234,88,12,0.45);
+      box-shadow: 0 0 0 3px rgba(234,88,12,0.08);
+    }
+
+    /* ── Main layout ─────────────────────────────────────────── */
+    .docs-app { display: flex; flex: 1; overflow: hidden; height: calc(100vh - 67px); }
+
+    /* ── Sidebar ─────────────────────────────────────────────── */
+    .docs-sidebar {
+      width: 260px; flex-shrink: 0;
+      background: var(--panel); border-right: 1px solid var(--line);
+      overflow-y: auto; padding: 20px 0 32px;
+      display: flex; flex-direction: column;
+    }
+    .docs-sidebar::-webkit-scrollbar { width: 4px; }
+    .docs-sidebar::-webkit-scrollbar-track { background: transparent; }
+    .docs-sidebar::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.3); border-radius: 4px; }
+
+    .sidebar-section-label {
+      padding: 6px 20px 4px;
+      font-size: 10px; font-weight: 800; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--muted); margin-top: 8px;
+    }
+
+    .docs-nav-item {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; padding: 9px 20px;
+      font-size: 0.89rem; font-weight: 600; color: var(--text);
+      background: none; border: none; border-left: 3px solid transparent;
+      cursor: pointer; transition: all 0.15s;
+      font-family: inherit; text-align: left; line-height: 1.4;
+    }
+    .docs-nav-item .nav-icon {
+      width: 22px; height: 22px; border-radius: 6px;
+      display: grid; place-items: center; font-size: 12px;
+      flex-shrink: 0; background: rgba(234,88,12,0.08); transition: background 0.15s;
+    }
+    .docs-nav-item:hover { background: rgba(234,88,12,0.06); color: var(--primary-dark); border-left-color: rgba(234,88,12,0.3); }
+    .docs-nav-item:hover .nav-icon { background: rgba(234,88,12,0.14); }
+    .docs-nav-item.active { background: linear-gradient(90deg, rgba(234,88,12,0.12), rgba(234,88,12,0.04)); color: var(--primary-dark); border-left-color: var(--primary); font-weight: 700; }
+    .docs-nav-item.active .nav-icon { background: var(--primary); color: white; }
+
+    /* ── Content area ────────────────────────────────────────── */
+    .docs-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+    .docs-main::-webkit-scrollbar { width: 6px; }
+    .docs-main::-webkit-scrollbar-track { background: transparent; }
+    .docs-main::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.35); border-radius: 6px; }
+
+    .docs-content { max-width: 860px; width: 100%; margin: 0 auto; padding: 40px 48px 80px; flex: 1; }
+
+    /* ── Breadcrumb ──────────────────────────────────────────── */
+    .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: var(--muted); margin-bottom: 24px; font-weight: 600; }
+    .breadcrumb .sep { color: var(--line); }
+    .breadcrumb .current { color: var(--primary-dark); }
+
+    /* ── Markdown styles ─────────────────────────────────────── */
+    .md h1 { font-size: 1.85rem; font-weight: 900; color: var(--dark); margin: 0 0 8px; letter-spacing: -0.04em; line-height: 1.15; }
+    .md .page-lead { font-size: 1.05rem; color: var(--muted); margin-bottom: 28px; padding-bottom: 24px; border-bottom: 2px solid var(--line); line-height: 1.7; }
+    .md h2 { font-size: 1.2rem; font-weight: 800; color: var(--dark); margin: 32px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--line); letter-spacing: -0.025em; }
+    .md h3 { font-size: 1.02rem; font-weight: 700; color: var(--primary-dark); margin: 22px 0 8px; }
+    .md h4 { font-size: 0.93rem; font-weight: 700; color: var(--muted); margin: 16px 0 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .md p { margin: 0 0 13px; line-height: 1.8; }
+    .md code { background: rgba(234,88,12,0.09); color: #b45309; padding: 2px 7px; border-radius: 5px; font-family: "SFMono-Regular", Menlo, Consolas, monospace; font-size: 0.85em; }
+    .md pre { background: #0f172a; border-radius: 12px; padding: 18px 22px; overflow-x: auto; margin: 16px 0; border: 1px solid rgba(255,255,255,0.06); box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+    .md pre code { background: none; color: #94a3b8; font-size: 0.86em; padding: 0; }
+    .md ul, .md ol { margin: 0 0 13px 22px; line-height: 1.8; }
+    .md li { margin: 4px 0; }
+    .md table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.9rem; border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-sm); }
+    .md thead { background: rgba(234,88,12,0.08); }
+    .md th { color: var(--dark); font-weight: 700; padding: 10px 14px; border-bottom: 2px solid rgba(234,88,12,0.15); text-align: left; font-size: 0.85rem; }
+    .md td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .md tr:last-child td { border-bottom: none; }
+    .md tr:nth-child(even) td { background: rgba(248,250,252,0.8); }
+    .md blockquote { border-left: 4px solid var(--primary); padding: 10px 18px; margin: 14px 0; background: rgba(234,88,12,0.05); border-radius: 0 10px 10px 0; color: var(--muted); font-style: italic; }
+    .md hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
+    .md a { color: var(--primary-dark); text-decoration: underline; font-weight: 600; }
+    .md strong { color: var(--dark); font-weight: 700; }
+    .md em { font-style: italic; }
+
+    /* ── Loading / empty states ──────────────────────────────── */
+    .state-box { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 40px; text-align: center; color: var(--muted); gap: 14px; }
+    .state-box svg { opacity: 0.25; }
+    .state-box p { font-size: 1rem; font-weight: 600; }
+    .state-box small { font-size: 0.85rem; }
+    .spinner { width: 28px; height: 28px; border: 3px solid rgba(234,88,12,0.15); border-top-color: var(--primary); border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Mobile toggle ───────────────────────────────────────── */
+    .sidebar-toggle { display: none; background: none; border: none; padding: 6px; cursor: pointer; color: var(--text); }
+
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 860px) {
+      .topbar { padding: 12px 16px; gap: 10px; }
+      .topbar-title { display: none; }
+      .search-wrap { max-width: 180px; }
+      .sidebar-toggle { display: flex; }
+      .docs-sidebar { position: fixed; top: 63px; left: 0; bottom: 0; z-index: 20; transform: translateX(-100%); transition: transform 0.25s ease; box-shadow: 4px 0 24px rgba(0,0,0,0.12); }
+      .docs-sidebar.open { transform: translateX(0); }
+      .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 19; }
+      .sidebar-overlay.visible { display: block; }
+      .docs-content { padding: 24px 20px 60px; }
+    }
+    @media (max-width: 560px) {
+      .back-btn span { display: none; }
+      .docs-link span { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar" aria-label="Toggle sidebar">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
+
+    <a href="index.html" class="brand">
+      <div class="brand-mark">p</div>
+      <span>pktana</span>
+    </a>
+
+    <span class="topbar-title">/ <span>Learn Networking</span></span>
+
+    <div class="search-wrap">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search topics…" autocomplete="off" />
+    </div>
+
+    <div class="topbar-right">
+      <a class="docs-link" href="docs.html">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>Docs</span>
+      </a>
+      <a class="back-btn" href="index.html">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        <span>Back to site</span>
+      </a>
+    </div>
+  </header>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <div class="docs-app">
+
+    <nav class="docs-sidebar" id="docsSidebar">
+      <div class="sidebar-section-label">Getting Started</div>
+      <button class="docs-nav-item" data-page="what-is-networking">
+        <span class="nav-icon">🌐</span> What Is a Network?
+      </button>
+      <button class="docs-nav-item" data-page="osi-model">
+        <span class="nav-icon">📐</span> The OSI Model
+      </button>
+
+      <div class="sidebar-section-label" style="margin-top:12px;">OSI Layers</div>
+      <button class="docs-nav-item" data-page="physical-layer">
+        <span class="nav-icon">🔌</span> Layer 1 — Physical
+      </button>
+      <button class="docs-nav-item" data-page="data-link-layer">
+        <span class="nav-icon">🔗</span> Layer 2 — Data Link
+      </button>
+      <button class="docs-nav-item" data-page="network-layer">
+        <span class="nav-icon">🗺️</span> Layer 3 — Network
+      </button>
+      <button class="docs-nav-item" data-page="transport-layer">
+        <span class="nav-icon">🚚</span> Layer 4 — Transport
+      </button>
+      <button class="docs-nav-item" data-page="application-layer">
+        <span class="nav-icon">💻</span> Layer 7 — Application
+      </button>
+
+      <div class="sidebar-section-label" style="margin-top:12px;">Infrastructure</div>
+      <button class="docs-nav-item" data-page="topologies">
+        <span class="nav-icon">🏗️</span> Network Topologies
+      </button>
+      <button class="docs-nav-item" data-page="wireless-networking">
+        <span class="nav-icon">📡</span> Wireless Networking
+      </button>
+      <button class="docs-nav-item" data-page="network-security">
+        <span class="nav-icon">🔐</span> Network Security
+      </button>
+
+      <div class="sidebar-section-label" style="margin-top:12px;">Reference</div>
+      <button class="docs-nav-item" data-page="protocols-reference">
+        <span class="nav-icon">📋</span> Protocols Reference
+      </button>
+      <button class="docs-nav-item" data-page="modern-networking">
+        <span class="nav-icon">🚀</span> Modern Networking
+      </button>
+    </nav>
+
+    <main class="docs-main" id="docsMain">
+      <div class="docs-content" id="docsContent">
+        <div class="state-box">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+          </svg>
+          <p>Select a topic from the sidebar</p>
+          <small>Learn networking from the ground up — Layer 1 to modern cloud</small>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    var PAGES = {
+      'what-is-networking':  { file: '01-what-is-networking.md',  title: 'What Is a Network?',    section: 'Getting Started' },
+      'osi-model':           { file: '02-osi-model.md',           title: 'The OSI Model',          section: 'Getting Started' },
+      'physical-layer':      { file: '03-physical-layer.md',      title: 'Layer 1 — Physical',     section: 'OSI Layers' },
+      'data-link-layer':     { file: '04-data-link-layer.md',     title: 'Layer 2 — Data Link',    section: 'OSI Layers' },
+      'network-layer':       { file: '05-network-layer.md',       title: 'Layer 3 — Network',      section: 'OSI Layers' },
+      'transport-layer':     { file: '06-transport-layer.md',     title: 'Layer 4 — Transport',    section: 'OSI Layers' },
+      'application-layer':   { file: '07-application-layer.md',   title: 'Layer 7 — Application',  section: 'OSI Layers' },
+      'topologies':          { file: '08-topologies.md',          title: 'Network Topologies',     section: 'Infrastructure' },
+      'wireless-networking': { file: '09-wireless-networking.md', title: 'Wireless Networking',    section: 'Infrastructure' },
+      'network-security':    { file: '10-network-security.md',    title: 'Network Security',       section: 'Infrastructure' },
+      'protocols-reference': { file: '11-protocols-reference.md', title: 'Protocols Reference',    section: 'Reference' },
+      'modern-networking':   { file: '12-modern-networking.md',   title: 'Modern Networking',      section: 'Reference' },
+    };
+
+    var cache = {};
+    var sidebar    = document.getElementById('docsSidebar');
+    var content    = document.getElementById('docsContent');
+    var searchInput = document.getElementById('searchInput');
+    var overlay    = document.getElementById('sidebarOverlay');
+    var toggleBtn  = document.getElementById('sidebarToggle');
+
+    toggleBtn.onclick = function () {
+      var open = sidebar.classList.toggle('open');
+      overlay.classList.toggle('visible', open);
+    };
+    overlay.onclick = function () {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    };
+
+    sidebar.querySelectorAll('.docs-nav-item').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        loadPage(btn.getAttribute('data-page'));
+        sidebar.classList.remove('open');
+        overlay.classList.remove('visible');
+      });
+    });
+
+    function loadPage(id) {
+      var page = PAGES[id];
+      if (!page) return;
+
+      history.replaceState(null, '', '#' + id);
+
+      sidebar.querySelectorAll('.docs-nav-item').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-page') === id);
+      });
+
+      content.innerHTML =
+        '<div class="state-box"><div class="spinner"></div><p>Loading ' + page.title + '…</p></div>';
+      document.getElementById('docsMain').scrollTop = 0;
+
+      if (cache[id]) { renderPage(id, cache[id]); return; }
+
+      fetch('./learning/' + page.file)
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        })
+        .then(function (md) {
+          cache[id] = md;
+          renderPage(id, md);
+        })
+        .catch(function (err) {
+          content.innerHTML =
+            '<div class="state-box" style="color:#ef4444;">' +
+            '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+            '<p>Could not load page</p><small>' + err.message + '</small></div>';
+        });
+    }
+
+    function renderPage(id, md) {
+      var page = PAGES[id];
+      var html = '<div class="breadcrumb">'
+               + '<span>pktana</span><span class="sep">›</span>'
+               + '<span>Learn Networking</span><span class="sep">›</span>'
+               + '<span>' + esc(page.section) + '</span><span class="sep">›</span>'
+               + '<span class="current">' + esc(page.title) + '</span>'
+               + '</div>'
+               + '<div class="md">' + markdownToHtml(md) + '</div>';
+      content.innerHTML = html;
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function inline(raw) {
+      var s = esc(raw);
+      s = s.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      s = s.replace(/\*\*(.*?)\*\*/g,     '<strong>$1</strong>');
+      s = s.replace(/\*(.*?)\*/g,         '<em>$1</em>');
+      s = s.replace(/`([^`]+)`/g,         '<code>$1</code>');
+      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      return s;
+    }
+
+    function markdownToHtml(md) {
+      var lines = md.split('\n'), out = '', i = 0;
+      var inCode = false, codeBuf = [];
+      var inTable = false, tableHead = true;
+      var listBuf = [], listOrd = false;
+      var firstH1 = true, leadPending = false;
+
+      function flushList() {
+        if (!listBuf.length) return;
+        var tag = listOrd ? 'ol' : 'ul';
+        out += '<' + tag + '>' + listBuf.map(function (l) { return '<li>' + inline(l) + '</li>'; }).join('') + '</' + tag + '>';
+        listBuf = []; listOrd = false;
+      }
+      function flushTable() {
+        if (inTable) { out += '</tbody></table></div>'; inTable = false; tableHead = true; }
+      }
+
+      while (i < lines.length) {
+        var line = lines[i]; i++;
+
+        if (line.startsWith('```')) {
+          if (!inCode) { flushList(); flushTable(); inCode = true; codeBuf = []; }
+          else { inCode = false; out += '<pre><code>' + codeBuf.map(esc).join('\n') + '</code></pre>'; codeBuf = []; }
+          continue;
+        }
+        if (inCode) { codeBuf.push(line); continue; }
+
+        if (line.startsWith('#### ')) { flushList(); flushTable(); out += '<h4>' + inline(line.slice(5)) + '</h4>'; continue; }
+        if (line.startsWith('### '))  { flushList(); flushTable(); out += '<h3>' + inline(line.slice(4)) + '</h3>'; continue; }
+        if (line.startsWith('## '))   { flushList(); flushTable(); leadPending = false; out += '<h2>' + inline(line.slice(3)) + '</h2>'; continue; }
+        if (line.startsWith('# '))    { flushList(); flushTable(); out += '<h1>' + inline(line.slice(2)) + '</h1>'; if (firstH1) { firstH1 = false; leadPending = true; } continue; }
+
+        if (/^---+$/.test(line.trim())) { flushList(); flushTable(); out += '<hr>'; continue; }
+        if (line.startsWith('> '))    { flushList(); flushTable(); out += '<blockquote>' + inline(line.slice(2)) + '</blockquote>'; continue; }
+
+        if (line.trim().startsWith('|') && line.includes('|')) {
+          if (/^\|[\s\-:|]+\|/.test(line)) { tableHead = false; continue; }
+          flushList();
+          if (!inTable) { out += '<div style="overflow-x:auto"><table>'; inTable = true; tableHead = true; }
+          var cells = line.split('|').filter(function (_, j, a) { return j > 0 && j < a.length - 1; });
+          if (tableHead) {
+            out += '<thead><tr>' + cells.map(function (c) { return '<th>' + inline(c.trim()) + '</th>'; }).join('') + '</tr></thead><tbody>';
+          } else {
+            out += '<tr>' + cells.map(function (c) { return '<td>' + inline(c.trim()) + '</td>'; }).join('') + '</tr>';
+          }
+          continue;
+        } else { flushTable(); }
+
+        if (/^[-*] /.test(line))   { if (listBuf.length && listOrd) flushList(); listOrd = false; listBuf.push(line.slice(2)); continue; }
+        if (/^\d+\. /.test(line))  { if (listBuf.length && !listOrd) flushList(); listOrd = true; listBuf.push(line.replace(/^\d+\. /,'')); continue; }
+        if (listBuf.length && (line.startsWith('   ') || line.startsWith('\t'))) { listBuf[listBuf.length-1] += ' ' + line.trim(); continue; }
+        flushList();
+
+        if (line.trim() === '') { leadPending = false; continue; }
+
+        if (leadPending) { out += '<p class="page-lead">' + inline(line) + '</p>'; leadPending = false; }
+        else             { out += '<p>' + inline(line) + '</p>'; }
+      }
+
+      flushList();
+      if (inTable) out += '</tbody></table></div>';
+      return out;
+    }
+
+    /* ── Search ─────────────────────────────────────────────── */
+    var searchTimeout;
+    searchInput.addEventListener('input', function () {
+      clearTimeout(searchTimeout);
+      var q = searchInput.value.trim().toLowerCase();
+      if (!q) { clearSearch(); return; }
+      searchTimeout = setTimeout(function () { doSearch(q); }, 280);
+    });
+    searchInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { searchInput.value = ''; clearSearch(); }
+    });
+
+    function clearSearch() {
+      sidebar.querySelectorAll('.docs-nav-item').forEach(function (b) { b.style.display = ''; });
+      sidebar.querySelectorAll('.sidebar-section-label').forEach(function (l) { l.style.display = ''; });
+    }
+
+    function doSearch(q) {
+      var pageIds = Object.keys(PAGES), hits = new Set();
+      pageIds.forEach(function (id) { if (PAGES[id].title.toLowerCase().includes(q)) hits.add(id); });
+      pageIds.forEach(function (id) { if (cache[id] && cache[id].toLowerCase().includes(q)) hits.add(id); });
+      sidebar.querySelectorAll('.docs-nav-item').forEach(function (b) {
+        b.style.display = hits.has(b.getAttribute('data-page')) ? '' : 'none';
+      });
+      sidebar.querySelectorAll('.sidebar-section-label').forEach(function (label) {
+        var next = label.nextElementSibling, anyVisible = false;
+        while (next && !next.classList.contains('sidebar-section-label')) {
+          if (next.style.display !== 'none') anyVisible = true;
+          next = next.nextElementSibling;
+        }
+        label.style.display = anyVisible ? '' : 'none';
+      });
+    }
+
+    /* ── URL hash routing ────────────────────────────────────── */
+    function routeFromHash() {
+      var hash = location.hash.replace('#', '');
+      if (hash && PAGES[hash]) loadPage(hash);
+      else loadPage('what-is-networking');
+    }
+
+    window.addEventListener('hashchange', function () {
+      var hash = location.hash.replace('#', '');
+      if (hash && PAGES[hash]) loadPage(hash);
+    });
+
+    routeFromHash();
+  </script>
+</body>
+</html>
