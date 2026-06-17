@@ -1620,7 +1620,10 @@ pub mod inner {
                 }
             } else if request.starts_with("GET /api/learn?page=") {
                 let start = "GET /api/learn?page=".len();
-                let end = request[start..].find(' ').map(|i| start + i).unwrap_or(request.len());
+                let end = request[start..]
+                    .find(' ')
+                    .map(|i| start + i)
+                    .unwrap_or(request.len());
                 let page = &request[start..end];
                 let content: Option<&str> = match page {
                     "01-what-is-networking" => Some(LEARN_01),
@@ -1645,7 +1648,8 @@ pub mod inner {
                     );
                     let _ = stream.write_all(response.as_bytes());
                 } else {
-                    let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+                    let _ =
+                        stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
                 }
             } else if request.starts_with("GET /learn") {
                 let html = LEARN_HTML;
