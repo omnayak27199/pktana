@@ -1618,47 +1618,6 @@ pub mod inner {
                         "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nImage not found";
                     let _ = stream.write_all(response.as_bytes());
                 }
-            } else if request.starts_with("GET /api/learn?page=") {
-                let start = "GET /api/learn?page=".len();
-                let end = request[start..]
-                    .find(' ')
-                    .map(|i| start + i)
-                    .unwrap_or(request.len());
-                let page = &request[start..end];
-                let content: Option<&str> = match page {
-                    "01-what-is-networking" => Some(LEARN_01),
-                    "02-osi-model" => Some(LEARN_02),
-                    "03-physical-layer" => Some(LEARN_03),
-                    "04-data-link-layer" => Some(LEARN_04),
-                    "05-network-layer" => Some(LEARN_05),
-                    "06-transport-layer" => Some(LEARN_06),
-                    "07-application-layer" => Some(LEARN_07),
-                    "08-topologies" => Some(LEARN_08),
-                    "09-wireless-networking" => Some(LEARN_09),
-                    "10-network-security" => Some(LEARN_10),
-                    "11-protocols-reference" => Some(LEARN_11),
-                    "12-modern-networking" => Some(LEARN_12),
-                    _ => None,
-                };
-                if let Some(md) = content {
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        md.len(),
-                        md
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                } else {
-                    let _ =
-                        stream.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
-                }
-            } else if request.starts_with("GET /learn") {
-                let html = LEARN_HTML;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    html.len(),
-                    html
-                );
-                let _ = stream.write_all(response.as_bytes());
             } else if request.starts_with("GET / ") {
                 let html = HTML_TEMPLATE;
                 let response = format!(
@@ -1686,20 +1645,6 @@ pub mod inner {
     const WIKI_PROTO: &str = include_str!("../../../wiki/10-protocols.md");
     const WIKI_ARCH: &str = include_str!("../../../wiki/11-architecture.md");
     const WIKI_CONTRIB: &str = include_str!("../../../wiki/12-contributing.md");
-
-    const LEARN_HTML: &str = include_str!("learn.html");
-    const LEARN_01: &str = include_str!("../../../learning/01-what-is-networking.md");
-    const LEARN_02: &str = include_str!("../../../learning/02-osi-model.md");
-    const LEARN_03: &str = include_str!("../../../learning/03-physical-layer.md");
-    const LEARN_04: &str = include_str!("../../../learning/04-data-link-layer.md");
-    const LEARN_05: &str = include_str!("../../../learning/05-network-layer.md");
-    const LEARN_06: &str = include_str!("../../../learning/06-transport-layer.md");
-    const LEARN_07: &str = include_str!("../../../learning/07-application-layer.md");
-    const LEARN_08: &str = include_str!("../../../learning/08-topologies.md");
-    const LEARN_09: &str = include_str!("../../../learning/09-wireless-networking.md");
-    const LEARN_10: &str = include_str!("../../../learning/10-network-security.md");
-    const LEARN_11: &str = include_str!("../../../learning/11-protocols-reference.md");
-    const LEARN_12: &str = include_str!("../../../learning/12-modern-networking.md");
 
     const HTML_TEMPLATE: &str = r##"
 <!DOCTYPE html>
