@@ -2386,10 +2386,6 @@ pub mod inner {
                 <span>BPF Filters</span>
             </div>
             <button class="landing-btn" onclick="enterDashboard()">Launch Dashboard →</button>
-            <a href="/learn" target="_blank" style="margin-top:16px; display:inline-flex; align-items:center; gap:7px; padding:10px 24px; border:1px solid rgba(255,255,255,0.2); border-radius:50px; color:rgba(255,255,255,0.75); font-size:13px; font-weight:600; text-decoration:none; backdrop-filter:blur(8px); background:rgba(255,255,255,0.06); transition:all 0.2s; animation: fadeInUp 0.7s ease-out 0.65s both;" onmouseover="this.style.background='rgba(249,115,22,0.18)';this.style.borderColor='rgba(249,115,22,0.5)';this.style.color='#fb923c'" onmouseout="this.style.background='rgba(255,255,255,0.06)';this.style.borderColor='rgba(255,255,255,0.2)';this.style.color='rgba(255,255,255,0.75)'">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                Learn Networking
-            </a>
         </div>
     </div>
 
@@ -2406,12 +2402,8 @@ pub mod inner {
             <span>LIVE</span>
             <span id="navLivePkts" style="opacity:0.75;font-weight:500;">0 pkts</span>
         </div>
-        <div class="nav-controls" style="display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-muted); font-weight:500; letter-spacing:0.3px;">
-            <span>Network Packet Analyzer</span>
-            <a href="/learn" target="_blank" style="display:inline-flex; align-items:center; gap:5px; padding:5px 12px; background:rgba(249,115,22,0.1); border:1px solid rgba(249,115,22,0.3); border-radius:6px; color:var(--primary); font-size:11px; font-weight:700; text-decoration:none; letter-spacing:0.3px; transition:all 0.2s;" onmouseover="this.style.background='rgba(249,115,22,0.2)'" onmouseout="this.style.background='rgba(249,115,22,0.1)'">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                Learn Networking
-            </a>
+        <div class="nav-controls" style="font-size:12px; color:var(--text-muted); font-weight:500; letter-spacing:0.3px;">
+            Network Packet Analyzer
         </div>
     </div>
 
