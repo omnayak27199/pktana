@@ -52,8 +52,9 @@ pub mod inner {
     };
 
     use pktana_core::{
-        analyze_bytes, build_socket_process_map, geoip_lookup_str, hex_dump, inspect,
-        CaptureConfig, CapturePacket, GeoInfo, LinuxCaptureEngine, ProcessInfo, SocketId,
+        analyze_bytes, build_socket_process_map, geoip_lookup_str, get_nic_dataplane, hex_dump,
+        inspect, list_network_namespaces, scan_bpf_fs, CaptureConfig, CapturePacket, GeoInfo,
+        LinuxCaptureEngine, NicDataplane, ProcessInfo, SocketId,
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -127,6 +128,7 @@ pub mod inner {
         Packets,
         Flows,
         Stats,
+        Dataplane,
         Help,
     }
 
@@ -184,6 +186,8 @@ pub mod inner {
         // pcap-file mode
         pcap_mode: bool,
         pcap_file: String,
+        // NIC dataplane snapshot (loaded once at startup)
+        nic_dataplane: Option<NicDataplane>,
     }
 
     impl App {
@@ -228,6 +232,7 @@ pub mod inner {
                 popup_scroll: 0,
                 pcap_mode: false,
                 pcap_file: String::new(),
+                nic_dataplane: get_nic_dataplane(interface).ok(),
             }
         }
 
@@ -814,6 +819,7 @@ pub mod inner {
             Tab::Packets => render_packets(f, app),
             Tab::Flows => render_flows(f, app),
             Tab::Stats => render_stats(f, app),
+            Tab::Dataplane => render_dataplane_tab(f, app),
             Tab::Help => render_help(f, app),
         }
     }
@@ -850,7 +856,8 @@ pub mod inner {
             ("[2]Packets", Tab::Packets),
             ("[3]Flows", Tab::Flows),
             ("[4]Stats", Tab::Stats),
-            ("[5]Help", Tab::Help),
+            ("[5]Dataplane", Tab::Dataplane),
+            ("[6]Help", Tab::Help),
         ];
         let mut spans: Vec<Span> = vec![Span::styled(
             header_left,
@@ -909,9 +916,10 @@ pub mod inner {
             )
         } else {
             let hint = match app.current_tab {
-                Tab::Packets => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [1-5]Tab  [q]Quit",
-                Tab::Flows   => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [a]FlowAnalysis  [/]Filter  [q]Quit",
-                _            => " [1-5]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [s]Sort  [q]Quit",
+                Tab::Packets   => " [↑↓/jk]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [1-6]Tab  [q]Quit",
+                Tab::Flows     => " [↑↓]Navigate  [Enter]Detail  [s]SortCol  [S]Dir  [t]Historic  [a]FlowAnalysis  [/]Filter  [q]Quit",
+                Tab::Dataplane => " [1-6]Tabs  [r]Reload dataplane  [q]Quit",
+                _              => " [1-6]Tabs  [↑↓]Navigate  [Enter]Detail  [/]Filter  [a]FlowAnalysis  [s]Sort  [q]Quit",
             };
             (
                 hint.into(),
@@ -1375,6 +1383,187 @@ pub mod inner {
                 .wrap(Wrap { trim: false }),
             chunks[2],
         );
+    }
+
+    // ── Dataplane tab ──
+
+    fn render_dataplane_tab(f: &mut Frame, app: &App) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // tab bar
+                Constraint::Min(10),   // dataplane info
+                Constraint::Length(4), // BPF FS + namespace summary
+                Constraint::Length(2), // status bar
+            ])
+            .split(f.area());
+
+        render_tab_bar(f, chunks[0], app);
+
+        // ── Main dataplane panel ──────────────────────────────────────────────
+        let dp_text = if let Some(dp) = &app.nic_dataplane {
+            let mut lines = vec![
+                format!("  Interface      : {}", app.interface),
+                format!("  Bypass Mode    : {}", dp.bypass_mode),
+                String::new(),
+                // XDP
+                if dp.xdp_prog_ids.is_empty() {
+                    "  XDP            : not attached".into()
+                } else {
+                    let ids: Vec<String> = dp.xdp_prog_ids.iter().map(|i| i.to_string()).collect();
+                    format!(
+                        "  XDP            : ATTACHED  prog_ids=[{}]  mode={}",
+                        ids.join(","),
+                        dp.xdp_mode.as_deref().unwrap_or("unknown")
+                    )
+                },
+                // AF_XDP
+                if dp.afxdp_sockets == 0 {
+                    "  AF_XDP sockets : none".into()
+                } else {
+                    format!(
+                        "  AF_XDP sockets : {}  (zero-copy rings active)",
+                        dp.afxdp_sockets
+                    )
+                },
+                // DPDK
+                if dp.dpdk_bound {
+                    format!(
+                        "  DPDK/PMD       : BOUND  driver={}  ← kernel BYPASSED",
+                        dp.userspace_driver.as_deref().unwrap_or("?")
+                    )
+                } else {
+                    "  DPDK/PMD       : not bound".into()
+                },
+                String::new(),
+                // TC BPF
+                if !dp.tc_clsact {
+                    "  TC BPF         : no clsact qdisc".into()
+                } else if dp.tc_bpf_directions.is_empty() {
+                    "  TC BPF         : clsact present, no BPF filters".into()
+                } else {
+                    let ids: Vec<String> =
+                        dp.tc_bpf_prog_ids.iter().map(|i| i.to_string()).collect();
+                    format!(
+                        "  TC BPF         : {} | prog_ids=[{}]",
+                        dp.tc_bpf_directions.join("+"),
+                        if ids.is_empty() {
+                            "—".into()
+                        } else {
+                            ids.join(",")
+                        }
+                    )
+                },
+                String::new(),
+                // SR-IOV
+                if dp.is_virtual_function {
+                    format!(
+                        "  SR-IOV         : VF  physfn={}",
+                        dp.physfn_pci.as_deref().unwrap_or("?")
+                    )
+                } else if let Some(total) = dp.sriov_vfs_total {
+                    format!(
+                        "  SR-IOV         : PF  vfs={}/{}",
+                        dp.sriov_vfs_enabled.unwrap_or(0),
+                        total
+                    )
+                } else {
+                    "  SR-IOV         : —".into()
+                },
+                // Queues
+                if dp.rx_queues > 0 || dp.tx_queues > 0 {
+                    format!(
+                        "  Queues         : rx={}  tx={}  combined={}",
+                        dp.rx_queues, dp.tx_queues, dp.combined_queues
+                    )
+                } else {
+                    "  Queues         : —".into()
+                },
+                // PCI
+                format!(
+                    "  PCI            : {}  vendor={}  device={}  numa={}",
+                    dp.pci_address.as_deref().unwrap_or("—"),
+                    dp.pci_vendor_id.as_deref().unwrap_or("—"),
+                    dp.pci_device_id.as_deref().unwrap_or("—"),
+                    dp.numa_node
+                        .map(|n| n.to_string())
+                        .as_deref()
+                        .unwrap_or("—"),
+                ),
+                String::new(),
+                // HW offloads (first 6 enabled features)
+                if dp.hw_features_on.is_empty() {
+                    "  HW Offloads    : (none / not readable)".into()
+                } else {
+                    let shown = dp
+                        .hw_features_on
+                        .iter()
+                        .take(6)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let suffix = if dp.hw_features_on.len() > 6 {
+                        format!(" +{} more", dp.hw_features_on.len() - 6)
+                    } else {
+                        String::new()
+                    };
+                    format!("  HW Offloads    : {}{}", shown.join("  "), suffix)
+                },
+            ];
+            lines.push(String::new());
+            lines.push("  Press [r] to reload dataplane info.".into());
+            lines.join("\n")
+        } else {
+            format!(
+                "  Could not read dataplane info for '{}'\n  (try running as root)",
+                app.interface
+            )
+        };
+
+        f.render_widget(
+            Paragraph::new(dp_text)
+                .block(
+                    Block::default()
+                        .title(Span::styled(
+                            " NIC Dataplane / BPF Profile ",
+                            Style::default()
+                                .fg(Color::White)
+                                .add_modifier(Modifier::BOLD),
+                        ))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                )
+                .wrap(Wrap { trim: false }),
+            chunks[1],
+        );
+
+        // ── BPF FS + namespace summary ────────────────────────────────────────
+        let bpf_objects = scan_bpf_fs();
+        let pinned_count = bpf_objects.iter().filter(|o| !o.is_dir).count();
+        let namespaces = list_network_namespaces();
+        let ns_count = namespaces.len();
+        let non_host = namespaces.iter().filter(|ns| !ns.is_host).count();
+
+        let summary = format!(
+            "  /sys/fs/bpf/  pinned objects: {}    Namespaces: {} total ({} non-host)",
+            pinned_count, ns_count, non_host
+        );
+
+        f.render_widget(
+            Paragraph::new(summary).block(
+                Block::default()
+                    .title(Span::styled(
+                        " BPF FS & Namespaces ",
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
+            chunks[2],
+        );
+
+        render_status(f, chunks[3], app);
     }
 
     // ── Help tab ──
@@ -2104,8 +2293,12 @@ pub mod inner {
                                 KeyCode::Char('2') => app.current_tab = Tab::Packets,
                                 KeyCode::Char('3') => app.current_tab = Tab::Flows,
                                 KeyCode::Char('4') => app.current_tab = Tab::Stats,
-                                KeyCode::Char('5') | KeyCode::Char('?') => {
+                                KeyCode::Char('5') => app.current_tab = Tab::Dataplane,
+                                KeyCode::Char('6') | KeyCode::Char('?') => {
                                     app.current_tab = Tab::Help
+                                }
+                                KeyCode::Char('r') if app.current_tab == Tab::Dataplane => {
+                                    app.nic_dataplane = get_nic_dataplane(&app.interface).ok();
                                 }
                                 KeyCode::Tab => {
                                     app.show_detail = false;
@@ -2113,7 +2306,8 @@ pub mod inner {
                                         Tab::Overview => Tab::Packets,
                                         Tab::Packets => Tab::Flows,
                                         Tab::Flows => Tab::Stats,
-                                        Tab::Stats => Tab::Help,
+                                        Tab::Stats => Tab::Dataplane,
+                                        Tab::Dataplane => Tab::Help,
                                         Tab::Help => Tab::Overview,
                                     };
                                 }
@@ -2124,7 +2318,8 @@ pub mod inner {
                                         Tab::Packets => Tab::Overview,
                                         Tab::Flows => Tab::Packets,
                                         Tab::Stats => Tab::Flows,
-                                        Tab::Help => Tab::Stats,
+                                        Tab::Dataplane => Tab::Stats,
+                                        Tab::Help => Tab::Dataplane,
                                     };
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
@@ -2330,8 +2525,12 @@ pub mod inner {
                                 KeyCode::Char('2') => app.current_tab = Tab::Packets,
                                 KeyCode::Char('3') => app.current_tab = Tab::Flows,
                                 KeyCode::Char('4') => app.current_tab = Tab::Stats,
-                                KeyCode::Char('5') | KeyCode::Char('?') => {
+                                KeyCode::Char('5') => app.current_tab = Tab::Dataplane,
+                                KeyCode::Char('6') | KeyCode::Char('?') => {
                                     app.current_tab = Tab::Help
+                                }
+                                KeyCode::Char('r') if app.current_tab == Tab::Dataplane => {
+                                    app.nic_dataplane = get_nic_dataplane(&app.interface).ok();
                                 }
                                 KeyCode::Tab => {
                                     app.show_detail = false;
@@ -2339,7 +2538,8 @@ pub mod inner {
                                         Tab::Overview => Tab::Packets,
                                         Tab::Packets => Tab::Flows,
                                         Tab::Flows => Tab::Stats,
-                                        Tab::Stats => Tab::Help,
+                                        Tab::Stats => Tab::Dataplane,
+                                        Tab::Dataplane => Tab::Help,
                                         Tab::Help => Tab::Overview,
                                     };
                                 }
@@ -2350,7 +2550,8 @@ pub mod inner {
                                         Tab::Packets => Tab::Overview,
                                         Tab::Flows => Tab::Packets,
                                         Tab::Stats => Tab::Flows,
-                                        Tab::Help => Tab::Stats,
+                                        Tab::Dataplane => Tab::Stats,
+                                        Tab::Help => Tab::Dataplane,
                                     };
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {

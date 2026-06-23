@@ -5,8 +5,8 @@ pub mod inner {
     use dashmap::DashMap;
     use pktana_core::{
         build_socket_process_map, geoip_lookup_str, get_ethtool_report, get_nic_dataplane,
-        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes, CaptureConfig,
-        LinuxCaptureEngine, ProcessInfo, SocketId,
+        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes,
+        list_xdp_dispatchers, CaptureConfig, LinuxCaptureEngine, ProcessInfo, SocketId,
     };
     use std::io::{Read, Write};
     use std::net::{IpAddr, TcpListener};
@@ -1175,26 +1175,53 @@ pub mod inner {
                 let iface = decode_url(&request[start..end]);
                 if let Ok(nic) = get_nic_info(&iface) {
                     let state = if nic.is_up() { "UP" } else { "DOWN" };
-                    let mut ips = String::from("[");
-                    for (i, ip) in nic.ip_addresses.iter().enumerate() {
-                        ips.push_str(&format!("\"{}\"", ip));
-                        if i < nic.ip_addresses.len() - 1 {
-                            ips.push(',');
-                        }
-                    }
-                    ips.push(']');
+                    let ips_json = nic
+                        .ip_addresses
+                        .iter()
+                        .map(|ip| format!("\"{}\"", escape_json(ip)))
+                        .collect::<Vec<_>>()
+                        .join(",");
                     let json = format!(
-                        r#"{{"name":"{}","state":"{}","mac":"{}","mtu":{},"rx_bytes":{},"tx_bytes":{},"rx_packets":{},"tx_packets":{},"speed":"{}","ips":{}}}"#,
-                        nic.name,
-                        state,
-                        nic.mac,
-                        nic.mtu,
-                        nic.rx_bytes,
-                        nic.tx_bytes,
-                        nic.rx_packets,
-                        nic.tx_packets,
-                        nic.speed_label(),
-                        ips
+                        concat!(
+                            r#"{{"name":"{name}","state":"{state}","mac":"{mac}","mtu":{mtu},"#,
+                            r#""speed":"{speed}","duplex":"{duplex}","driver":"{driver}","#,
+                            r#""loopback":{loopback},"promisc":{promisc},"#,
+                            r#""rx_bytes":{rxb},"rx_packets":{rxp},"rx_errors":{rxe},"rx_dropped":{rxd},"#,
+                            r#""tx_bytes":{txb},"tx_packets":{txp},"tx_errors":{txe},"tx_dropped":{txd},"#,
+                            r#""rx_crc_errors":{crc},"rx_missed_errors":{missed},"rx_frame_errors":{frame},"#,
+                            r#""rx_fifo_errors":{fifo},"tx_carrier_errors":{carrier_err},"collisions":{coll},"#,
+                            r#""carrier_changes":{cc},"master":"{master}","is_bridge":{bridge},"is_bond":{bond},"#,
+                            r#""ifalias":"{alias}","ips":[{ips}]}}"#
+                        ),
+                        name = escape_json(&nic.name),
+                        state = state,
+                        mac = escape_json(&nic.mac),
+                        mtu = nic.mtu,
+                        speed = escape_json(&nic.speed_label()),
+                        duplex = escape_json(nic.duplex.as_deref().unwrap_or("")),
+                        driver = escape_json(nic.driver.as_deref().unwrap_or("")),
+                        loopback = nic.is_loopback(),
+                        promisc = nic.is_promisc(),
+                        rxb = nic.rx_bytes,
+                        rxp = nic.rx_packets,
+                        rxe = nic.rx_errors,
+                        rxd = nic.rx_dropped,
+                        txb = nic.tx_bytes,
+                        txp = nic.tx_packets,
+                        txe = nic.tx_errors,
+                        txd = nic.tx_dropped,
+                        crc = nic.rx_crc_errors,
+                        missed = nic.rx_missed_errors,
+                        frame = nic.rx_frame_errors,
+                        fifo = nic.rx_fifo_errors,
+                        carrier_err = nic.tx_carrier_errors,
+                        coll = nic.collisions,
+                        cc = nic.carrier_changes,
+                        master = escape_json(nic.master.as_deref().unwrap_or("")),
+                        bridge = nic.is_bridge,
+                        bond = nic.is_bond,
+                        alias = escape_json(nic.ifalias.as_deref().unwrap_or("")),
+                        ips = ips_json,
                     );
                     let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
                     let _ = stream.write_all(response.as_bytes());
@@ -1206,20 +1233,100 @@ pub mod inner {
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let iface = decode_url(&request[start..end]);
                 if let Ok(dp) = get_nic_dataplane(&iface) {
-                    let bypass = format!("{:?}", dp.bypass_mode);
+                    let bypass = format!("{}", dp.bypass_mode);
                     let driver = dp.userspace_driver.as_deref().unwrap_or("");
-                    let xdp_ids = format!("{:?}", dp.xdp_prog_ids);
+                    let xdp_ids: Vec<String> =
+                        dp.xdp_prog_ids.iter().map(|i| i.to_string()).collect();
                     let xdp_mode = dp.xdp_mode.as_deref().unwrap_or("");
+                    let tc_dirs = dp.tc_bpf_directions.join(", ");
+                    let tc_ids = dp
+                        .tc_bpf_prog_ids
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let pci_link = format!(
+                        "{} {}",
+                        dp.pci_link_speed.as_deref().unwrap_or("—"),
+                        dp.pci_link_width
+                            .map(|w| format!("x{w}"))
+                            .as_deref()
+                            .unwrap_or("")
+                    );
+                    let pci_max_link = format!(
+                        "{} {}",
+                        dp.pci_max_link_speed.as_deref().unwrap_or("—"),
+                        dp.pci_max_link_width
+                            .map(|w| format!("x{w}"))
+                            .as_deref()
+                            .unwrap_or("")
+                    );
+                    // XDP dispatcher info from /sys/fs/bpf/xdp/
+                    let dispatchers = list_xdp_dispatchers();
+                    let mine: Vec<String> = dispatchers
+                        .iter()
+                        .filter(|d| d.iface.as_deref() == Some(iface.as_str()))
+                        .map(|d| format!("dispatch-{}-{}", d.prog_id, d.link_id))
+                        .collect();
+                    let unmatched = dispatchers.iter().filter(|d| d.iface.is_none()).count();
+                    let xdp_dispatchers = if !mine.is_empty() {
+                        mine.join(", ")
+                    } else if unmatched > 0 {
+                        format!("{unmatched} pinned (run as root for iface correlation)")
+                    } else {
+                        String::new()
+                    };
+                    let sriov_role = if dp.is_virtual_function {
+                        format!("VF (physfn: {})", dp.physfn_pci.as_deref().unwrap_or("?"))
+                    } else if let Some(total) = dp.sriov_vfs_total {
+                        format!(
+                            "PF — {}/{} VFs enabled",
+                            dp.sriov_vfs_enabled.unwrap_or(0),
+                            total
+                        )
+                    } else {
+                        String::new()
+                    };
                     let json = format!(
-                        r#"{{"bypass_mode":"{}","afxdp_sockets":{},"dpdk_bound":{},"driver":"{}","xdp_prog_ids":"{}","xdp_mode":"{}","rx_queues":{},"tx_queues":{}}}"#,
-                        bypass,
-                        dp.afxdp_sockets,
-                        dp.dpdk_bound,
-                        driver,
-                        xdp_ids,
-                        xdp_mode,
-                        dp.rx_queues,
-                        dp.tx_queues
+                        concat!(
+                            r#"{{"bypass_mode":"{bypass}","xdp_prog_ids":"{xdp_ids}","xdp_mode":"{xdp_mode}","#,
+                            r#""xdp_dispatchers":"{xdp_dispatchers}","afxdp_sockets":{afxdp},"#,
+                            r#""dpdk_bound":{dpdk},"driver":"{driver}","#,
+                            r#""tc_clsact":{tc_clsact},"tc_bpf_directions":"{tc_dirs}","tc_bpf_prog_ids":"{tc_ids}","#,
+                            r#""rx_queues":{rx_q},"tx_queues":{tx_q},"combined_queues":{comb_q},"#,
+                            r#""pci_address":"{pci_addr}","pci_vendor":"{pci_vendor}","pci_device":"{pci_dev}","#,
+                            r#""pci_link":"{pci_link}","pci_max_link":"{pci_max_link}","numa_node":"{numa}","#,
+                            r#""sriov":"{sriov}","hw_features_on":"{hw_on}"}}"#
+                        ),
+                        bypass = bypass,
+                        xdp_ids = if xdp_ids.is_empty() {
+                            "None".into()
+                        } else {
+                            xdp_ids.join(", ")
+                        },
+                        xdp_mode = xdp_mode,
+                        xdp_dispatchers = xdp_dispatchers,
+                        afxdp = dp.afxdp_sockets,
+                        dpdk = dp.dpdk_bound,
+                        driver = driver,
+                        tc_clsact = dp.tc_clsact,
+                        tc_dirs = tc_dirs,
+                        tc_ids = tc_ids,
+                        rx_q = dp.rx_queues,
+                        tx_q = dp.tx_queues,
+                        comb_q = dp.combined_queues,
+                        pci_addr = dp.pci_address.as_deref().unwrap_or("—"),
+                        pci_vendor = dp.pci_vendor_id.as_deref().unwrap_or("—"),
+                        pci_dev = dp.pci_device_id.as_deref().unwrap_or("—"),
+                        pci_link = pci_link.trim(),
+                        pci_max_link = pci_max_link.trim(),
+                        numa = dp
+                            .numa_node
+                            .map(|n| n.to_string())
+                            .as_deref()
+                            .unwrap_or("—"),
+                        sriov = sriov_role,
+                        hw_on = dp.hw_features_on.join(", "),
                     );
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1234,12 +1341,71 @@ pub mod inner {
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let iface = decode_url(&request[start..end]);
                 if let Ok(et) = get_ethtool_report(&iface) {
-                    let driver = et.driver.as_deref().unwrap_or("");
-                    let speed = et.speed_mbps.unwrap_or(0);
-                    let duplex = et.duplex.as_deref().unwrap_or("");
+                    let driver = escape_json(et.driver.as_deref().unwrap_or(""));
+                    let fw_ver = escape_json(et.firmware_ver.as_deref().unwrap_or(""));
+                    let bus_info = escape_json(et.bus_info.as_deref().unwrap_or(""));
+                    let duplex = escape_json(et.duplex.as_deref().unwrap_or(""));
+                    let autoneg = escape_json(et.autoneg.as_deref().unwrap_or(""));
+                    let pcie_speed = escape_json(et.pcie_speed.as_deref().unwrap_or(""));
+                    let pcie_width = et.pcie_width.unwrap_or(0);
+                    let carrier_changes = et.carrier_changes.unwrap_or(0);
+                    let carrier_up = et.carrier_up.unwrap_or(0);
+                    let carrier_down = et.carrier_down.unwrap_or(0);
+                    // Collect HW offload features that are "on"
+                    let features_on: Vec<String> = et
+                        .features
+                        .iter()
+                        .filter(|(_, v)| v.as_str() == "on")
+                        .map(|(k, _)| escape_json(k))
+                        .take(20)
+                        .collect();
+                    let features_json = features_on
+                        .iter()
+                        .map(|f| format!("\"{}\"", f))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    // IRQ affinity: up to first 8 queues
+                    let irq_json = et
+                        .queue_irq_affinities
+                        .iter()
+                        .take(8)
+                        .map(|q| {
+                            format!(
+                                r#"{{"q":"{}","irq":{},"cpus":"{}"}}"#,
+                                escape_json(&q.queue_name),
+                                q.irq,
+                                escape_json(&q.cpu_list)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
                     let json = format!(
-                        r#"{{"driver":"{}","speed_mbps":{},"duplex":"{}","operstate":"{}","rx_queues":{},"tx_queues":{}}}"#,
-                        driver, speed, duplex, et.operstate, et.rx_queues, et.tx_queues
+                        concat!(
+                            r#"{{"driver":"{driver}","firmware":"{fw}","bus_info":"{bus}","#,
+                            r#""speed_mbps":{speed},"duplex":"{duplex}","autoneg":"{autoneg}","operstate":"{opstate}","#,
+                            r#""rx_queues":{rx_q},"tx_queues":{tx_q},"combined_queues":{comb_q},"tx_queue_len":{tql},"#,
+                            r#""pcie_speed":"{pcie_speed}","pcie_width":{pcie_width},"#,
+                            r#""carrier_changes":{cc},"carrier_up":{cu},"carrier_down":{cd},"#,
+                            r#""features_on":[{feats}],"irq_affinities":[{irqs}]}}"#
+                        ),
+                        driver = driver,
+                        fw = fw_ver,
+                        bus = bus_info,
+                        speed = et.speed_mbps.unwrap_or(0),
+                        duplex = duplex,
+                        autoneg = autoneg,
+                        opstate = et.operstate,
+                        rx_q = et.rx_queues,
+                        tx_q = et.tx_queues,
+                        comb_q = et.combined_queues,
+                        tql = et.tx_queue_len.unwrap_or(0),
+                        pcie_speed = pcie_speed,
+                        pcie_width = pcie_width,
+                        cc = carrier_changes,
+                        cu = carrier_up,
+                        cd = carrier_down,
+                        feats = features_json,
+                        irqs = irq_json,
                     );
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1661,477 +1827,389 @@ pub mod inner {
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     <style>
-        :root { 
+        /* ── Design tokens — dark default ── */
+        :root {
             --primary: #f97316;
             --primary-dark: #ea580c;
-            --primary-light: #fed7aa;
-            --primary-hover: #fb923c;
-            --accent: #f97316;
-            --accent-light: #ffedd5;
-            --bg: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-            --bg-solid: #f8fafc;
+            --primary-light: rgba(249,115,22,0.12);
+            --bg: #07111e;
+            --bg-solid: #07111e;
+            --surface: #0c1a2e;
+            --surface2: #101e30;
+            --border: #182840;
+            --border-hi: #223450;
+            --text-main: #c5d0e0;
+            --text-muted: #445870;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --info: #38bdf8;
+            --sidebar-bg: #07111e;
+            --sidebar-hover: rgba(249,115,22,0.07);
+            --navbar-bg: #07111e;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.6);
+            --shadow: 0 2px 8px rgba(0,0,0,0.6);
+            --shadow-lg: 0 4px 16px rgba(0,0,0,0.7);
+            --shadow-xl: 0 8px 32px rgba(0,0,0,0.8);
+        }
+        /* ── Light theme override ── */
+        body.light-theme {
+            --bg: #f1f5f9;
+            --bg-solid: #f1f5f9;
             --surface: #ffffff;
+            --surface2: #f8fafc;
+            --border: #e2e8f0;
+            --border-hi: #cbd5e1;
             --text-main: #0f172a;
             --text-muted: #64748b;
-            --border: #e2e8f0;
-            --success: #10b981; 
-            --danger: #dc2626; 
-            --warning: #f97316;
-            --info: #0284c7;
             --sidebar-bg: #ffffff;
-            --sidebar-hover: #f8fafc;
+            --sidebar-hover: rgba(249,115,22,0.07);
             --navbar-bg: #ffffff;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+            --shadow-lg: 0 4px 16px rgba(0,0,0,0.1);
+            --shadow-xl: 0 8px 32px rgba(0,0,0,0.12);
         }
+        /* protocol row tints — light theme */
+        body.light-theme .ws-bg-tcp  { background-color:#dbeafe; color:#1e40af; }
+        body.light-theme .ws-bg-udp  { background-color:#dcfce7; color:#166534; }
+        body.light-theme .ws-bg-http { background-color:#d1fae5; color:#065f46; }
+        body.light-theme .ws-bg-dns  { background-color:#e0f2fe; color:#075985; }
+        body.light-theme .ws-bg-icmp { background-color:#f3e8ff; color:#6b21a8; }
+        body.light-theme .ws-bg-arp  { background-color:#fef9c3; color:#854d0e; }
+        body.light-theme .ws-bg-bad  { background-color:#fee2e2; color:#991b1b; }
+        body.light-theme .ws-table th { background:#f1f5f9; color:#475569; }
+        body.light-theme .pane-hex   { background:#1e293b; color:#94a3b8; }
+
+        /* ── Reset & base ── */
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif; background: var(--bg-solid); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; transition: all 0.3s ease; }
-        body.dark-theme { --bg: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); --bg-solid: #0f172a; --surface: #1e293b; --text-main: #f1f5f9; --text-muted: #94a3b8; --border: #334155; --navbar-bg: #1e293b; --sidebar-bg: #1e293b; --sidebar-hover: #334155; --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3); --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4); --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
-        
-        .navbar { background: var(--navbar-bg); color: var(--text-main); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); z-index: 100; border-bottom: 3px solid transparent; border-image: linear-gradient(90deg, var(--primary), var(--primary-dark)) 1; height: 70px; position: fixed; top: 0; left: 0; right: 0; backdrop-filter: blur(10px); }
-        .logo { font-size: 26px; font-weight: 800; display: flex; align-items: center; letter-spacing: 0.5px; transition: transform 0.2s; font-family: 'Nunito', 'Quicksand', 'Comfortaa', 'Varela Round', 'Segoe UI Rounded', system-ui, -apple-system, sans-serif; }
-        .logo:hover { transform: scale(1.02); }
-        .logo span { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-weight: 800; text-transform: lowercase; }
-        .nav-controls { display: flex; gap: 10px; align-items: center; }
-        
-        /* Landing Page Styles */
-        .landing-page { position: fixed; top: 0; left: 0; width: 100%; height: 100vh; background: linear-gradient(135deg, #1e293b 0%, #334155 50%, #475569 100%); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
-        .landing-page img { max-width: 70%; max-height: 50vh; object-fit: contain; animation: fadeInScale 0.6s ease-out; box-shadow: 0 20px 60px rgba(0,0,0,0.4); border-radius: 12px; }
-        .landing-page h1 { color: white; font-size: 42px; font-weight: 700; margin: 30px 0 12px 0; text-shadow: 0 2px 8px rgba(0,0,0,0.3); animation: fadeInUp 0.8s ease-out 0.2s both; background: linear-gradient(135deg, #f97316, #ea580c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .landing-page p { color: rgba(255,255,255,0.95); font-size: 16px; margin-bottom: 35px; animation: fadeInUp 0.8s ease-out 0.4s both; font-weight: 400; }
-        .landing-btn { background: linear-gradient(135deg, #f97316, #ea580c); color: white; border: none; border-radius: 8px; padding: 14px 36px; font-size: 15px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.2); transition: all 0.2s; animation: fadeInUp 0.8s ease-out 0.6s both; }
-        .landing-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
-        @keyframes fadeInScale { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .landing-page.hidden { display: none; }
-        
-        .container { flex: 1; display: flex; flex-direction: column; width: 100%; padding: 0; overflow: hidden; }
-        
-        .form-input, select.form-input { padding: 10px 14px; border: 2px solid var(--border); background: var(--surface); color: var(--text-main); font-size: 13px; outline: none; border-radius: 8px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); font-weight: 500; box-shadow: var(--shadow-sm); }
-        .form-input::placeholder { color: var(--text-muted); }
-        .form-input:focus, select.form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-light), var(--shadow); background: white; transform: translateY(-1px); }
-        select.form-input { cursor: pointer; }
-        select.form-input:hover { border-color: var(--primary-hover); box-shadow: var(--shadow); }
-        
-        .primary-btn { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; border: none; border-radius: 8px; padding: 10px 20px; font-size: 13px; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); font-weight: 600; box-shadow: 0 4px 8px rgba(249,115,22,0.3), 0 1px 3px rgba(0,0,0,0.1); position: relative; overflow: hidden; }
-        .primary-btn::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent); transition: left 0.5s; }
-        .primary-btn:hover::before { left: 100%; }
-        .primary-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(249,115,22,0.4), 0 3px 6px rgba(0,0,0,0.15); }
-        .primary-btn:active { transform: translateY(0); box-shadow: 0 2px 4px rgba(249,115,22,0.3); }
-        .primary-btn.stop { background: linear-gradient(135deg, var(--danger), #b91c1c); }
-        .primary-btn.stop:hover { box-shadow: 0 6px 16px rgba(220,38,38,0.4), 0 3px 6px rgba(0,0,0,0.15); }
-        
-        .btn { background: white; color: var(--text-main); border: 2px solid var(--border); border-radius: 8px; padding: 9px 16px; font-size: 13px; cursor: pointer; font-weight: 600; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: var(--shadow-sm); }
-        .btn:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-light); transform: translateY(-1px); box-shadow: var(--shadow); }
-        .btn:active { transform: scale(0.98) translateY(0); }
-        
-        .tab-nav { background: var(--surface); border-bottom: 2px solid var(--border); padding: 0 24px; display: flex; gap: 6px; box-shadow: var(--shadow-sm); backdrop-filter: blur(10px); }
-        .tab-btn { padding: 16px 22px; border: none; background: none; color: var(--text-muted); font-size: 13px; font-weight: 700; cursor: pointer; border-bottom: 3px solid transparent; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; }
-        .tab-btn::after { content: ''; position: absolute; bottom: -2px; left: 50%; width: 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); transition: all 0.3s; transform: translateX(-50%); }
-        .tab-btn:hover { color: var(--primary); background: rgba(249, 115, 22, 0.05); }
-        .tab-btn:hover::after { width: 80%; }
-        .tab-btn.active { color: var(--primary); background: linear-gradient(180deg, rgba(249, 115, 22, 0.1), rgba(249, 115, 22, 0.05)); }
-        .tab-btn.active::after { width: 100%; }
-        
-        .panel-toolbar { background: var(--surface); padding: 12px 24px; border-bottom: 2px solid var(--border); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; flex-shrink: 0; box-shadow: var(--shadow-sm); }
-        .toolbar-group { display: flex; gap: 10px; align-items: center; padding: 6px 14px; background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-radius: 8px; border: 2px solid var(--border); transition: all 0.2s; box-shadow: var(--shadow-sm); }
-        .toolbar-group:hover { border-color: var(--primary-light); box-shadow: var(--shadow); transform: translateY(-1px); }
-        .toolbar-separator { width: 2px; height: 28px; background: linear-gradient(180deg, transparent, var(--border), transparent); margin: 0 8px; }
-        .toolbar-label { font-size: 10px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-right: 6px; }
-        
-        .panel { display: none; height: 100%; flex-direction: column; overflow: hidden; }
-        .panel.active { display: flex; }
-        
-        .wireshark-view { display: flex; flex-direction: row; flex: 1; width: 100%; gap: 18px; padding: 20px; background: var(--bg-solid); overflow: hidden; }
-        .pane-left { flex: 6; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-lg); position: relative; overflow: hidden; display: flex; flex-direction: column; transition: box-shadow 0.3s; }
-        .pane-left:hover { box-shadow: var(--shadow-xl); }
-        #tableContainer { flex: 1; overflow: auto; }
-        .pane-right { flex: 4; display: flex; flex-direction: column; gap: 18px; min-width: 360px; min-height: 0; overflow: visible; }
-        
-        .section-label { font-weight: 800; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: -8px; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-        .pane-detail { flex: 3; min-height: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow); transition: all 0.3s; }
-        .pane-detail:hover { box-shadow: var(--shadow-lg); }
-        .pane-hex { flex: 2; min-height: 0; background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; padding: 18px; font-family: 'Consolas', 'Courier New', monospace; box-shadow: var(--shadow-lg); transition: all 0.3s; }
-        .pane-hex:hover { box-shadow: var(--shadow-xl); border-color: var(--primary); }
+        body { font-family: 'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background: var(--bg); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; font-size: 13px; }
 
-        .ws-table { min-width: 100%; border-collapse: collapse; font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; table-layout: auto; }
-        .ws-table th { background: linear-gradient(180deg, #f8fafc, #f1f5f9); color: var(--text-main); border-bottom: 2px solid var(--primary); border-right: 1px solid var(--border); padding: 8px 10px; text-align: left; position: sticky; top: 0; z-index: 10; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px; font-weight: 700; box-shadow: var(--shadow-sm); }
-        .ws-table td { border-bottom: 1px solid #e2e8f0; border-right: 1px solid #e2e8f0; padding: 6px 10px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
-        .ws-table tr:hover td { background: rgba(249, 115, 22, 0.08) !important; transform: scale(1.001); }
-        .ws-table tr.selected td { background: linear-gradient(135deg, var(--primary), var(--primary-dark)) !important; color: white !important; font-weight: 600; box-shadow: inset 0 1px 3px rgba(0,0,0,0.2); }
-        
-        .ws-bg-tcp { background-color: #e2e8f0; color: var(--text-main); }
-        .ws-bg-udp { background-color: #e0f2fe; color: var(--text-main); }
-        .ws-bg-http { background-color: #dcfce7; color: var(--text-main); }
-        .ws-bg-dns { background-color: #cffafe; color: var(--text-main); }
-        .ws-bg-icmp { background-color: #fae8ff; color: var(--text-main); }
-        .ws-bg-arp { background-color: #fef08a; color: var(--text-main); }
-        .ws-bg-bad { background-color: #fee2e2; color: #991b1b; font-weight: 500; }
-        .ws-bg-def { background-color: var(--surface); color: var(--text-main); }
-        
-        .info-cell { white-space: nowrap; }
-        
-        .detail-header { background: linear-gradient(135deg, var(--primary-light), #ffedd5); color: var(--primary-dark); font-weight: 800; padding: 8px 12px; margin: 14px 0 8px 0; border-radius: 6px; border-left: 4px solid var(--primary); font-size: 12px; letter-spacing: 0.8px; box-shadow: var(--shadow-sm); transition: all 0.2s; }
-        .detail-header:hover { transform: translateX(2px); box-shadow: var(--shadow); }
-        .detail-header:first-child { margin-top: 0; }
-        .detail-row { display: flex; padding: 5px 12px; font-size: 13px; border-bottom: 1px solid #f1f5f9; transition: all 0.15s; border-radius: 4px; }
-        .detail-row:hover { background: linear-gradient(90deg, transparent, rgba(249, 115, 22, 0.05), transparent); transform: translateX(3px); }
-        .detail-key { color: var(--text-muted); width: 150px; flex-shrink: 0; font-weight: 700; }
-        .detail-val { color: var(--text-main); word-break: break-all; font-weight: 500; }
-
-        .scroll-toast { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); background: linear-gradient(135deg, #1e293b, #0f172a); color: white; padding: 10px 24px; border-radius: 24px; font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow-xl); opacity: 0.95; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 100; border: 2px solid #334155; backdrop-filter: blur(10px); }
-        .session-strip { display:flex; flex-wrap:wrap; gap:6px; padding:8px 16px; background: var(--surface); border-bottom:1px solid var(--border); align-items:center; min-height:42px; }
-        .session-chip { display:inline-flex; align-items:center; gap:6px; background: rgba(249,115,22,0.08); border:1px solid rgba(249,115,22,0.25); border-radius:18px; padding:4px 10px 4px 12px; font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:all .2s; }
-        .session-chip:hover { background: rgba(249,115,22,0.18); color:var(--text); }
-        .session-chip.active { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color:#fff; border-color: var(--primary-dark); box-shadow: 0 2px 8px rgba(249,115,22,0.3); }
-        .session-chip .chip-x { background: rgba(0,0,0,0.15); border:none; color:inherit; width:18px; height:18px; border-radius:50%; cursor:pointer; font-size:14px; line-height:1; padding:0; display:inline-flex; align-items:center; justify-content:center; }
-        .session-chip .chip-x:hover { background: rgba(220,38,38,0.7); color:#fff; }
-        .window-tabs { display:flex; gap:2px; padding:0 16px; background: var(--bg); border-bottom: 1px solid var(--border); }
-        .win-tab { background: transparent; border: none; border-bottom: 2px solid transparent; padding: 10px 18px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-muted); transition: all .15s; }
-        .win-tab:hover { color: var(--text); background: var(--surface); }
-        .win-tab.active { color: var(--primary); border-bottom-color: var(--primary); background: var(--surface); }
-        .activity-icon.hidden-session-tab { display: none; }
-        .scroll-toast:hover { opacity: 1; transform: translateX(-50%) translateY(-3px) scale(1.02); background: linear-gradient(135deg, #0f172a, #000000); box-shadow: 0 8px 20px rgba(0,0,0,0.3); border-color: var(--primary); }
-        
-        .statusbar { background: var(--surface); border-top: 2px solid var(--border); padding: 10px 24px; font-size: 13px; font-weight: 700; color: var(--text-muted); display: flex; justify-content: space-between; flex-shrink: 0; box-shadow: 0 -2px 8px rgba(0,0,0,0.05); backdrop-filter: blur(10px); }
-        
-        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; padding: 24px; overflow: auto; }
-        .card { background: var(--surface); border: 1px solid var(--border); padding: 20px; box-shadow: var(--shadow); border-radius: 12px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); position: relative; overflow: hidden; }
-        .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, var(--primary), var(--primary-dark)); }
-        .card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--primary-light); }
-        .card-title { font-weight: 700; border-bottom: 2px solid transparent; border-image: linear-gradient(90deg, var(--primary), transparent) 1; padding-bottom: 12px; margin-bottom: 16px; font-size: 15px; color: var(--text-main); letter-spacing: 0.3px; }
-        .kv-list { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
-        .kv-item { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed var(--border); padding: 8px 0; transition: all 0.2s; }
-        .kv-item:hover { padding-left: 8px; border-bottom-style: solid; border-color: var(--primary-light); }
-        .kv-item strong { font-weight: 700; color: var(--text-main); }
-        .kv-item span { font-weight: 600; color: var(--text-muted); }
-        
-        .settings-table { width: 100%; border-collapse: collapse; margin-top: 12px; background: var(--surface); font-size: 13px; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
-        .settings-table th, .settings-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
-        .settings-table th { background: linear-gradient(180deg, #f8fafc, #f1f5f9); font-weight: 700; color: var(--text-main); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid var(--primary); }
-        .settings-table tbody tr { transition: all 0.2s; }
-        .settings-table tbody tr:hover td { background: linear-gradient(90deg, transparent, rgba(249, 115, 22, 0.05), transparent); transform: scale(1.001); }
-        
-        .badge { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; box-shadow: var(--shadow-sm); transition: all 0.2s; }
-        .badge:hover { transform: scale(1.05); box-shadow: var(--shadow); }
-        .badge-success { background: linear-gradient(135deg, #d1fae5, #a7f3d0); color: #065f46; border: 1px solid #10b981; }
-        .badge-danger { background: linear-gradient(135deg, #fee2e2, #fecaca); color: #991b1b; border: 1px solid #dc2626; }
-        .badge-warning { background: linear-gradient(135deg, #fef3c7, #fde68a); color: #92400e; border: 1px solid #f59e0b; }
-        .badge-info { background: linear-gradient(135deg, #dbeafe, #bfdbfe); color: #1e40af; border: 1px solid #0284c7; }
-        
-        /* Dark theme badge overrides for better readability */
-        body.dark-theme .badge-success { background: #065f46; color: #d1fae5; }
-        body.dark-theme .badge-danger { background: #991b1b; color: #fee2e2; }
-        body.dark-theme .badge-warning { background: #92400e; color: #fef3c7; }
-        body.dark-theme .badge-info { background: #1e40af; color: #dbeafe; }
-        
-        /* Dark theme: Fix font visibility on colored flow rows */
-        body.dark-theme .ws-bg-tcp { background-color: #1e3a5f; color: #e2e8f0; }
-        body.dark-theme .ws-bg-udp { background-color: #0c4a6e; color: #e0f2fe; }
-        body.dark-theme .ws-bg-http { background-color: #14532d; color: #dcfce7; }
-        body.dark-theme .ws-bg-dns { background-color: #164e63; color: #cffafe; }
-        body.dark-theme .ws-bg-icmp { background-color: #581c87; color: #f3e8ff; }
-        body.dark-theme .ws-bg-arp { background-color: #713f12; color: #fef08a; }
-        body.dark-theme .ws-bg-bad { background-color: #7f1d1d; color: #fecaca; font-weight: 500; }
-        body.dark-theme .ws-bg-def { background-color: #1e293b; color: #f1f5f9; }
-
-        /* Dark theme: Fix button visibility (default .btn hardcodes white background) */
-        body.dark-theme .btn { background: var(--surface); color: var(--text-main); border-color: var(--border); }
-        body.dark-theme .btn:hover { background: var(--sidebar-hover); border-color: var(--primary); color: var(--primary); }
-        body.dark-theme .btn.stop { background: linear-gradient(135deg, var(--danger), #b91c1c); color: #fff; border-color: #b91c1c; }
-        body.dark-theme .form-input, body.dark-theme select.form-input, body.dark-theme input.form-input, body.dark-theme textarea.form-input { background: var(--surface); color: var(--text-main); border-color: var(--border); }
-        body.dark-theme select, body.dark-theme input[type="text"], body.dark-theme input[type="search"], body.dark-theme input:not([type]), body.dark-theme textarea { background: var(--surface); color: var(--text-main); border-color: var(--border); }
-        /* Table headers (light gradient hardcoded) */
-        body.dark-theme .ws-table th, body.dark-theme .settings-table th { background: linear-gradient(180deg, #1e293b, #0f172a); color: var(--text-main); }
-        /* Detail header (light gradient hardcoded) */
-        body.dark-theme .detail-header { background: linear-gradient(135deg, #422006, #292524); color: #fdba74; }
-        /* Session chip hover used --text (undefined); fall back to text-main */
-        body.dark-theme .session-chip:hover, body.dark-theme .win-tab:hover { color: var(--text-main); }
-        
-        /* VS Code-style Vertical Sidebar */
-        .vscode-layout { display: flex; height: calc(100vh - 70px); overflow: hidden; margin-top: 70px; }
-        .activity-bar { width: 72px; background: var(--sidebar-bg); display: flex; flex-direction: column; align-items: center; padding: 18px 0; gap: 6px; border-right: 2px solid var(--border); flex-shrink: 0; box-shadow: var(--shadow); position: relative; backdrop-filter: blur(10px); }
-        .activity-icon { width: 64px; height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); font-size: 11px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); border-left: 3px solid transparent; position: relative; border-radius: 8px; margin: 0 4px; font-weight: 600; }
-        .activity-icon:hover { color: var(--primary); background: linear-gradient(135deg, var(--sidebar-hover), var(--accent-light)); transform: translateX(2px); box-shadow: var(--shadow-sm); }
-        .activity-icon.active { color: white; border-left-color: var(--primary); background: linear-gradient(135deg, var(--primary), var(--primary-dark)); font-weight: 700; box-shadow: var(--shadow); }
-        .activity-icon svg, .activity-icon span { pointer-events: none; }
-        .icon-label { position: absolute; left: 78px; background: linear-gradient(135deg, var(--text-main), #1e293b); color: white; padding: 8px 14px; border-radius: 8px; font-size: 12px; white-space: nowrap; display: none; z-index: 1000; box-shadow: var(--shadow-lg); font-weight: 600; letter-spacing: 0.3px; animation: slideIn 0.2s ease-out; }
-        .icon-label::before { content: ''; position: absolute; left: -4px; top: 50%; transform: translateY(-50%); width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-right: 5px solid var(--text-main); }
-        .activity-icon:hover .icon-label { display: block; }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
-        .ai-disabled { display: none !important; }
-        .activity-bar-bottom { margin-top: auto; padding-top: 12px; border-top: 2px solid var(--border); width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-        .theme-toggle { width: 56px; height: 44px; background: transparent; border: 2px solid var(--border); color: var(--text-muted); font-size: 11px; cursor: pointer; border-radius: 8px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); font-weight: 700; box-shadow: var(--shadow-sm); }
-        .theme-toggle:hover { background: linear-gradient(135deg, var(--sidebar-hover), var(--accent-light)); color: var(--primary); border-color: var(--primary); transform: scale(1.05); box-shadow: var(--shadow); }
-        .stop-daemon-btn { width: 56px; height: 44px; background: linear-gradient(135deg, var(--danger), #b91c1c); border: none; color: white; font-size: 10px; cursor: pointer; border-radius: 8px; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); font-weight: 700; box-shadow: var(--shadow); }
-        .stop-daemon-btn:hover { background: linear-gradient(135deg, #b91c1c, #991b1b); transform: scale(1.08); box-shadow: var(--shadow-lg); }
-        
-        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-solid); position: relative; }
-        .main-content::before { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: radial-gradient(circle at top right, rgba(249, 115, 22, 0.03), transparent 50%), radial-gradient(circle at bottom left, rgba(249, 115, 22, 0.03), transparent 50%); pointer-events: none; z-index: 0; }
-        .main-content > * { position: relative; z-index: 1; }
-        
-        .resizer { flex: 0 0 5px; background: var(--border); cursor: col-resize; transition: background 0.2s; z-index: 10; margin: 0 -8px; }
-        .resizer:hover, .resizer.dragging { background: var(--primary); }
-        .wireshark-view.vertical { flex-direction: column; }
-        .wireshark-view.vertical .resizer { flex: 0 0 5px; width: 100%; cursor: row-resize; margin: -8px 0; }
-        .wireshark-view.vertical .pane-left, .wireshark-view.vertical .pane-right { min-width: 100%; min-height: 100px; }
-
-        /* ── Custom scrollbars ── */
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        /* ── Scrollbars ── */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(249,115,22,0.35); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+        ::-webkit-scrollbar-thumb { background: rgba(249,115,22,0.2); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(249,115,22,0.45); }
 
-        /* ── Subtle dot-grid background ── */
-        body:not(.dark-theme) { background-image: radial-gradient(rgba(0,0,0,0.055) 1px, transparent 1px); background-size: 22px 22px; }
-        body.dark-theme { background-image: radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px); background-size: 22px 22px; }
+        /* ── Animations ── */
+        @keyframes fadeInScale { from{opacity:0;transform:scale(0.94)} to{opacity:1;transform:scale(1)} }
+        @keyframes fadeInUp    { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes spin        { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes slideIn     { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes livePing    { 0%{box-shadow:0 0 0 0 rgba(16,185,129,0.7)} 70%{box-shadow:0 0 0 8px rgba(16,185,129,0)} 100%{box-shadow:0 0 0 0 rgba(16,185,129,0)} }
+        @keyframes toastIn     { from{opacity:0;transform:translateX(14px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes toastOut    { from{opacity:1;transform:translateX(0)} to{opacity:0;transform:translateX(14px)} }
+        @keyframes fadeIn      { from{opacity:0} to{opacity:1} }
+        @keyframes modalIn     { from{opacity:0;transform:scale(0.96)translateY(-8px)} to{opacity:1;transform:scale(1)translateY(0)} }
+        @keyframes iconGlow    { 0%,100%{box-shadow:0 0 36px rgba(249,115,22,0.45),0 8px 28px rgba(0,0,0,0.5)} 50%{box-shadow:0 0 60px rgba(249,115,22,0.75),0 8px 28px rgba(0,0,0,0.5)} }
+        @keyframes orbFloat    { from{transform:translate(0,0) scale(1)} to{transform:translate(28px,22px) scale(1.06)} }
 
-        /* ── Landing page overhaul ── */
-        .landing-page { background: radial-gradient(ellipse at 25% 55%, #1c0540 0%, #0f172a 45%, #020d1a 100%) !important; overflow: hidden; }
+        /* ── Navbar ── */
+        .navbar { background: var(--navbar-bg); border-bottom: 1px solid var(--border); height: 52px; position: fixed; top: 0; left: 0; right: 0; z-index: 200; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; }
+        .logo { font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 8px; letter-spacing: -0.3px; font-family: 'Nunito', system-ui, sans-serif; }
+        .logo span { background: linear-gradient(135deg, #f97316, #fb923c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; font-weight: 900; }
+        .nav-controls { display: flex; gap: 8px; align-items: center; }
+        .nav-live-badge { display: none; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 4px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.25); font-size: 11px; font-weight: 700; color: var(--success); }
+        .nav-live-badge.on { display: flex; }
+        .nav-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); animation: livePing 1.4s ease-out infinite; }
+
+        /* ── Landing ── */
+        .landing-page { position: fixed; inset: 0; background: radial-gradient(ellipse at 25% 55%, #180432 0%, #080d1c 50%, #030810 100%); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; overflow: hidden; }
         .landing-bg-orb { position: absolute; border-radius: 50%; pointer-events: none; }
-        .landing-bg-orb.o1 { width:600px; height:600px; top:-200px; left:-150px; background: radial-gradient(circle, rgba(249,115,22,0.13) 0%, transparent 70%); animation: orbFloat 9s ease-in-out infinite alternate; }
-        .landing-bg-orb.o2 { width:480px; height:480px; bottom:-180px; right:-100px; background: radial-gradient(circle, rgba(56,189,248,0.09) 0%, transparent 70%); animation: orbFloat 12s ease-in-out infinite alternate-reverse; }
-        .landing-bg-orb.o3 { width:300px; height:300px; top:40%; left:60%; background: radial-gradient(circle, rgba(168,85,247,0.07) 0%, transparent 70%); animation: orbFloat 7s ease-in-out infinite alternate; }
-        @keyframes orbFloat { from { transform: translate(0,0) scale(1); } to { transform: translate(30px,25px) scale(1.08); } }
+        .landing-bg-orb.o1 { width:560px; height:560px; top:-180px; left:-120px; background: radial-gradient(circle, rgba(249,115,22,0.11) 0%, transparent 70%); animation: orbFloat 9s ease-in-out infinite alternate; }
+        .landing-bg-orb.o2 { width:440px; height:440px; bottom:-160px; right:-80px; background: radial-gradient(circle, rgba(56,189,248,0.07) 0%, transparent 70%); animation: orbFloat 12s ease-in-out infinite alternate-reverse; }
+        .landing-bg-orb.o3 { width:280px; height:280px; top:40%; left:60%; background: radial-gradient(circle, rgba(168,85,247,0.05) 0%, transparent 70%); animation: orbFloat 7s ease-in-out infinite alternate; }
         .landing-inner { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 20px; }
-        .landing-icon-wrap { width:88px; height:88px; border-radius: 26px; background: linear-gradient(135deg,#f97316,#ea580c); display:flex; align-items:center; justify-content:center; margin-bottom:20px; box-shadow: 0 0 50px rgba(249,115,22,0.55), 0 10px 40px rgba(0,0,0,0.5); animation: iconGlow 3s ease-in-out infinite, fadeInScale 0.7s ease-out; }
-        @keyframes iconGlow { 0%,100%{ box-shadow: 0 0 50px rgba(249,115,22,0.55), 0 10px 40px rgba(0,0,0,0.5); } 50%{ box-shadow: 0 0 80px rgba(249,115,22,0.8), 0 10px 40px rgba(0,0,0,0.5); } }
-        .landing-brand { font-family:'Nunito',system-ui,sans-serif; font-size:60px; font-weight:900; letter-spacing:-2px; background:linear-gradient(135deg,#f97316,#fb923c,#fde68a); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation: fadeInUp 0.7s ease-out 0.15s both; line-height:1; margin-bottom:10px; }
-        .landing-tagline { color:rgba(255,255,255,0.88); font-size:19px; font-weight:600; margin:0 0 8px; letter-spacing:0.3px; animation: fadeInUp 0.7s ease-out 0.25s both; }
-        .landing-sub { color:rgba(255,255,255,0.45); font-size:13px; margin:0 0 28px; animation: fadeInUp 0.7s ease-out 0.35s both; }
-        .landing-pills { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:38px; animation: fadeInUp 0.7s ease-out 0.45s both; }
-        .landing-pills span { padding:5px 13px; border-radius:20px; font-size:11px; font-weight:600; background:rgba(255,255,255,0.07); color:rgba(255,255,255,0.65); border:1px solid rgba(255,255,255,0.11); backdrop-filter:blur(8px); letter-spacing:0.3px; }
-        .landing-btn { font-size:15px !important; padding:14px 42px !important; border-radius:50px !important; letter-spacing:0.5px; animation: fadeInUp 0.7s ease-out 0.55s both !important; box-shadow: 0 0 32px rgba(249,115,22,0.45), 0 6px 20px rgba(0,0,0,0.35) !important; }
-        .landing-btn:hover { box-shadow: 0 0 55px rgba(249,115,22,0.75), 0 10px 28px rgba(0,0,0,0.45) !important; transform: translateY(-4px) scale(1.02) !important; }
+        .landing-icon-wrap { width:80px; height:80px; border-radius:22px; background: linear-gradient(135deg,#f97316,#ea580c); display:flex; align-items:center; justify-content:center; margin-bottom:18px; box-shadow:0 0 36px rgba(249,115,22,0.45),0 8px 28px rgba(0,0,0,0.5); animation: iconGlow 3s ease-in-out infinite, fadeInScale 0.6s ease-out; }
+        .landing-brand { font-family:'Nunito',system-ui,sans-serif; font-size:52px; font-weight:900; letter-spacing:-2px; background:linear-gradient(135deg,#f97316,#fb923c,#fde68a); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; animation:fadeInUp 0.6s ease-out 0.12s both; line-height:1; margin-bottom:8px; }
+        .landing-tagline { color:rgba(255,255,255,0.82); font-size:16px; font-weight:600; margin:0 0 6px; animation:fadeInUp 0.6s ease-out 0.22s both; }
+        .landing-sub { color:rgba(255,255,255,0.38); font-size:12px; margin:0 0 24px; animation:fadeInUp 0.6s ease-out 0.32s both; }
+        .landing-pills { display:flex; flex-wrap:wrap; gap:7px; justify-content:center; margin-bottom:34px; animation:fadeInUp 0.6s ease-out 0.42s both; }
+        .landing-pills span { padding:4px 12px; border-radius:4px; font-size:11px; font-weight:600; background:rgba(255,255,255,0.05); color:rgba(255,255,255,0.55); border:1px solid rgba(255,255,255,0.09); }
+        .landing-btn { background:linear-gradient(135deg,#f97316,#ea580c); color:white; border:none; border-radius:6px; padding:12px 38px; font-size:14px; font-weight:700; cursor:pointer; box-shadow:0 0 28px rgba(249,115,22,0.4),0 4px 16px rgba(0,0,0,0.35); animation:fadeInUp 0.6s ease-out 0.5s both; transition:box-shadow 0.15s, transform 0.15s; }
+        .landing-btn:hover { box-shadow:0 0 48px rgba(249,115,22,0.65),0 8px 22px rgba(0,0,0,0.45); transform:translateY(-2px); }
+        .landing-page.hidden { display: none; }
 
-        /* ── Frosted-glass Navbar ── */
-        .navbar { background: rgba(255,255,255,0.88) !important; backdrop-filter: blur(24px) saturate(180%) !important; -webkit-backdrop-filter: blur(24px) saturate(180%) !important; border-bottom: 1px solid rgba(249,115,22,0.1) !important; border-image: none !important; box-shadow: 0 2px 24px rgba(0,0,0,0.07) !important; }
-        body.dark-theme .navbar { background: rgba(15,23,42,0.9) !important; border-bottom: 1px solid rgba(249,115,22,0.18) !important; box-shadow: 0 2px 24px rgba(0,0,0,0.35) !important; }
+        /* ── Layout ── */
+        .container { flex:1; display:flex; flex-direction:column; width:100%; padding:0; overflow:hidden; }
+        .vscode-layout { display:flex; height:calc(100vh - 52px); overflow:hidden; margin-top:52px; }
+        .ai-disabled { display:none !important; }
 
-        /* Live-capture indicator in navbar */
-        .nav-live-badge { display:none; align-items:center; gap:8px; padding:6px 14px; border-radius:22px; background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.28); font-size:12px; font-weight:700; color:#10b981; }
-        .nav-live-badge.on { display:flex; }
-        .nav-live-dot { width:8px; height:8px; border-radius:50%; background:#10b981; box-shadow:0 0 0 0 rgba(16,185,129,0.7); animation: livePing 1.4s ease-out infinite; }
-        @keyframes livePing { 0%{ box-shadow:0 0 0 0 rgba(16,185,129,0.7); } 70%{ box-shadow:0 0 0 8px rgba(16,185,129,0); } 100%{ box-shadow:0 0 0 0 rgba(16,185,129,0); } }
+        /* ── Activity bar ── */
+        .activity-bar { width:48px; background:var(--sidebar-bg); display:flex; flex-direction:column; align-items:center; padding:8px 0; gap:2px; border-right:1px solid var(--border); flex-shrink:0; }
+        .activity-icon { width:40px; height:40px; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; color:var(--text-muted); font-size:9px; transition:color 0.12s, background 0.12s; border-left:2px solid transparent; position:relative; border-radius:4px; margin:0 3px; font-weight:600; }
+        .activity-icon:hover { color:var(--text-main); background:var(--sidebar-hover); }
+        .activity-icon.active { color:var(--primary); border-left-color:var(--primary); background:rgba(249,115,22,0.08); }
+        .activity-icon svg, .activity-icon span { pointer-events:none; }
+        .icon-label { position:absolute; left:46px; background:var(--surface2); color:var(--text-main); border:1px solid var(--border); padding:5px 10px; border-radius:4px; font-size:11px; white-space:nowrap; display:none; z-index:1000; box-shadow:var(--shadow-lg); font-weight:600; animation:slideIn 0.12s ease-out; }
+        .icon-label::before { content:''; position:absolute; left:-4px; top:50%; transform:translateY(-50%); width:0; height:0; border-top:4px solid transparent; border-bottom:4px solid transparent; border-right:4px solid var(--border); }
+        .activity-icon:hover .icon-label { display:block; }
+        .activity-icon.hidden-session-tab { display:none; }
+        .activity-bar-bottom { margin-top:auto; padding-top:8px; border-top:1px solid var(--border); width:100%; display:flex; flex-direction:column; align-items:center; gap:4px; padding-bottom:8px; }
+        .theme-toggle { width:40px; height:34px; background:transparent; border:1px solid var(--border); color:var(--text-muted); font-size:10px; cursor:pointer; border-radius:4px; font-weight:700; transition:all 0.12s; }
+        .theme-toggle:hover { border-color:var(--border-hi); color:var(--text-main); }
+        .stop-daemon-btn { width:40px; height:34px; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.22); color:var(--danger); font-size:9px; cursor:pointer; border-radius:4px; font-weight:700; transition:all 0.12s; }
+        .stop-daemon-btn:hover { background:rgba(239,68,68,0.22); }
+        .main-content { flex:1; display:flex; flex-direction:column; overflow:hidden; background:var(--bg); }
 
-        /* ── Activity bar glow on active ── */
-        .activity-icon.active { box-shadow: 3px 0 0 0 var(--primary) inset, 0 0 18px rgba(249,115,22,0.22) !important; }
+        /* ── Inputs & forms ── */
+        .form-input, select.form-input { padding:6px 10px; border:1px solid var(--border); background:var(--surface); color:var(--text-main); font-size:12px; outline:none; border-radius:5px; transition:border-color 0.12s; }
+        .form-input::placeholder { color:var(--text-muted); }
+        .form-input:focus, select.form-input:focus { border-color:var(--primary); }
+        select.form-input { cursor:pointer; }
+        select, input[type="text"], input[type="search"], input:not([type]), textarea { background:var(--surface); color:var(--text-main); border-color:var(--border); }
 
-        /* ── Glassmorphism Cards ── */
-        body:not(.dark-theme) .card { background: rgba(255,255,255,0.88) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.7) !important; }
-        body.dark-theme .card { background: rgba(30,41,59,0.78) !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.05) !important; }
+        /* ── Buttons ── */
+        .primary-btn { background:var(--primary); color:white; border:none; border-radius:5px; padding:7px 15px; font-size:12px; font-weight:600; cursor:pointer; transition:opacity 0.12s; }
+        .primary-btn:hover { opacity:0.85; }
+        .primary-btn:active { opacity:0.7; }
+        .primary-btn.stop { background:var(--danger); }
+        .btn { background:var(--surface2); color:var(--text-main); border:1px solid var(--border); border-radius:5px; padding:7px 13px; font-size:12px; font-weight:600; cursor:pointer; transition:border-color 0.12s, color 0.12s; }
+        .btn:hover { border-color:var(--primary); color:var(--primary); }
+        .btn.stop { background:rgba(239,68,68,0.12); color:var(--danger); border-color:rgba(239,68,68,0.25); }
 
-        /* ── Protocol row colors — richer palette ── */
-        .ws-bg-tcp  { background-color: #eff6ff !important; }
-        .ws-bg-udp  { background-color: #ecfdf5 !important; }
-        .ws-bg-http { background-color: #f0fdf4 !important; }
-        .ws-bg-dns  { background-color: #e0f2fe !important; }
-        .ws-bg-icmp { background-color: #fdf4ff !important; }
-        .ws-bg-arp  { background-color: #fefce8 !important; }
-        .ws-bg-bad  { background-color: #fff1f2 !important; }
-        body.dark-theme .ws-bg-tcp  { background-color: #1e3a5f !important; color:#bfdbfe !important; }
-        body.dark-theme .ws-bg-udp  { background-color: #134e3a !important; color:#bbf7d0 !important; }
-        body.dark-theme .ws-bg-http { background-color: #14532d !important; color:#dcfce7 !important; }
-        body.dark-theme .ws-bg-dns  { background-color: #0c4a6e !important; color:#bae6fd !important; }
-        body.dark-theme .ws-bg-icmp { background-color: #4a1d96 !important; color:#e9d5ff !important; }
-        body.dark-theme .ws-bg-arp  { background-color: #78350f !important; color:#fef08a !important; }
-        body.dark-theme .ws-bg-bad  { background-color: #7f1d1d !important; color:#fecaca !important; }
-
-        /* ── Session strip & chips ── */
-        .session-strip { background: linear-gradient(180deg, var(--surface), var(--bg-solid)) !important; }
-        .session-chip.active { box-shadow: 0 2px 14px rgba(249,115,22,0.38) !important; }
-        .chip-live-dot { width:7px; height:7px; border-radius:50%; background:#10b981; animation:livePing 1.4s ease-out infinite; flex-shrink:0; }
+        /* ── Tab nav ── */
+        .tab-nav { background:var(--surface); border-bottom:1px solid var(--border); padding:0 14px; display:flex; gap:2px; }
+        .tab-btn { padding:11px 17px; border:none; background:none; color:var(--text-muted); font-size:12px; font-weight:600; cursor:pointer; border-bottom:2px solid transparent; transition:color 0.12s, border-color 0.12s; }
+        .tab-btn:hover { color:var(--text-main); }
+        .tab-btn.active { color:var(--primary); border-bottom-color:var(--primary); }
 
         /* ── Toolbar ── */
-        body:not(.dark-theme) .panel-toolbar { background: rgba(255,255,255,0.96) !important; }
-        body.dark-theme .panel-toolbar { background: rgba(30,41,59,0.96) !important; }
-        .toolbar-group { border-radius: 10px !important; transition: all 0.2s !important; }
-        .toolbar-group:hover { border-color: rgba(249,115,22,0.5) !important; box-shadow: 0 0 0 3px rgba(249,115,22,0.08) !important; }
+        .panel-toolbar { background:var(--surface); padding:7px 14px; border-bottom:1px solid var(--border); display:flex; gap:8px; align-items:center; flex-wrap:wrap; flex-shrink:0; }
+        .toolbar-group { display:flex; gap:7px; align-items:center; padding:4px 9px; background:var(--surface2); border-radius:5px; border:1px solid var(--border); }
+        .toolbar-group:hover { border-color:var(--border-hi); }
+        .toolbar-separator { width:1px; height:18px; background:var(--border); margin:0 4px; }
+        .toolbar-label { font-size:10px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-right:3px; }
+
+        /* ── Panels ── */
+        .panel { display:none; height:100%; flex-direction:column; overflow:hidden; }
+        .panel.active { display:flex; }
+
+        /* ── Wireshark layout ── */
+        .wireshark-view { display:flex; flex-direction:row; flex:1; width:100%; gap:10px; padding:10px; background:var(--bg); overflow:hidden; }
+        .pane-left { flex:6; background:var(--surface); border:1px solid var(--border); border-radius:5px; position:relative; overflow:hidden; display:flex; flex-direction:column; }
+        #tableContainer { flex:1; overflow:auto; }
+        .pane-right { flex:4; display:flex; flex-direction:column; gap:10px; min-width:320px; min-height:0; }
+        .section-label { font-weight:700; color:var(--primary); font-size:10px; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:-5px; }
+        .pane-detail { flex:3; min-height:0; background:var(--surface); border:1px solid var(--border); border-radius:5px; overflow-y:auto; padding:12px; font-family:'Consolas','Courier New',monospace; font-size:12px; }
+        .pane-hex { flex:2; min-height:0; background:#030b14; color:#8fa8c0; border:1px solid var(--border); border-radius:5px; overflow-y:auto; padding:12px; font-family:'Consolas','Courier New',monospace; font-size:12px; }
+        .resizer { flex:0 0 4px; background:var(--border); cursor:col-resize; transition:background 0.12s; }
+        .resizer:hover, .resizer.dragging { background:var(--primary); }
+        .wireshark-view.vertical { flex-direction:column; }
+        .wireshark-view.vertical .resizer { flex:0 0 4px; width:100%; cursor:row-resize; }
+        .wireshark-view.vertical .pane-left, .wireshark-view.vertical .pane-right { min-width:100%; min-height:80px; }
+
+        /* ── Packet table ── */
+        .ws-table { min-width:100%; border-collapse:collapse; font-family:'Consolas','Courier New',monospace; font-size:12px; table-layout:auto; }
+        .ws-table th { background:var(--surface2); color:var(--text-muted); border-bottom:1px solid var(--primary); border-right:1px solid var(--border); padding:6px 10px; text-align:left; position:sticky; top:0; z-index:10; text-transform:uppercase; font-size:10px; letter-spacing:0.6px; font-weight:700; }
+        .ws-table td { border-bottom:1px solid var(--border); border-right:1px solid var(--border); padding:5px 10px; cursor:pointer; white-space:nowrap; }
+        .ws-table tr:hover td { background:rgba(249,115,22,0.06) !important; }
+        .ws-table tr.selected td { background:rgba(249,115,22,0.18) !important; color:var(--text-main) !important; font-weight:600; }
+        .ws-table tr.selected:hover td { background:rgba(249,115,22,0.24) !important; }
+
+        /* Protocol row tints — very subtle, same dark palette */
+        .ws-bg-tcp  { background-color: #0a1830; }
+        .ws-bg-udp  { background-color: #081a14; }
+        .ws-bg-http { background-color: #091c10; }
+        .ws-bg-dns  { background-color: #061528; }
+        .ws-bg-icmp { background-color: #160c28; }
+        .ws-bg-arp  { background-color: #1a1408; }
+        .ws-bg-bad  { background-color: #1e0808; color:#fca5a5; font-weight:500; }
+        .ws-bg-def  { background-color: var(--surface); }
+        .info-cell { white-space:nowrap; }
+
+        /* ── Packet detail ── */
+        .detail-header { background:rgba(249,115,22,0.09); color:var(--primary); font-weight:700; padding:5px 10px; margin:10px 0 4px; border-radius:3px; border-left:3px solid var(--primary); font-size:11px; letter-spacing:0.05em; }
+        .detail-header:first-child { margin-top:0; }
+        .detail-row { display:flex; padding:4px 10px; font-size:12px; border-bottom:1px solid rgba(24,40,64,0.6); }
+        .detail-row:hover { background:rgba(249,115,22,0.04); }
+        .detail-key { color:var(--text-muted); width:140px; flex-shrink:0; font-weight:600; }
+        .detail-val { color:var(--text-main); word-break:break-all; }
+
+        /* ── Session strip ── */
+        .scroll-toast { position:absolute; bottom:14px; left:50%; transform:translateX(-50%); background:var(--surface2); color:var(--text-main); padding:6px 18px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer; box-shadow:var(--shadow-lg); border:1px solid var(--border-hi); z-index:100; transition:opacity 0.12s; }
+        .scroll-toast:hover { opacity:0.75; }
+        .session-strip { display:flex; flex-wrap:wrap; gap:5px; padding:5px 13px; background:var(--surface); border-bottom:1px solid var(--border); align-items:center; min-height:36px; }
+        .session-chip { display:inline-flex; align-items:center; gap:5px; background:var(--surface2); border:1px solid var(--border); border-radius:14px; padding:2px 8px 2px 10px; font-size:12px; font-weight:600; color:var(--text-muted); cursor:pointer; transition:all 0.12s; }
+        .session-chip:hover { border-color:var(--border-hi); color:var(--text-main); }
+        .session-chip.active { background:rgba(249,115,22,0.12); color:var(--primary); border-color:rgba(249,115,22,0.35); }
+        .session-chip .chip-x { background:none; border:none; color:inherit; width:15px; height:15px; border-radius:50%; cursor:pointer; font-size:12px; line-height:1; padding:0; display:inline-flex; align-items:center; justify-content:center; opacity:0.55; }
+        .session-chip .chip-x:hover { opacity:1; color:var(--danger); }
+        .chip-live-dot { width:6px; height:6px; border-radius:50%; background:var(--success); flex-shrink:0; }
+        .window-tabs { display:flex; gap:2px; padding:0 12px; background:var(--bg); border-bottom:1px solid var(--border); }
+        .win-tab { background:transparent; border:none; border-bottom:2px solid transparent; padding:8px 14px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text-muted); transition:all 0.12s; }
+        .win-tab:hover { color:var(--text-main); }
+        .win-tab.active { color:var(--primary); border-bottom-color:var(--primary); }
 
         /* ── Status bar ── */
-        .statusbar { background: linear-gradient(180deg, var(--surface), rgba(249,115,22,0.03)) !important; border-top: 1px solid rgba(249,115,22,0.1) !important; }
+        .statusbar { background:var(--surface); border-top:1px solid var(--border); padding:5px 16px; font-size:11px; font-weight:600; color:var(--text-muted); display:flex; justify-content:space-between; flex-shrink:0; }
 
-        /* ── Pane borders ── */
-        .pane-left, .pane-detail, .pane-hex { border-radius: 10px !important; }
+        /* ── Cards & kv-lists ── */
+        .grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; padding:14px; overflow:auto; }
+        .card { background:var(--surface); border:1px solid var(--border); padding:14px; border-radius:5px; }
+        .card:hover { border-color:var(--border-hi); }
+        .card-title { font-weight:700; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px; font-size:10px; color:var(--text-muted); letter-spacing:0.07em; text-transform:uppercase; }
+        .kv-list { display:flex; flex-direction:column; gap:0; font-size:12px; }
+        .kv-item { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid rgba(24,40,64,0.6); padding:4px 0; }
+        .kv-item:last-child { border-bottom:none; }
+        .kv-item:hover { border-bottom-color:var(--border-hi); }
+        .kv-item strong { font-weight:600; color:var(--text-muted); font-size:11px; flex-shrink:0; margin-right:8px; white-space:nowrap; }
+        .kv-item span { font-family:'Consolas','Courier New',monospace; color:var(--text-main); text-align:right; word-break:break-all; font-size:11px; }
 
-        /* ── Window tabs ── */
-        .win-tab { border-radius: 6px 6px 0 0; margin-top: 3px; }
-        .win-tab.active { box-shadow: 0 -2px 10px rgba(249,115,22,0.12); }
+        /* ── Hardware panel ── */
+        #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:11px 13px; display:flex; flex-direction:column; gap:9px; }
+        #hardware .card { padding:9px 12px; }
+        #hardware .card-title { font-size:9px; padding-bottom:5px; margin-bottom:7px; }
+        #hardware .kv-list { gap:0; font-size:11px; }
+        #hardware .kv-item { padding:2px 0; }
+        #hardware .hw-section { margin:7px 0 3px; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); font-weight:700; border-top:1px solid var(--border); padding-top:5px; }
+        #hardware .hw-section:first-child { border-top:none; margin-top:0; padding-top:0; }
+        #hardware .hw-feat { font-size:11px; line-height:1.65; color:var(--text-muted); word-break:break-word; padding:1px 0; font-family:'Consolas','Courier New',monospace; }
 
-        /* ── Scroll toast pill ── */
-        .scroll-toast { border-radius: 28px !important; backdrop-filter: blur(12px) !important; border: 1px solid rgba(249,115,22,0.25) !important; font-size: 12px !important; }
+        /* ── Settings table ── */
+        .settings-table { width:100%; border-collapse:collapse; font-size:12px; }
+        .settings-table th, .settings-table td { padding:7px 11px; text-align:left; border-bottom:1px solid var(--border); }
+        .settings-table th { background:var(--surface2); font-weight:700; color:var(--text-muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid var(--primary); }
+        .settings-table tbody tr:hover td { background:rgba(249,115,22,0.04); }
+        .settings-table tbody tr.selected td { background:rgba(249,115,22,0.1); }
+        .settings-table tbody tr.selected:hover td { background:rgba(249,115,22,0.16); }
 
-        /* ── Badge pop on hover ── */
-        .badge:hover { transform: scale(1.08); box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
-
-        /* ── kv-item hover glow ── */
-        .kv-item:hover { background: rgba(249,115,22,0.04); border-radius: 6px; }
-
-        /* ── Table row hover ── */
-        .ws-table tr:not(:first-child):hover td { background: rgba(249,115,22,0.09) !important; }
-        .settings-table tbody tr:hover td { background: rgba(249,115,22,0.05) !important; }
-        /* ── Selected + hovered: keep text visible (hover bg must NOT wash out white text) ── */
-        .ws-table tr.selected:hover td { background: linear-gradient(135deg, #ea580c, #c2410c) !important; color: white !important; }
-        .settings-table tbody tr.selected td { background: linear-gradient(135deg, var(--primary), var(--primary-dark)) !important; color: white !important; font-weight: 600; }
-        .settings-table tbody tr.selected:hover td { background: linear-gradient(135deg, #ea580c, #c2410c) !important; color: white !important; }
+        /* ── Badges ── */
+        .badge { padding:2px 7px; border-radius:3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }
+        .badge-success { background:rgba(16,185,129,0.14); color:var(--success); border:1px solid rgba(16,185,129,0.28); }
+        .badge-danger  { background:rgba(239,68,68,0.14); color:var(--danger); border:1px solid rgba(239,68,68,0.28); }
+        .badge-warning { background:rgba(245,158,11,0.14); color:var(--warning); border:1px solid rgba(245,158,11,0.28); }
+        .badge-info    { background:rgba(56,189,248,0.14); color:var(--info); border:1px solid rgba(56,189,248,0.28); }
 
         /* ── Toast notifications ── */
-        #toastContainer { position:fixed; bottom:24px; right:24px; z-index:99999; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
-        .toast { pointer-events:all; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 16px; border-radius:10px; font-size:13px; font-weight:600; box-shadow:0 8px 24px rgba(0,0,0,0.18); animation:toastIn 0.3s ease-out; max-width:380px; backdrop-filter:blur(8px); }
-        .toast-info    { background:rgba(15,23,42,0.95); color:#e2e8f0; border-left:4px solid #38bdf8; }
-        .toast-success { background:rgba(6,78,59,0.95);  color:#6ee7b7; border-left:4px solid #10b981; }
-        .toast-error   { background:rgba(127,29,29,0.95);color:#fca5a5; border-left:4px solid #ef4444; }
-        .toast-warn    { background:rgba(66,32,6,0.95);  color:#fde68a; border-left:4px solid #f59e0b; }
-        .toast-close   { background:none; border:none; color:inherit; opacity:0.6; cursor:pointer; font-size:16px; padding:0; line-height:1; flex-shrink:0; }
+        #toastContainer { position:fixed; bottom:18px; right:18px; z-index:99999; display:flex; flex-direction:column; gap:6px; pointer-events:none; }
+        .toast { pointer-events:all; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 13px; border-radius:6px; font-size:12px; font-weight:600; box-shadow:var(--shadow-lg); animation:toastIn 0.22s ease-out; max-width:340px; }
+        .toast-info    { background:#0a1626; color:var(--text-main); border-left:3px solid var(--info); }
+        .toast-success { background:#051610; color:#86efac; border-left:3px solid var(--success); }
+        .toast-error   { background:#160505; color:#fca5a5; border-left:3px solid var(--danger); }
+        .toast-warn    { background:#160e04; color:#fde68a; border-left:3px solid var(--warning); }
+        .toast-close   { background:none; border:none; color:inherit; opacity:0.5; cursor:pointer; font-size:14px; padding:0; line-height:1; flex-shrink:0; }
         .toast-close:hover { opacity:1; }
-        @keyframes toastIn  { from{ opacity:0; transform:translateX(20px); } to{ opacity:1; transform:translateX(0); } }
-        @keyframes toastOut { from{ opacity:1; transform:translateX(0); }    to{ opacity:0; transform:translateX(20px); } }
 
-        /* ── Modal dialog ── */
-        .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:99998; display:flex; align-items:center; justify-content:center; animation:fadeIn 0.15s ease; backdrop-filter:blur(4px); }
-        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
-        .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:28px 32px; min-width:340px; max-width:480px; box-shadow:0 20px 60px rgba(0,0,0,0.35); animation:modalIn 0.2s ease-out; }
-        @keyframes modalIn { from{opacity:0;transform:scale(0.95)translateY(-10px)} to{opacity:1;transform:scale(1)translateY(0)} }
-        .modal-title { font-size:16px; font-weight:800; color:var(--text-main); margin-bottom:10px; }
-        .modal-body  { font-size:13px; color:var(--text-muted); margin-bottom:20px; line-height:1.6; }
-        .modal-input-wrap { margin-bottom:20px; }
-        .modal-input { width:100%; padding:10px 14px; border:2px solid var(--border); border-radius:8px; font-size:13px; background:var(--surface); color:var(--text-main); outline:none; }
+        /* ── Modal ── */
+        .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.65); z-index:99998; display:flex; align-items:center; justify-content:center; animation:fadeIn 0.12s ease; }
+        .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:22px 26px; min-width:300px; max-width:440px; box-shadow:var(--shadow-xl); animation:modalIn 0.16s ease-out; }
+        .modal-title { font-size:14px; font-weight:700; color:var(--text-main); margin-bottom:7px; }
+        .modal-body  { font-size:12px; color:var(--text-muted); margin-bottom:16px; line-height:1.6; }
+        .modal-input-wrap { margin-bottom:16px; }
+        .modal-input { width:100%; padding:7px 11px; border:1px solid var(--border); border-radius:5px; font-size:12px; background:var(--surface2); color:var(--text-main); outline:none; }
         .modal-input:focus { border-color:var(--primary); }
-        .modal-footer { display:flex; gap:10px; justify-content:flex-end; }
-        .modal-confirm { background:linear-gradient(135deg,var(--primary),var(--primary-dark)); color:white; border:none; border-radius:8px; padding:9px 22px; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.2s; }
-        .modal-confirm:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(249,115,22,0.4); }
-        .modal-cancel { background:transparent; color:var(--text-muted); border:2px solid var(--border); border-radius:8px; padding:9px 18px; font-size:13px; font-weight:700; cursor:pointer; transition:all 0.2s; }
-        .modal-cancel:hover { border-color:var(--primary); color:var(--primary); }
-        .modal-confirm.danger { background:linear-gradient(135deg,#dc2626,#b91c1c); }
-        .modal-confirm.danger:hover { box-shadow:0 4px 12px rgba(220,38,38,0.4); }
+        .modal-footer { display:flex; gap:8px; justify-content:flex-end; }
+        .modal-confirm { background:var(--primary); color:white; border:none; border-radius:5px; padding:7px 18px; font-size:12px; font-weight:700; cursor:pointer; transition:opacity 0.12s; }
+        .modal-confirm:hover { opacity:0.85; }
+        .modal-cancel { background:transparent; color:var(--text-muted); border:1px solid var(--border); border-radius:5px; padding:7px 14px; font-size:12px; font-weight:700; cursor:pointer; transition:all 0.12s; }
+        .modal-cancel:hover { border-color:var(--border-hi); color:var(--text-main); }
+        .modal-confirm.danger { background:var(--danger); }
 
-        /* ── Icon-only toolbar buttons ── */
-        .icon-btn { background:transparent; border:1.5px solid var(--border); border-radius:7px; color:var(--text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:5px; padding:6px 10px; font-size:12px; font-weight:600; transition:all 0.2s; }
-        .icon-btn:hover { border-color:var(--primary); color:var(--primary); background:rgba(249,115,22,0.06); }
+        /* ── Icon buttons / kbd ── */
+        .icon-btn { background:transparent; border:1px solid var(--border); border-radius:5px; color:var(--text-muted); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:4px; padding:5px 8px; font-size:12px; font-weight:600; transition:all 0.12s; }
+        .icon-btn:hover { border-color:var(--primary); color:var(--primary); }
         .icon-btn svg { flex-shrink:0; }
+        .kbd { display:inline-block; padding:1px 4px; border:1px solid var(--border); border-bottom-width:2px; border-radius:3px; font-size:10px; font-family:monospace; color:var(--text-muted); background:var(--surface2); }
 
-        /* ── Keyboard shortcut hint ── */
-        .kbd { display:inline-block; padding:1px 5px; border:1px solid var(--border); border-bottom-width:2px; border-radius:4px; font-size:10px; font-family:monospace; color:var(--text-muted); background:var(--surface); }
+        /* ── Empty state ── */
+        .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:44px 20px; color:var(--text-muted); gap:10px; }
+        .empty-state-icon { width:44px; height:44px; border-radius:10px; background:rgba(249,115,22,0.07); display:flex; align-items:center; justify-content:center; }
+        .empty-state-title { font-size:13px; font-weight:700; color:var(--text-main); }
+        .empty-state-sub { font-size:12px; text-align:center; max-width:240px; }
 
-        /* ── Improved empty state ── */
-        .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:60px 20px; color:var(--text-muted); gap:14px; }
-        .empty-state-icon { width:56px; height:56px; border-radius:16px; background:linear-gradient(135deg,rgba(249,115,22,0.1),rgba(249,115,22,0.05)); display:flex; align-items:center; justify-content:center; }
-        .empty-state-title { font-size:15px; font-weight:700; color:var(--text-main); }
-        .empty-state-sub { font-size:13px; text-align:center; max-width:280px; }
-
-        /* ── Route table enhancements ── */
-        .default-route-badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:9px; font-weight:800; background:linear-gradient(135deg,#f97316,#ea580c); color:white; letter-spacing:0.5px; margin-right:5px; vertical-align:middle; }
+        /* ── Route / NIC helpers ── */
+        .default-route-badge { display:inline-block; padding:1px 5px; border-radius:2px; font-size:9px; font-weight:800; background:var(--primary); color:white; letter-spacing:0.4px; margin-right:4px; vertical-align:middle; }
         .direct-route { color:var(--text-muted); font-style:italic; }
-
-        /* ── NIC state badges ── */
         .nic-up   { display:inline-flex; align-items:center; gap:4px; color:var(--success); font-weight:700; font-size:11px; }
-        .nic-down { display:inline-flex; align-items:center; gap:4px; color:var(--danger);  font-weight:700; font-size:11px; }
-        .nic-dot  { width:7px; height:7px; border-radius:50%; background:currentColor; }
+        .nic-down { display:inline-flex; align-items:center; gap:4px; color:var(--danger); font-weight:700; font-size:11px; }
+        .nic-dot  { width:6px; height:6px; border-radius:50%; background:currentColor; }
 
-        /* ── PCAP drop zone ── */
-        .drop-zone { border:2px dashed var(--border); border-radius:12px; padding:32px 20px; text-align:center; cursor:pointer; transition:all 0.2s; color:var(--text-muted); background:var(--surface); }
-        .drop-zone:hover, .drop-zone.drag-over { border-color:var(--primary); background:rgba(249,115,22,0.04); color:var(--primary); }
-        .drop-zone-icon { font-size:28px; margin-bottom:8px; }
-        .drop-zone p { font-size:13px; font-weight:600; margin:0; }
-        .drop-zone small { font-size:11px; opacity:0.7; }
+        /* ── Drop zone ── */
+        .drop-zone { border:1px dashed var(--border); border-radius:7px; padding:26px 20px; text-align:center; cursor:pointer; transition:all 0.12s; color:var(--text-muted); background:var(--surface); }
+        .drop-zone:hover, .drop-zone.drag-over { border-color:var(--primary); color:var(--primary); }
+        .drop-zone-icon { font-size:22px; margin-bottom:5px; }
+        .drop-zone p { font-size:12px; font-weight:600; margin:0; }
+        .drop-zone small { font-size:11px; opacity:0.55; }
 
-        /* ── Protocol color badges ── */
-        .proto-badge { display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:800; letter-spacing:0.5px; text-transform:uppercase; white-space:nowrap; }
-        .proto-tcp    { background:#dbeafe; color:#1d4ed8; border:1px solid #93c5fd; }
-        .proto-udp    { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; }
-        .proto-http, .proto-https { background:#dcfce7; color:#14532d; border:1px solid #86efac; }
-        .proto-http2  { background:#bbf7d0; color:#14532d; border:1px solid #4ade80; }
-        .proto-dns    { background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; }
-        .proto-tls, .proto-ssl { background:#fef9c3; color:#713f12; border:1px solid #fde047; }
-        .proto-icmp   { background:#f3e8ff; color:#6b21a8; border:1px solid #d8b4fe; }
-        .proto-arp    { background:#fef3c7; color:#78350f; border:1px solid #fcd34d; }
-        .proto-quic   { background:#fce7f3; color:#9d174d; border:1px solid #f9a8d4; }
-        .proto-grpc   { background:#ede9fe; color:#4c1d95; border:1px solid #c4b5fd; }
-        .proto-ssh    { background:#f1f5f9; color:#1e3a5f; border:1px solid #94a3b8; }
-        .proto-ftp    { background:#fff7ed; color:#7c2d12; border:1px solid #fdba74; }
-        .proto-bgp    { background:#fef2f2; color:#7f1d1d; border:1px solid #fca5a5; }
-        .proto-ntp    { background:#ecfdf5; color:#064e3b; border:1px solid #6ee7b7; }
-        .proto-sip    { background:#fdf4ff; color:#701a75; border:1px solid #e879f9; }
-        .proto-ip     { background:#f8fafc; color:#334155; border:1px solid #cbd5e1; }
-        body.dark-theme .proto-tcp    { background:#1e3a5f; color:#bfdbfe; border-color:#3b82f6; }
-        body.dark-theme .proto-udp    { background:#064e3b; color:#6ee7b7; border-color:#10b981; }
-        body.dark-theme .proto-http, body.dark-theme .proto-https { background:#14532d; color:#86efac; border-color:#22c55e; }
-        body.dark-theme .proto-http2  { background:#14532d; color:#4ade80; border-color:#16a34a; }
-        body.dark-theme .proto-dns    { background:#0c4a6e; color:#7dd3fc; border-color:#0ea5e9; }
-        body.dark-theme .proto-tls, body.dark-theme .proto-ssl { background:#422006; color:#fde047; border-color:#ca8a04; }
-        body.dark-theme .proto-icmp   { background:#4a1d96; color:#d8b4fe; border-color:#9333ea; }
-        body.dark-theme .proto-arp    { background:#78350f; color:#fcd34d; border-color:#f59e0b; }
-        body.dark-theme .proto-quic   { background:#881337; color:#fda4af; border-color:#f43f5e; }
-        body.dark-theme .proto-grpc   { background:#3b0764; color:#c4b5fd; border-color:#7c3aed; }
-        body.dark-theme .proto-ssh    { background:#1e293b; color:#94a3b8; border-color:#475569; }
-        body.dark-theme .proto-ip     { background:#1e293b; color:#94a3b8; border-color:#475569; }
+        /* ── Protocol badges ── */
+        .proto-badge { display:inline-block; padding:1px 5px; border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.4px; text-transform:uppercase; white-space:nowrap; }
+        .proto-tcp    { background:#0a1830; color:#60a5fa; border:1px solid #182840; }
+        .proto-udp    { background:#081a14; color:#34d399; border:1px solid #0f3020; }
+        .proto-http, .proto-https { background:#091c10; color:#4ade80; border:1px solid #122a18; }
+        .proto-http2  { background:#0a1e12; color:#86efac; border:1px solid #133020; }
+        .proto-dns    { background:#061528; color:#7dd3fc; border:1px solid #0d2438; }
+        .proto-tls, .proto-ssl { background:#151000; color:#fde047; border:1px solid #2c2000; }
+        .proto-icmp   { background:#160c28; color:#d8b4fe; border:1px solid #280f48; }
+        .proto-arp    { background:#1a1408; color:#fcd34d; border:1px solid #2a2010; }
+        .proto-quic   { background:#180a12; color:#fda4af; border:1px solid #2c0f1c; }
+        .proto-grpc   { background:#100820; color:#c4b5fd; border:1px solid #1e1038; }
+        .proto-ssh    { background:var(--surface); color:#94a3b8; border:1px solid var(--border); }
+        .proto-ftp    { background:#160e00; color:#fdba74; border:1px solid #281a00; }
+        .proto-bgp    { background:#160808; color:#fca5a5; border:1px solid #280e0e; }
+        .proto-ntp    { background:#081a14; color:#6ee7b7; border:1px solid #0f2e22; }
+        .proto-sip    { background:#160620; color:#e879f9; border:1px solid #281038; }
+        .proto-ip     { background:var(--surface); color:#64748b; border:1px solid var(--border); }
 
         /* ── Risk pills ── */
-        .risk-badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; letter-spacing:0.4px; margin-right:5px; }
-        .risk-high   { background:linear-gradient(135deg,#dc2626,#b91c1c); color:#fff; box-shadow:0 1px 4px rgba(220,38,38,0.4); }
-        .risk-medium { background:linear-gradient(135deg,#f59e0b,#d97706); color:#fff; box-shadow:0 1px 4px rgba(245,158,11,0.4); }
-        .risk-low    { background:linear-gradient(135deg,#6b7280,#4b5563); color:#fff; }
+        .risk-badge   { display:inline-block; padding:1px 7px; border-radius:10px; font-size:10px; font-weight:700; letter-spacing:0.4px; margin-right:4px; }
+        .risk-high    { background:rgba(239,68,68,0.18); color:var(--danger); border:1px solid rgba(239,68,68,0.28); }
+        .risk-medium  { background:rgba(245,158,11,0.18); color:var(--warning); border:1px solid rgba(245,158,11,0.28); }
+        .risk-low     { background:rgba(68,88,112,0.18); color:var(--text-muted); border:1px solid rgba(68,88,112,0.3); }
 
-        /* ── Flow table coloring ── */
-        .flow-rank-badge { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:50%; font-size:9px; font-weight:900; flex-shrink:0; }
-        .flow-cat-badge  { display:inline-block; padding:1px 7px; border-radius:4px; font-size:10px; font-weight:700; white-space:nowrap; }
-        .flow-bytes-cell { display:flex; align-items:center; gap:6px; min-width:90px; }
-        .flow-bytes-bar  { flex:1; height:4px; background:var(--border); border-radius:2px; overflow:hidden; min-width:30px; }
+        /* ── Flow table ── */
+        .flow-rank-badge { display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; font-size:9px; font-weight:900; flex-shrink:0; }
+        .flow-cat-badge  { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; white-space:nowrap; }
+        .flow-bytes-cell { display:flex; align-items:center; gap:5px; min-width:80px; }
+        .flow-bytes-bar  { flex:1; height:3px; background:var(--border); border-radius:2px; overflow:hidden; min-width:22px; }
         .flow-bytes-fill { height:100%; border-radius:2px; }
 
-        /* ── Progress bar refinements ── */
-        .proto-bar-wrap { margin-bottom:10px; }
-        .proto-bar-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
-        .proto-bar-label strong { font-size:12px; }
-        .proto-bar-label span { font-size:11px; color:var(--text-muted); font-weight:600; }
-        .proto-bar-track { width:100%; background:var(--border); border-radius:6px; height:7px; overflow:hidden; }
-        .proto-bar-fill { height:100%; border-radius:6px; transition:width 0.4s ease; background:linear-gradient(90deg, var(--primary), var(--primary-dark)); }
+        /* ── Progress bars ── */
+        .proto-bar-wrap  { margin-bottom:7px; }
+        .proto-bar-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:2px; }
+        .proto-bar-label strong { font-size:11px; }
+        .proto-bar-label span   { font-size:11px; color:var(--text-muted); font-weight:600; }
+        .proto-bar-track { width:100%; background:var(--border); border-radius:4px; height:5px; overflow:hidden; }
+        .proto-bar-fill  { height:100%; border-radius:4px; transition:width 0.3s ease; background:var(--primary); }
+        .proto-bar-label strong { display:flex; align-items:center; gap:6px; }
+        .proto-bar-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
 
-        /* ── Terminal traffic lights ── */
-        .term-traffic-lights { display:flex; gap:7px; align-items:center; margin-right:12px; }
-        .traffic-dot { width:13px; height:13px; border-radius:50%; cursor:pointer; transition:all 0.15s; flex-shrink:0; }
-        .traffic-dot.red    { background:#ff5f57; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
-        .traffic-dot.yellow { background:#febc2e; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
-        .traffic-dot.green  { background:#28c840; box-shadow:0 0 0 1px rgba(0,0,0,0.25); }
-        .traffic-dot:hover  { filter:brightness(1.15); transform:scale(1.1); }
+        /* ── Terminal lights ── */
+        .term-traffic-lights { display:flex; gap:6px; align-items:center; margin-right:9px; }
+        .traffic-dot { width:11px; height:11px; border-radius:50%; cursor:pointer; transition:filter 0.12s; flex-shrink:0; }
+        .traffic-dot.red    { background:#ff5f57; }
+        .traffic-dot.yellow { background:#febc2e; }
+        .traffic-dot.green  { background:#28c840; }
+        .traffic-dot:hover  { filter:brightness(1.2); }
 
-        /* ── Capture state badge in toolbar ── */
-        .capture-state { display:inline-flex; align-items:center; gap:6px; padding:4px 12px; border-radius:20px; font-size:11px; font-weight:700; border:1px solid; transition:all 0.3s; }
-        .capture-state.idle    { background:rgba(100,116,139,0.1); color:var(--text-muted); border-color:var(--border); }
-        .capture-state.live    { background:rgba(16,185,129,0.1); color:#059669; border-color:#6ee7b7; animation:livePing 1.4s infinite; }
-        .capture-state.paused  { background:rgba(245,158,11,0.1); color:#d97706; border-color:#fcd34d; }
-        .capture-dot { width:7px; height:7px; border-radius:50%; background:currentColor; }
+        /* ── Capture state ── */
+        .capture-state { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:11px; font-size:11px; font-weight:700; border:1px solid; transition:all 0.12s; }
+        .capture-state.idle   { background:rgba(68,88,112,0.1); color:var(--text-muted); border-color:var(--border); }
+        .capture-state.live   { background:rgba(16,185,129,0.1); color:var(--success); border-color:rgba(16,185,129,0.28); animation:livePing 1.4s infinite; }
+        .capture-state.paused { background:rgba(245,158,11,0.1); color:var(--warning); border-color:rgba(245,158,11,0.28); }
+        .capture-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
 
-        /* ── NIC card in server panel ── */
-        .iface-card { border:1.5px solid var(--border); border-radius:10px; padding:10px 14px; background:var(--surface); cursor:pointer; transition:all 0.2s; position:relative; overflow:hidden; }
-        .iface-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--danger); border-radius:4px 0 0 4px; transition:background 0.2s; }
+        /* ── NIC iface card ── */
+        .iface-card { border:1px solid var(--border); border-radius:6px; padding:8px 11px; background:var(--surface); cursor:pointer; transition:border-color 0.12s; position:relative; overflow:hidden; }
+        .iface-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--danger); }
         .iface-card.up::before { background:var(--success); }
-        .iface-card:hover { border-color:var(--primary); transform:translateY(-2px); box-shadow:var(--shadow); }
-        .iface-card:hover::before { background:var(--primary); }
-        .iface-name { font-weight:800; color:var(--primary); font-size:14px; font-family:monospace; }
-        .iface-desc { font-size:11px; color:var(--text-muted); margin-top:2px; }
-        .iface-status { font-size:10px; font-weight:700; margin-top:5px; display:flex; align-items:center; gap:5px; letter-spacing:0.5px; text-transform:uppercase; }
+        .iface-card:hover { border-color:var(--border-hi); }
+        .iface-name   { font-weight:700; color:var(--primary); font-size:13px; font-family:monospace; }
+        .iface-desc   { font-size:11px; color:var(--text-muted); margin-top:2px; }
+        .iface-status { font-size:10px; font-weight:700; margin-top:3px; display:flex; align-items:center; gap:4px; letter-spacing:0.4px; text-transform:uppercase; }
 
-        /* ── Status bar pill ── */
-        .sb-pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; margin-right:6px; }
-        .sb-live { background:rgba(16,185,129,0.15); color:#059669; border:1px solid #6ee7b7; }
-        .sb-idle { background:rgba(100,116,139,0.1); color:var(--text-muted); border:1px solid var(--border); }
+        /* ── Status bar pills ── */
+        .sb-pill { display:inline-block; padding:1px 6px; border-radius:9px; font-size:10px; font-weight:700; margin-right:4px; }
+        .sb-live { background:rgba(16,185,129,0.1); color:var(--success); border:1px solid rgba(16,185,129,0.22); }
+        .sb-idle { background:rgba(68,88,112,0.1); color:var(--text-muted); border:1px solid var(--border); }
 
-        /* ── Connections/Routes table enhancements ── */
-        .state-badge { display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:700; letter-spacing:0.4px; }
-        .state-established { background:#d1fae5; color:#065f46; }
-        .state-listen       { background:#dbeafe; color:#1d4ed8; }
-        .state-time-wait    { background:#fef3c7; color:#78350f; }
-        .state-close-wait   { background:#f3e8ff; color:#6b21a8; }
-        .state-other        { background:#f1f5f9; color:#475569; }
-        body.dark-theme .state-established { background:#064e3b; color:#6ee7b7; }
-        body.dark-theme .state-listen       { background:#1e3a5f; color:#93c5fd; }
-        body.dark-theme .state-time-wait    { background:#422006; color:#fde68a; }
-        body.dark-theme .state-close-wait   { background:#3b0764; color:#c4b5fd; }
-        body.dark-theme .state-other        { background:#1e293b; color:#94a3b8; }
+        /* ── Connection state badges ── */
+        .state-badge        { display:inline-block; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; letter-spacing:0.4px; }
+        .state-established  { background:rgba(16,185,129,0.14); color:var(--success); }
+        .state-listen       { background:rgba(56,189,248,0.14); color:var(--info); }
+        .state-time-wait    { background:rgba(245,158,11,0.14); color:var(--warning); }
+        .state-close-wait   { background:rgba(168,85,247,0.14); color:#a855f7; }
+        .state-other        { background:rgba(68,88,112,0.12); color:var(--text-muted); }
     </style>
     <script>
         // Define critical functions early so onclick handlers work
@@ -2151,10 +2229,10 @@ pub mod inner {
 
         function toggleTheme() {
             const body = document.body;
-            const isDark = body.classList.toggle('dark-theme');
+            const isLight = body.classList.toggle('light-theme');
             const themeBtn = document.querySelector('.theme-toggle');
-            if (themeBtn) themeBtn.textContent = isDark ? '☀️' : '🌙';
-            localStorage.setItem('pktana-theme', isDark ? 'dark' : 'light');
+            if (themeBtn) themeBtn.textContent = isLight ? '🌙' : '☀️';
+            localStorage.setItem('pktana-theme', isLight ? 'light' : 'dark');
         }
 
         function isSessionScopedTab(tabId) {
@@ -2673,10 +2751,16 @@ pub mod inner {
 
         <!-- Hardware Panel -->
         <div id="hardware" class="panel">
-            <div class="grid-3">
-                <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
-                <div class="card"><div class="card-title">Driver & Queues (Ethtool)</div><div class="kv-list" id="driverStatus">Select an interface above.</div></div>
-                <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
+            <div class="hw-scroll">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+                    <div class="card"><div class="card-title">Interface Config</div><div class="kv-list" id="ifaceConfig">Select an interface above.</div></div>
+                    <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
+                    <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Ethtool Report</div>
+                    <div id="ethtoolDetail" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0 20px;">Select an interface above.</div>
+                </div>
             </div>
         </div>
 
@@ -3013,13 +3097,14 @@ pub mod inner {
                 if (filterTerm && !p.toLowerCase().includes(filterTerm)) continue;
                 let pct = totalProtoBytes > 0 ? (s.bytes / totalProtoBytes * 100).toFixed(1) : 0;
                 const pk = p.toLowerCase().replace(/[^a-z0-9]/g,'');
+                const col = protoColor(p);
                 pHtml += `<div class="proto-bar-wrap">
                     <div class="proto-bar-label">
-                        <span class="proto-badge proto-${pk}">${p}</span>
+                        <strong><span class="proto-bar-dot" style="background:${col};"></span>${p}</strong>
                         <span>${formatBytes(s.bytes)} &nbsp;${pct}%</span>
                     </div>
                     <div class="proto-bar-track">
-                        <div class="proto-bar-fill" style="width:${pct}%;"></div>
+                        <div class="proto-bar-fill" style="width:${pct}%;background:${col};"></div>
                     </div>
                 </div>`;
             }
@@ -3060,11 +3145,11 @@ pub mod inner {
             const body = document.body;
             const themeBtn = document.querySelector('.theme-toggle');
             
-            if (savedTheme === 'dark') {
-                body.classList.add('dark-theme');
-                if (themeBtn) themeBtn.textContent = '☀️';
-            } else {
+            if (savedTheme === 'light') {
+                body.classList.add('light-theme');
                 if (themeBtn) themeBtn.textContent = '🌙';
+            } else {
+                if (themeBtn) themeBtn.textContent = '☀️';
             }
         });
 
@@ -3200,6 +3285,21 @@ pub mod inner {
             const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB'];
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        const PROTO_COLORS = {
+            tcp:'#3b82f6', udp:'#10b981', http:'#22c55e', https:'#22c55e',
+            http2:'#4ade80', dns:'#38bdf8', tls:'#eab308', ssl:'#eab308',
+            icmp:'#a855f7', arp:'#f59e0b', quic:'#ec4899', grpc:'#8b5cf6',
+            ssh:'#94a3b8', ftp:'#fb923c', bgp:'#f87171', ntp:'#34d399',
+            sip:'#e879f9', ip:'#64748b', default:'#f97316'
+        };
+        function protoColor(proto) {
+            const k = (proto || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+            for (const [key, col] of Object.entries(PROTO_COLORS)) {
+                if (k.includes(key)) return col;
+            }
+            return PROTO_COLORS.default;
         }
 
         function getWsClass(proto, risk) {
@@ -3868,16 +3968,62 @@ pub mod inner {
             try {
                 const res = await fetch(`/api/nic_detail?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                let badge = data.state === "UP" ? "success" : "danger";
-                document.getElementById('hwStatus').innerHTML = 
-                    kvRow("State", data.state, badge) +
-                    kvRow("MAC Address", data.mac) +
-                    kvRow("MTU", data.mtu) +
-                    kvRow("Speed", data.speed) +
-                    kvRow("RX", `${formatBytes(data.rx_bytes)} (${data.rx_packets} pkts)`) +
-                    kvRow("TX", `${formatBytes(data.tx_bytes)} (${data.tx_packets} pkts)`) +
-                    kvRow("IPs", (data.ips || []).join(', ') || "None");
-            } catch (e) { document.getElementById('hwStatus').innerHTML = "Error loading hardware info."; }
+                const badge = data.state === "UP" ? "success" : "danger";
+
+                // ── Card 1: Interface Config (identity + IPs + roles) ───────
+                let cfg = '';
+                cfg += hwSection('Identity');
+                cfg += kvRow("State", data.state, badge);
+                cfg += kvRow("MAC Address", data.mac);
+                cfg += kvRow("MTU", data.mtu);
+                cfg += kvRow("Speed", data.speed || "—");
+                cfg += kvRow("Duplex", data.duplex || "—");
+                cfg += kvRow("Driver", data.driver || "—");
+                if (data.loopback) cfg += kvRow("Type", "Loopback");
+                if (data.promisc)  cfg += kvRow("Promiscuous", "Yes");
+                if (data.master)   cfg += kvRow("Master", data.master);
+                if (data.is_bridge) cfg += kvRow("Role", "Bridge master");
+                if (data.is_bond)   cfg += kvRow("Role", "Bond member");
+                if (data.ifalias)   cfg += kvRow("Alias", data.ifalias);
+
+                cfg += hwSection('IP Addresses');
+                const ips = data.ips || [];
+                cfg += ips.length > 0
+                    ? ips.map(ip => kvRow("addr", ip)).join('')
+                    : kvRow("addr", "—");
+
+                document.getElementById('ifaceConfig').innerHTML = cfg;
+
+                // ── Card 2: Hardware Status (traffic + error counters) ──────
+                let hw = '';
+                hw += hwSection('Traffic');
+                hw += kvRow("RX", `${formatBytes(data.rx_bytes)} (${data.rx_packets} pkts)`);
+                hw += kvRow("TX", `${formatBytes(data.tx_bytes)} (${data.tx_packets} pkts)`);
+                hw += kvRow("RX Errors / Dropped", `${data.rx_errors} / ${data.rx_dropped}`);
+                hw += kvRow("TX Errors / Dropped", `${data.tx_errors} / ${data.tx_dropped}`);
+
+                const hasErrors = (data.rx_crc_errors + data.rx_missed_errors +
+                                   data.rx_frame_errors + data.rx_fifo_errors +
+                                   data.tx_carrier_errors + data.collisions) > 0;
+                if (hasErrors) {
+                    hw += hwSection('Error Counters');
+                    hw += kvRow("CRC Errors",      data.rx_crc_errors);
+                    hw += kvRow("Missed",           data.rx_missed_errors);
+                    hw += kvRow("Frame Errors",     data.rx_frame_errors);
+                    hw += kvRow("FIFO Errors",      data.rx_fifo_errors);
+                    hw += kvRow("TX Carrier Errors",data.tx_carrier_errors);
+                    hw += kvRow("Collisions",       data.collisions);
+                }
+
+                hw += hwSection('Carrier');
+                hw += kvRow("Carrier Changes", data.carrier_changes);
+
+                document.getElementById('hwStatus').innerHTML = hw;
+            } catch (e) {
+                const msg = "Error: " + e.message;
+                document.getElementById('ifaceConfig').innerHTML = msg;
+                document.getElementById('hwStatus').innerHTML = msg;
+            }
         }
         
         async function loadConnections() {
@@ -3933,18 +4079,73 @@ pub mod inner {
             } catch(e) { document.getElementById('nicContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading NIC data.</div>'; }
         }
 
+        const dpSection = (title) =>
+            `<div style="margin:14px 0 4px;font-size:0.75rem;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;font-weight:600;border-top:1px solid #334155;padding-top:8px;">${title}</div>`;
+
+        // Compact section header for hardware panel cards
+        const hwSection = (title) => `<div class="hw-section">${title}</div>`;
+
         async function loadDataplane() {
             const iface = document.getElementById('currentIface').value; if (!iface) return;
             try {
                 const res = await fetch(`/api/dp?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                document.getElementById('dpStatus').innerHTML = 
-                    kvRow("Bypass Mode", data.bypass_mode, "warning") +
-                    kvRow("XDP eBPF Prog", data.xdp_prog_ids === "[]" ? "None" : data.xdp_prog_ids) +
-                    kvRow("AF_XDP Sockets", data.afxdp_sockets) +
-                    kvRow("DPDK Bound", data.dpdk_bound ? "Yes" : "No") +
-                    kvRow("PMD Driver", data.driver || '—');
-            } catch (e) { document.getElementById('dpStatus').innerHTML = "Error loading dataplane info."; }
+
+                let html = '';
+
+                // ── XDP ───────────────────────────────────────────────────
+                html += dpSection('XDP / eBPF');
+                const xdpIds = data.xdp_prog_ids && data.xdp_prog_ids !== 'None' ? data.xdp_prog_ids : '—';
+                html += kvRow('XDP Prog IDs', xdpIds);
+                html += kvRow('XDP Mode', data.xdp_mode || '—');
+                if (data.xdp_dispatchers) {
+                    html += kvRow('libxdp Dispatchers', data.xdp_dispatchers);
+                }
+                html += kvRow('AF_XDP Sockets', data.afxdp_sockets > 0 ? data.afxdp_sockets : '—');
+
+                // ── TC BPF ─────────────────────────────────────────────────
+                html += dpSection('TC BPF');
+                html += kvRow('clsact qdisc', data.tc_clsact ? 'Present' : 'Not present');
+                if (data.tc_clsact) {
+                    html += kvRow('BPF Directions', data.tc_bpf_directions || '—');
+                    html += kvRow('BPF Prog IDs', data.tc_bpf_prog_ids || '—');
+                }
+
+                // ── Userspace Dataplane ────────────────────────────────────
+                html += dpSection('Userspace Dataplane');
+                html += kvRow('Bypass Mode', data.bypass_mode);
+                html += kvRow('DPDK Bound', data.dpdk_bound ? 'Yes' : 'No');
+                if (data.driver) html += kvRow('PMD Driver', data.driver);
+
+                // ── Queues ─────────────────────────────────────────────────
+                html += dpSection('Queues');
+                html += kvRow('RX / TX / Combined', `${data.rx_queues} / ${data.tx_queues} / ${data.combined_queues}`);
+
+                // ── PCIe ───────────────────────────────────────────────────
+                html += dpSection('PCIe');
+                html += kvRow('PCI Address', data.pci_address || '—');
+                if (data.pci_vendor && data.pci_vendor !== '—')
+                    html += kvRow('Vendor / Device', `${data.pci_vendor} / ${data.pci_device}`);
+                if (data.pci_link && data.pci_link !== '—')
+                    html += kvRow('Link Speed', data.pci_link);
+                if (data.pci_max_link && data.pci_max_link !== '—')
+                    html += kvRow('Max Link Speed', data.pci_max_link);
+                html += kvRow('NUMA Node', data.numa_node || '—');
+
+                // ── SR-IOV ─────────────────────────────────────────────────
+                if (data.sriov && data.sriov !== '') {
+                    html += dpSection('SR-IOV');
+                    html += kvRow('SR-IOV Role', data.sriov);
+                }
+
+                // ── HW Offloads ────────────────────────────────────────────
+                if (data.hw_features_on) {
+                    html += dpSection('HW Offload Features');
+                    html += kvRow('Enabled', data.hw_features_on || '—');
+                }
+
+                document.getElementById('dpStatus').innerHTML = html;
+            } catch (e) { document.getElementById('dpStatus').innerHTML = 'Error loading dataplane info: ' + e.message; }
         }
 
         async function loadEthtool() {
@@ -3952,13 +4153,53 @@ pub mod inner {
             try {
                 const res = await fetch(`/api/ethtool?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                document.getElementById('driverStatus').innerHTML = 
-                    kvRow("Kernel Driver", data.driver || "Unknown") +
-                    kvRow("Link Speed", data.speed_mbps ? data.speed_mbps + " Mbps" : "Unknown") +
-                    kvRow("Duplex", data.duplex || "Unknown") +
-                    kvRow("RX Queues", data.rx_queues) +
-                    kvRow("TX Queues", data.tx_queues);
-            } catch (e) { document.getElementById('driverStatus').innerHTML = "Error loading driver info."; }
+
+                // ── Full ethtool report ─────────────────────────────────────
+                const col = (content) =>
+                    `<div style="min-width:0;">${content}</div>`;
+
+                let c1 = '', c2 = '', c3 = '';
+
+                // Column 1 — Driver & Link
+                c1 += hwSection('Driver');
+                c1 += kvRow('Kernel Driver', data.driver || '—');
+                if (data.firmware) c1 += kvRow('Firmware', data.firmware);
+                if (data.bus_info) c1 += kvRow('Bus Info', data.bus_info);
+                c1 += hwSection('Link');
+                c1 += kvRow('Operstate', data.operstate || '—');
+                c1 += kvRow('Speed', data.speed_mbps ? data.speed_mbps + ' Mbps' : '—');
+                c1 += kvRow('Duplex', data.duplex || '—');
+                c1 += kvRow('Auto-Negotiate', data.autoneg || '—');
+
+                // Column 2 — Queues, PCIe, Carrier
+                c2 += hwSection('Queues');
+                c2 += kvRow('RX / TX / Combined', `${data.rx_queues} / ${data.tx_queues} / ${data.combined_queues}`);
+                if (data.tx_queue_len > 0) c2 += kvRow('TX Queue Length', data.tx_queue_len);
+                if (data.pcie_speed) {
+                    c2 += hwSection('PCIe');
+                    c2 += kvRow('Speed / Width', data.pcie_speed + (data.pcie_width ? ` x${data.pcie_width}` : ''));
+                }
+                c2 += hwSection('Carrier');
+                c2 += kvRow('Changes', data.carrier_changes);
+                c2 += kvRow('Up / Down Events', `${data.carrier_up} / ${data.carrier_down}`);
+
+                // Column 3 — HW Offloads & IRQ Affinities
+                if (data.features_on && data.features_on.length > 0) {
+                    c3 += hwSection('HW Offload Features');
+                    c3 += `<div class="hw-feat">${data.features_on.join(' · ')}</div>`;
+                }
+                if (data.irq_affinities && data.irq_affinities.length > 0) {
+                    c3 += hwSection('IRQ Affinities');
+                    data.irq_affinities.forEach(q => {
+                        c3 += kvRow(q.q, `IRQ ${q.irq}  · CPUs: ${q.cpus || '—'}`);
+                    });
+                }
+
+                document.getElementById('ethtoolDetail').innerHTML =
+                    col(c1) + col(c2) + col(c3 || '<span style="color:#475569;font-style:italic;font-size:0.82rem;">No HW offload or IRQ data.</span>');
+            } catch (e) {
+                document.getElementById('ethtoolDetail').innerHTML = 'Error loading ethtool report: ' + e.message;
+            }
         }
 
         async function loadGeoIp() {
