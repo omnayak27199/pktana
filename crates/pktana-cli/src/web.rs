@@ -5,8 +5,8 @@ pub mod inner {
     use dashmap::DashMap;
     use pktana_core::{
         build_socket_process_map, geoip_lookup_str, get_ethtool_report, get_nic_dataplane,
-        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes, CaptureConfig,
-        LinuxCaptureEngine, ProcessInfo, SocketId,
+        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes,
+        list_xdp_dispatchers, CaptureConfig, LinuxCaptureEngine, ProcessInfo, SocketId,
     };
     use std::io::{Read, Write};
     use std::net::{IpAddr, TcpListener};
@@ -1175,26 +1175,53 @@ pub mod inner {
                 let iface = decode_url(&request[start..end]);
                 if let Ok(nic) = get_nic_info(&iface) {
                     let state = if nic.is_up() { "UP" } else { "DOWN" };
-                    let mut ips = String::from("[");
-                    for (i, ip) in nic.ip_addresses.iter().enumerate() {
-                        ips.push_str(&format!("\"{}\"", ip));
-                        if i < nic.ip_addresses.len() - 1 {
-                            ips.push(',');
-                        }
-                    }
-                    ips.push(']');
+                    let ips_json = nic
+                        .ip_addresses
+                        .iter()
+                        .map(|ip| format!("\"{}\"", escape_json(ip)))
+                        .collect::<Vec<_>>()
+                        .join(",");
                     let json = format!(
-                        r#"{{"name":"{}","state":"{}","mac":"{}","mtu":{},"rx_bytes":{},"tx_bytes":{},"rx_packets":{},"tx_packets":{},"speed":"{}","ips":{}}}"#,
-                        nic.name,
-                        state,
-                        nic.mac,
-                        nic.mtu,
-                        nic.rx_bytes,
-                        nic.tx_bytes,
-                        nic.rx_packets,
-                        nic.tx_packets,
-                        nic.speed_label(),
-                        ips
+                        concat!(
+                            r#"{{"name":"{name}","state":"{state}","mac":"{mac}","mtu":{mtu},"#,
+                            r#""speed":"{speed}","duplex":"{duplex}","driver":"{driver}","#,
+                            r#""loopback":{loopback},"promisc":{promisc},"#,
+                            r#""rx_bytes":{rxb},"rx_packets":{rxp},"rx_errors":{rxe},"rx_dropped":{rxd},"#,
+                            r#""tx_bytes":{txb},"tx_packets":{txp},"tx_errors":{txe},"tx_dropped":{txd},"#,
+                            r#""rx_crc_errors":{crc},"rx_missed_errors":{missed},"rx_frame_errors":{frame},"#,
+                            r#""rx_fifo_errors":{fifo},"tx_carrier_errors":{carrier_err},"collisions":{coll},"#,
+                            r#""carrier_changes":{cc},"master":"{master}","is_bridge":{bridge},"is_bond":{bond},"#,
+                            r#""ifalias":"{alias}","ips":[{ips}]}}"#
+                        ),
+                        name = escape_json(&nic.name),
+                        state = state,
+                        mac = escape_json(&nic.mac),
+                        mtu = nic.mtu,
+                        speed = escape_json(&nic.speed_label()),
+                        duplex = escape_json(nic.duplex.as_deref().unwrap_or("")),
+                        driver = escape_json(nic.driver.as_deref().unwrap_or("")),
+                        loopback = nic.is_loopback(),
+                        promisc = nic.is_promisc(),
+                        rxb = nic.rx_bytes,
+                        rxp = nic.rx_packets,
+                        rxe = nic.rx_errors,
+                        rxd = nic.rx_dropped,
+                        txb = nic.tx_bytes,
+                        txp = nic.tx_packets,
+                        txe = nic.tx_errors,
+                        txd = nic.tx_dropped,
+                        crc = nic.rx_crc_errors,
+                        missed = nic.rx_missed_errors,
+                        frame = nic.rx_frame_errors,
+                        fifo = nic.rx_fifo_errors,
+                        carrier_err = nic.tx_carrier_errors,
+                        coll = nic.collisions,
+                        cc = nic.carrier_changes,
+                        master = escape_json(nic.master.as_deref().unwrap_or("")),
+                        bridge = nic.is_bridge,
+                        bond = nic.is_bond,
+                        alias = escape_json(nic.ifalias.as_deref().unwrap_or("")),
+                        ips = ips_json,
                     );
                     let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
                     let _ = stream.write_all(response.as_bytes());
@@ -1206,20 +1233,100 @@ pub mod inner {
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let iface = decode_url(&request[start..end]);
                 if let Ok(dp) = get_nic_dataplane(&iface) {
-                    let bypass = format!("{:?}", dp.bypass_mode);
+                    let bypass = format!("{}", dp.bypass_mode);
                     let driver = dp.userspace_driver.as_deref().unwrap_or("");
-                    let xdp_ids = format!("{:?}", dp.xdp_prog_ids);
+                    let xdp_ids: Vec<String> =
+                        dp.xdp_prog_ids.iter().map(|i| i.to_string()).collect();
                     let xdp_mode = dp.xdp_mode.as_deref().unwrap_or("");
+                    let tc_dirs = dp.tc_bpf_directions.join(", ");
+                    let tc_ids = dp
+                        .tc_bpf_prog_ids
+                        .iter()
+                        .map(|i| i.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let pci_link = format!(
+                        "{} {}",
+                        dp.pci_link_speed.as_deref().unwrap_or("—"),
+                        dp.pci_link_width
+                            .map(|w| format!("x{w}"))
+                            .as_deref()
+                            .unwrap_or("")
+                    );
+                    let pci_max_link = format!(
+                        "{} {}",
+                        dp.pci_max_link_speed.as_deref().unwrap_or("—"),
+                        dp.pci_max_link_width
+                            .map(|w| format!("x{w}"))
+                            .as_deref()
+                            .unwrap_or("")
+                    );
+                    // XDP dispatcher info from /sys/fs/bpf/xdp/
+                    let dispatchers = list_xdp_dispatchers();
+                    let mine: Vec<String> = dispatchers
+                        .iter()
+                        .filter(|d| d.iface.as_deref() == Some(iface.as_str()))
+                        .map(|d| format!("dispatch-{}-{}", d.prog_id, d.link_id))
+                        .collect();
+                    let unmatched = dispatchers.iter().filter(|d| d.iface.is_none()).count();
+                    let xdp_dispatchers = if !mine.is_empty() {
+                        mine.join(", ")
+                    } else if unmatched > 0 {
+                        format!("{unmatched} pinned (run as root for iface correlation)")
+                    } else {
+                        String::new()
+                    };
+                    let sriov_role = if dp.is_virtual_function {
+                        format!("VF (physfn: {})", dp.physfn_pci.as_deref().unwrap_or("?"))
+                    } else if let Some(total) = dp.sriov_vfs_total {
+                        format!(
+                            "PF — {}/{} VFs enabled",
+                            dp.sriov_vfs_enabled.unwrap_or(0),
+                            total
+                        )
+                    } else {
+                        String::new()
+                    };
                     let json = format!(
-                        r#"{{"bypass_mode":"{}","afxdp_sockets":{},"dpdk_bound":{},"driver":"{}","xdp_prog_ids":"{}","xdp_mode":"{}","rx_queues":{},"tx_queues":{}}}"#,
-                        bypass,
-                        dp.afxdp_sockets,
-                        dp.dpdk_bound,
-                        driver,
-                        xdp_ids,
-                        xdp_mode,
-                        dp.rx_queues,
-                        dp.tx_queues
+                        concat!(
+                            r#"{{"bypass_mode":"{bypass}","xdp_prog_ids":"{xdp_ids}","xdp_mode":"{xdp_mode}","#,
+                            r#""xdp_dispatchers":"{xdp_dispatchers}","afxdp_sockets":{afxdp},"#,
+                            r#""dpdk_bound":{dpdk},"driver":"{driver}","#,
+                            r#""tc_clsact":{tc_clsact},"tc_bpf_directions":"{tc_dirs}","tc_bpf_prog_ids":"{tc_ids}","#,
+                            r#""rx_queues":{rx_q},"tx_queues":{tx_q},"combined_queues":{comb_q},"#,
+                            r#""pci_address":"{pci_addr}","pci_vendor":"{pci_vendor}","pci_device":"{pci_dev}","#,
+                            r#""pci_link":"{pci_link}","pci_max_link":"{pci_max_link}","numa_node":"{numa}","#,
+                            r#""sriov":"{sriov}","hw_features_on":"{hw_on}"}}"#
+                        ),
+                        bypass = bypass,
+                        xdp_ids = if xdp_ids.is_empty() {
+                            "None".into()
+                        } else {
+                            xdp_ids.join(", ")
+                        },
+                        xdp_mode = xdp_mode,
+                        xdp_dispatchers = xdp_dispatchers,
+                        afxdp = dp.afxdp_sockets,
+                        dpdk = dp.dpdk_bound,
+                        driver = driver,
+                        tc_clsact = dp.tc_clsact,
+                        tc_dirs = tc_dirs,
+                        tc_ids = tc_ids,
+                        rx_q = dp.rx_queues,
+                        tx_q = dp.tx_queues,
+                        comb_q = dp.combined_queues,
+                        pci_addr = dp.pci_address.as_deref().unwrap_or("—"),
+                        pci_vendor = dp.pci_vendor_id.as_deref().unwrap_or("—"),
+                        pci_dev = dp.pci_device_id.as_deref().unwrap_or("—"),
+                        pci_link = pci_link.trim(),
+                        pci_max_link = pci_max_link.trim(),
+                        numa = dp
+                            .numa_node
+                            .map(|n| n.to_string())
+                            .as_deref()
+                            .unwrap_or("—"),
+                        sriov = sriov_role,
+                        hw_on = dp.hw_features_on.join(", "),
                     );
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1234,12 +1341,71 @@ pub mod inner {
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let iface = decode_url(&request[start..end]);
                 if let Ok(et) = get_ethtool_report(&iface) {
-                    let driver = et.driver.as_deref().unwrap_or("");
-                    let speed = et.speed_mbps.unwrap_or(0);
-                    let duplex = et.duplex.as_deref().unwrap_or("");
+                    let driver = escape_json(et.driver.as_deref().unwrap_or(""));
+                    let fw_ver = escape_json(et.firmware_ver.as_deref().unwrap_or(""));
+                    let bus_info = escape_json(et.bus_info.as_deref().unwrap_or(""));
+                    let duplex = escape_json(et.duplex.as_deref().unwrap_or(""));
+                    let autoneg = escape_json(et.autoneg.as_deref().unwrap_or(""));
+                    let pcie_speed = escape_json(et.pcie_speed.as_deref().unwrap_or(""));
+                    let pcie_width = et.pcie_width.unwrap_or(0);
+                    let carrier_changes = et.carrier_changes.unwrap_or(0);
+                    let carrier_up = et.carrier_up.unwrap_or(0);
+                    let carrier_down = et.carrier_down.unwrap_or(0);
+                    // Collect HW offload features that are "on"
+                    let features_on: Vec<String> = et
+                        .features
+                        .iter()
+                        .filter(|(_, v)| v.as_str() == "on")
+                        .map(|(k, _)| escape_json(k))
+                        .take(20)
+                        .collect();
+                    let features_json = features_on
+                        .iter()
+                        .map(|f| format!("\"{}\"", f))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    // IRQ affinity: up to first 8 queues
+                    let irq_json = et
+                        .queue_irq_affinities
+                        .iter()
+                        .take(8)
+                        .map(|q| {
+                            format!(
+                                r#"{{"q":"{}","irq":{},"cpus":"{}"}}"#,
+                                escape_json(&q.queue_name),
+                                q.irq,
+                                escape_json(&q.cpu_list)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
                     let json = format!(
-                        r#"{{"driver":"{}","speed_mbps":{},"duplex":"{}","operstate":"{}","rx_queues":{},"tx_queues":{}}}"#,
-                        driver, speed, duplex, et.operstate, et.rx_queues, et.tx_queues
+                        concat!(
+                            r#"{{"driver":"{driver}","firmware":"{fw}","bus_info":"{bus}","#,
+                            r#""speed_mbps":{speed},"duplex":"{duplex}","autoneg":"{autoneg}","operstate":"{opstate}","#,
+                            r#""rx_queues":{rx_q},"tx_queues":{tx_q},"combined_queues":{comb_q},"tx_queue_len":{tql},"#,
+                            r#""pcie_speed":"{pcie_speed}","pcie_width":{pcie_width},"#,
+                            r#""carrier_changes":{cc},"carrier_up":{cu},"carrier_down":{cd},"#,
+                            r#""features_on":[{feats}],"irq_affinities":[{irqs}]}}"#
+                        ),
+                        driver = driver,
+                        fw = fw_ver,
+                        bus = bus_info,
+                        speed = et.speed_mbps.unwrap_or(0),
+                        duplex = duplex,
+                        autoneg = autoneg,
+                        opstate = et.operstate,
+                        rx_q = et.rx_queues,
+                        tx_q = et.tx_queues,
+                        comb_q = et.combined_queues,
+                        tql = et.tx_queue_len.unwrap_or(0),
+                        pcie_speed = pcie_speed,
+                        pcie_width = pcie_width,
+                        cc = carrier_changes,
+                        cu = carrier_up,
+                        cd = carrier_down,
+                        feats = features_json,
+                        irqs = irq_json,
                     );
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1808,7 +1974,19 @@ pub mod inner {
         .kv-item:hover { padding-left: 8px; border-bottom-style: solid; border-color: var(--primary-light); }
         .kv-item strong { font-weight: 700; color: var(--text-main); }
         .kv-item span { font-weight: 600; color: var(--text-muted); }
-        
+
+        /* ── Hardware panel compact overrides ── */
+        #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
+        #hardware .card { padding:12px 14px; overflow:visible; }
+        #hardware .card:hover { transform:none; }
+        #hardware .card-title { font-size:12px; letter-spacing:.06em; text-transform:uppercase; padding-bottom:7px; margin-bottom:8px; }
+        #hardware .kv-list { gap:1px; font-size:12px; }
+        #hardware .kv-item { padding:3px 0; }
+        #hardware .kv-item:hover { padding-left:4px; }
+        #hardware .hw-section { margin:8px 0 2px; font-size:0.68rem; letter-spacing:.1em; text-transform:uppercase; color:#64748b; font-weight:700; border-top:1px solid #1e293b; padding-top:6px; }
+        #hardware .hw-section:first-child { border-top:none; margin-top:0; padding-top:0; }
+        #hardware .hw-feat { font-size:0.75rem; line-height:1.8; color:#94a3b8; word-break:break-word; padding:2px 0; }
+
         .settings-table { width: 100%; border-collapse: collapse; margin-top: 12px; background: var(--surface); font-size: 13px; border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
         .settings-table th, .settings-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
         .settings-table th { background: linear-gradient(180deg, #f8fafc, #f1f5f9); font-weight: 700; color: var(--text-main); font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid var(--primary); }
@@ -2673,10 +2851,16 @@ pub mod inner {
 
         <!-- Hardware Panel -->
         <div id="hardware" class="panel">
-            <div class="grid-3">
-                <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
-                <div class="card"><div class="card-title">Driver & Queues (Ethtool)</div><div class="kv-list" id="driverStatus">Select an interface above.</div></div>
-                <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
+            <div class="hw-scroll">
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+                    <div class="card"><div class="card-title">Interface Config</div><div class="kv-list" id="ifaceConfig">Select an interface above.</div></div>
+                    <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
+                    <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
+                </div>
+                <div class="card">
+                    <div class="card-title">Ethtool Report</div>
+                    <div id="ethtoolDetail" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0 20px;">Select an interface above.</div>
+                </div>
             </div>
         </div>
 
@@ -3868,16 +4052,62 @@ pub mod inner {
             try {
                 const res = await fetch(`/api/nic_detail?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                let badge = data.state === "UP" ? "success" : "danger";
-                document.getElementById('hwStatus').innerHTML = 
-                    kvRow("State", data.state, badge) +
-                    kvRow("MAC Address", data.mac) +
-                    kvRow("MTU", data.mtu) +
-                    kvRow("Speed", data.speed) +
-                    kvRow("RX", `${formatBytes(data.rx_bytes)} (${data.rx_packets} pkts)`) +
-                    kvRow("TX", `${formatBytes(data.tx_bytes)} (${data.tx_packets} pkts)`) +
-                    kvRow("IPs", (data.ips || []).join(', ') || "None");
-            } catch (e) { document.getElementById('hwStatus').innerHTML = "Error loading hardware info."; }
+                const badge = data.state === "UP" ? "success" : "danger";
+
+                // ── Card 1: Interface Config (identity + IPs + roles) ───────
+                let cfg = '';
+                cfg += hwSection('Identity');
+                cfg += kvRow("State", data.state, badge);
+                cfg += kvRow("MAC Address", data.mac);
+                cfg += kvRow("MTU", data.mtu);
+                cfg += kvRow("Speed", data.speed || "—");
+                cfg += kvRow("Duplex", data.duplex || "—");
+                cfg += kvRow("Driver", data.driver || "—");
+                if (data.loopback) cfg += kvRow("Type", "Loopback");
+                if (data.promisc)  cfg += kvRow("Promiscuous", "Yes");
+                if (data.master)   cfg += kvRow("Master", data.master);
+                if (data.is_bridge) cfg += kvRow("Role", "Bridge master");
+                if (data.is_bond)   cfg += kvRow("Role", "Bond member");
+                if (data.ifalias)   cfg += kvRow("Alias", data.ifalias);
+
+                cfg += hwSection('IP Addresses');
+                const ips = data.ips || [];
+                cfg += ips.length > 0
+                    ? ips.map(ip => kvRow("addr", ip)).join('')
+                    : kvRow("addr", "—");
+
+                document.getElementById('ifaceConfig').innerHTML = cfg;
+
+                // ── Card 2: Hardware Status (traffic + error counters) ──────
+                let hw = '';
+                hw += hwSection('Traffic');
+                hw += kvRow("RX", `${formatBytes(data.rx_bytes)} (${data.rx_packets} pkts)`);
+                hw += kvRow("TX", `${formatBytes(data.tx_bytes)} (${data.tx_packets} pkts)`);
+                hw += kvRow("RX Errors / Dropped", `${data.rx_errors} / ${data.rx_dropped}`);
+                hw += kvRow("TX Errors / Dropped", `${data.tx_errors} / ${data.tx_dropped}`);
+
+                const hasErrors = (data.rx_crc_errors + data.rx_missed_errors +
+                                   data.rx_frame_errors + data.rx_fifo_errors +
+                                   data.tx_carrier_errors + data.collisions) > 0;
+                if (hasErrors) {
+                    hw += hwSection('Error Counters');
+                    hw += kvRow("CRC Errors",      data.rx_crc_errors);
+                    hw += kvRow("Missed",           data.rx_missed_errors);
+                    hw += kvRow("Frame Errors",     data.rx_frame_errors);
+                    hw += kvRow("FIFO Errors",      data.rx_fifo_errors);
+                    hw += kvRow("TX Carrier Errors",data.tx_carrier_errors);
+                    hw += kvRow("Collisions",       data.collisions);
+                }
+
+                hw += hwSection('Carrier');
+                hw += kvRow("Carrier Changes", data.carrier_changes);
+
+                document.getElementById('hwStatus').innerHTML = hw;
+            } catch (e) {
+                const msg = "Error: " + e.message;
+                document.getElementById('ifaceConfig').innerHTML = msg;
+                document.getElementById('hwStatus').innerHTML = msg;
+            }
         }
         
         async function loadConnections() {
@@ -3933,18 +4163,73 @@ pub mod inner {
             } catch(e) { document.getElementById('nicContent').innerHTML = '<div style="padding:20px;color:var(--danger);">Error loading NIC data.</div>'; }
         }
 
+        const dpSection = (title) =>
+            `<div style="margin:14px 0 4px;font-size:0.75rem;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;font-weight:600;border-top:1px solid #334155;padding-top:8px;">${title}</div>`;
+
+        // Compact section header for hardware panel cards
+        const hwSection = (title) => `<div class="hw-section">${title}</div>`;
+
         async function loadDataplane() {
             const iface = document.getElementById('currentIface').value; if (!iface) return;
             try {
                 const res = await fetch(`/api/dp?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                document.getElementById('dpStatus').innerHTML = 
-                    kvRow("Bypass Mode", data.bypass_mode, "warning") +
-                    kvRow("XDP eBPF Prog", data.xdp_prog_ids === "[]" ? "None" : data.xdp_prog_ids) +
-                    kvRow("AF_XDP Sockets", data.afxdp_sockets) +
-                    kvRow("DPDK Bound", data.dpdk_bound ? "Yes" : "No") +
-                    kvRow("PMD Driver", data.driver || '—');
-            } catch (e) { document.getElementById('dpStatus').innerHTML = "Error loading dataplane info."; }
+
+                let html = '';
+
+                // ── XDP ───────────────────────────────────────────────────
+                html += dpSection('XDP / eBPF');
+                const xdpIds = data.xdp_prog_ids && data.xdp_prog_ids !== 'None' ? data.xdp_prog_ids : '—';
+                html += kvRow('XDP Prog IDs', xdpIds);
+                html += kvRow('XDP Mode', data.xdp_mode || '—');
+                if (data.xdp_dispatchers) {
+                    html += kvRow('libxdp Dispatchers', data.xdp_dispatchers);
+                }
+                html += kvRow('AF_XDP Sockets', data.afxdp_sockets > 0 ? data.afxdp_sockets : '—');
+
+                // ── TC BPF ─────────────────────────────────────────────────
+                html += dpSection('TC BPF');
+                html += kvRow('clsact qdisc', data.tc_clsact ? 'Present' : 'Not present');
+                if (data.tc_clsact) {
+                    html += kvRow('BPF Directions', data.tc_bpf_directions || '—');
+                    html += kvRow('BPF Prog IDs', data.tc_bpf_prog_ids || '—');
+                }
+
+                // ── Userspace Dataplane ────────────────────────────────────
+                html += dpSection('Userspace Dataplane');
+                html += kvRow('Bypass Mode', data.bypass_mode);
+                html += kvRow('DPDK Bound', data.dpdk_bound ? 'Yes' : 'No');
+                if (data.driver) html += kvRow('PMD Driver', data.driver);
+
+                // ── Queues ─────────────────────────────────────────────────
+                html += dpSection('Queues');
+                html += kvRow('RX / TX / Combined', `${data.rx_queues} / ${data.tx_queues} / ${data.combined_queues}`);
+
+                // ── PCIe ───────────────────────────────────────────────────
+                html += dpSection('PCIe');
+                html += kvRow('PCI Address', data.pci_address || '—');
+                if (data.pci_vendor && data.pci_vendor !== '—')
+                    html += kvRow('Vendor / Device', `${data.pci_vendor} / ${data.pci_device}`);
+                if (data.pci_link && data.pci_link !== '—')
+                    html += kvRow('Link Speed', data.pci_link);
+                if (data.pci_max_link && data.pci_max_link !== '—')
+                    html += kvRow('Max Link Speed', data.pci_max_link);
+                html += kvRow('NUMA Node', data.numa_node || '—');
+
+                // ── SR-IOV ─────────────────────────────────────────────────
+                if (data.sriov && data.sriov !== '') {
+                    html += dpSection('SR-IOV');
+                    html += kvRow('SR-IOV Role', data.sriov);
+                }
+
+                // ── HW Offloads ────────────────────────────────────────────
+                if (data.hw_features_on) {
+                    html += dpSection('HW Offload Features');
+                    html += kvRow('Enabled', data.hw_features_on || '—');
+                }
+
+                document.getElementById('dpStatus').innerHTML = html;
+            } catch (e) { document.getElementById('dpStatus').innerHTML = 'Error loading dataplane info: ' + e.message; }
         }
 
         async function loadEthtool() {
@@ -3952,13 +4237,53 @@ pub mod inner {
             try {
                 const res = await fetch(`/api/ethtool?iface=${encodeURIComponent(iface)}`);
                 const data = await res.json();
-                document.getElementById('driverStatus').innerHTML = 
-                    kvRow("Kernel Driver", data.driver || "Unknown") +
-                    kvRow("Link Speed", data.speed_mbps ? data.speed_mbps + " Mbps" : "Unknown") +
-                    kvRow("Duplex", data.duplex || "Unknown") +
-                    kvRow("RX Queues", data.rx_queues) +
-                    kvRow("TX Queues", data.tx_queues);
-            } catch (e) { document.getElementById('driverStatus').innerHTML = "Error loading driver info."; }
+
+                // ── Full ethtool report ─────────────────────────────────────
+                const col = (content) =>
+                    `<div style="min-width:0;">${content}</div>`;
+
+                let c1 = '', c2 = '', c3 = '';
+
+                // Column 1 — Driver & Link
+                c1 += hwSection('Driver');
+                c1 += kvRow('Kernel Driver', data.driver || '—');
+                if (data.firmware) c1 += kvRow('Firmware', data.firmware);
+                if (data.bus_info) c1 += kvRow('Bus Info', data.bus_info);
+                c1 += hwSection('Link');
+                c1 += kvRow('Operstate', data.operstate || '—');
+                c1 += kvRow('Speed', data.speed_mbps ? data.speed_mbps + ' Mbps' : '—');
+                c1 += kvRow('Duplex', data.duplex || '—');
+                c1 += kvRow('Auto-Negotiate', data.autoneg || '—');
+
+                // Column 2 — Queues, PCIe, Carrier
+                c2 += hwSection('Queues');
+                c2 += kvRow('RX / TX / Combined', `${data.rx_queues} / ${data.tx_queues} / ${data.combined_queues}`);
+                if (data.tx_queue_len > 0) c2 += kvRow('TX Queue Length', data.tx_queue_len);
+                if (data.pcie_speed) {
+                    c2 += hwSection('PCIe');
+                    c2 += kvRow('Speed / Width', data.pcie_speed + (data.pcie_width ? ` x${data.pcie_width}` : ''));
+                }
+                c2 += hwSection('Carrier');
+                c2 += kvRow('Changes', data.carrier_changes);
+                c2 += kvRow('Up / Down Events', `${data.carrier_up} / ${data.carrier_down}`);
+
+                // Column 3 — HW Offloads & IRQ Affinities
+                if (data.features_on && data.features_on.length > 0) {
+                    c3 += hwSection('HW Offload Features');
+                    c3 += `<div class="hw-feat">${data.features_on.join(' · ')}</div>`;
+                }
+                if (data.irq_affinities && data.irq_affinities.length > 0) {
+                    c3 += hwSection('IRQ Affinities');
+                    data.irq_affinities.forEach(q => {
+                        c3 += kvRow(q.q, `IRQ ${q.irq}  · CPUs: ${q.cpus || '—'}`);
+                    });
+                }
+
+                document.getElementById('ethtoolDetail').innerHTML =
+                    col(c1) + col(c2) + col(c3 || '<span style="color:#475569;font-style:italic;font-size:0.82rem;">No HW offload or IRQ data.</span>');
+            } catch (e) {
+                document.getElementById('ethtoolDetail').innerHTML = 'Error loading ethtool report: ' + e.message;
+            }
         }
 
         async function loadGeoIp() {
