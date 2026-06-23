@@ -6,6 +6,8 @@
 use std::fs;
 use std::io;
 
+use crate::dp::detect_tc_bpf;
+
 // ─── basic NIC info ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,25 @@ pub struct NicInfo {
     pub tx_errors: u64,
     pub tx_dropped: u64,
     pub flags: u32,
+    // ── Extended error counters ───────────────────────────────────────────────
+    pub rx_crc_errors: u64,
+    pub rx_missed_errors: u64,
+    pub rx_frame_errors: u64,
+    pub rx_fifo_errors: u64,
+    pub tx_carrier_errors: u64,
+    pub collisions: u64,
+    // ── Link stability ────────────────────────────────────────────────────────
+    /// Total number of carrier state transitions (up+down combined).
+    pub carrier_changes: u64,
+    // ── Layer-2 role ──────────────────────────────────────────────────────────
+    /// Name of the master interface (bridge or bond) this port belongs to.
+    pub master: Option<String>,
+    /// True when this interface IS a bridge (has /sys/class/net/<ifc>/bridge/).
+    pub is_bridge: bool,
+    /// True when this interface IS a bond master.
+    pub is_bond: bool,
+    /// Interface alias set via ifalias (optional human label).
+    pub ifalias: Option<String>,
 }
 
 impl NicInfo {
@@ -123,6 +144,24 @@ pub struct NicDataplane {
     pub pci_device_id: Option<String>,
     pub numa_node: Option<i32>,
 
+    // ── TC / BPF ─────────────────────────────────────────────────────────────
+    /// True when a clsact qdisc is present (prerequisite for TC BPF ingress/egress hooks).
+    pub tc_clsact: bool,
+    /// Directions with active TC BPF filters: "ingress" and/or "egress".
+    pub tc_bpf_directions: Vec<String>,
+    /// BPF program IDs attached via TC (parsed from `tc filter show` output).
+    pub tc_bpf_prog_ids: Vec<u32>,
+
+    // ── PCIe link ─────────────────────────────────────────────────────────────
+    /// Current PCIe link speed, e.g. "8.0 GT/s PCIe".
+    pub pci_link_speed: Option<String>,
+    /// Current PCIe link width (number of lanes in use).
+    pub pci_link_width: Option<u8>,
+    /// Maximum PCIe link speed the slot supports.
+    pub pci_max_link_speed: Option<String>,
+    /// Maximum PCIe link width the slot supports.
+    pub pci_max_link_width: Option<u8>,
+
     // ── Summary ───────────────────────────────────────────────────────────────
     pub bypass_mode: BypassMode,
 }
@@ -214,6 +253,22 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
     // ── Hardware offloads ─────────────────────────────────────────────────────
     let hw_features_on = read_hw_features(name);
 
+    // ── TC BPF ───────────────────────────────────────────────────────────────
+    let tc = detect_tc_bpf(name);
+
+    // ── PCIe link speed ───────────────────────────────────────────────────────
+    let read_pci_str = |file: &str| -> Option<String> {
+        pci_base
+            .as_ref()
+            .and_then(|b| fs::read_to_string(format!("{b}/{file}")).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let pci_link_speed = read_pci_str("current_link_speed");
+    let pci_link_width = read_pci_str("current_link_width").and_then(|s| s.parse::<u8>().ok());
+    let pci_max_link_speed = read_pci_str("max_link_speed");
+    let pci_max_link_width = read_pci_str("max_link_width").and_then(|s| s.parse::<u8>().ok());
+
     // ── Bypass summary ────────────────────────────────────────────────────────
     let bypass_mode = {
         let has_xdp = !xdp_prog_ids.is_empty();
@@ -245,6 +300,13 @@ pub fn get_nic_dataplane(name: &str) -> io::Result<NicDataplane> {
         pci_vendor_id,
         pci_device_id,
         numa_node,
+        tc_clsact: tc.clsact,
+        tc_bpf_directions: tc.directions,
+        tc_bpf_prog_ids: tc.prog_ids,
+        pci_link_speed,
+        pci_link_width,
+        pci_max_link_speed,
+        pci_max_link_width,
         bypass_mode,
     })
 }
@@ -278,6 +340,8 @@ fn xdp_from_ip_link(iface: &str) -> (Vec<u32>, Option<String>) {
             ("xdp/id:", "generic"),
             ("xdpdrv/id:", "native"),
             ("xdpoffload/id:", "offload"),
+            // kernel ≥ 5.7 BPF-link-based attachment (used by libxdp multi-prog dispatcher)
+            ("xdplink/id:", "xdplink"),
         ] {
             if let Some(id_str) = token.strip_prefix(prefix) {
                 if let Ok(id) = id_str.parse::<u32>() {
@@ -424,6 +488,34 @@ pub fn get_nic_info(name: &str) -> io::Result<NicInfo> {
 
     let ip_addresses = read_ip_addresses(name);
 
+    // ── Extended error counters ───────────────────────────────────────────────
+    let stat = |file: &str| -> u64 {
+        fs::read_to_string(format!("{base}/statistics/{file}"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    let rx_crc_errors = stat("rx_crc_errors");
+    let rx_missed_errors = stat("rx_missed_errors");
+    let rx_frame_errors = stat("rx_frame_errors");
+    let rx_fifo_errors = stat("rx_fifo_errors");
+    let tx_carrier_errors = stat("tx_carrier_errors");
+    let collisions = stat("collisions");
+
+    // ── Carrier changes ───────────────────────────────────────────────────────
+    let carrier_changes = read_sysfs(&base, "carrier_changes")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // ── Layer-2 role ──────────────────────────────────────────────────────────
+    let master = fs::read_link(format!("{base}/master"))
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()));
+    let is_bridge = std::path::Path::new(&format!("{base}/bridge")).exists();
+    let is_bond = std::path::Path::new(&format!("{base}/bonding")).exists();
+    let ifalias = read_sysfs(&base, "ifalias").ok().filter(|s| !s.is_empty());
+
     Ok(NicInfo {
         name: name.to_string(),
         state,
@@ -442,6 +534,17 @@ pub fn get_nic_info(name: &str) -> io::Result<NicInfo> {
         tx_errors,
         tx_dropped,
         flags,
+        rx_crc_errors,
+        rx_missed_errors,
+        rx_frame_errors,
+        rx_fifo_errors,
+        tx_carrier_errors,
+        collisions,
+        carrier_changes,
+        master,
+        is_bridge,
+        is_bond,
+        ifalias,
     })
 }
 
@@ -502,24 +605,25 @@ fn read_stats(name: &str) -> (u64, u64, u64, u64, u64, u64, u64, u64) {
 /// Easiest reliable source: parse `ip addr` output is not allowed —
 /// instead read /proc/net/if_inet6 for IPv6 and /proc/net/fib_trie for IPv4.
 fn read_ip_addresses(name: &str) -> Vec<String> {
-    let mut addrs = Vec::new();
+    // Primary: `ip -o addr show dev <iface>` — reliable on all modern Linux.
+    // Output lines: "2: eth0    inet 192.168.1.10/24 brd ... scope global eth0\ ..."
+    if let Some(addrs) = read_ip_via_iproute(name) {
+        if !addrs.is_empty() {
+            return addrs;
+        }
+    }
 
-    // IPv4: /proc/net/fib_trie is complex; use /proc/net/if_inet6 sibling approach.
-    // Reliable IPv4 source: /sys/class/net/<ifc>/... doesn't directly give IP.
-    // We read /proc/net/fib_trie: LOCAL entries associated with the interface.
-    // Simpler: parse /proc/net/arp for the interface's own IP is wrong (that's neighbour cache).
-    // Best simple approach: read the interface index, then check /proc/net/fib_trie.
+    // Fallback: parse /proc/net files directly.
+    let mut addrs = Vec::new();
     if let Ok(ipv4_addrs) = read_ipv4_addrs(name) {
         addrs.extend(ipv4_addrs);
     }
-
-    // IPv6: /proc/net/if_inet6
-    //   fe80000000000000025056fffec00001 02 40 20 80    eth0
+    // IPv6: /proc/net/if_inet6  (columns: addr32hex ifidx prefix_len scope flags name)
     if let Ok(content) = fs::read_to_string("/proc/net/if_inet6") {
         for line in content.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 6 && parts[5] == name {
-                let raw = parts[0]; // 32 hex chars
+                let raw = parts[0];
                 if raw.len() == 32 {
                     let groups: Vec<String> = (0..8)
                         .map(|i| raw[i * 4..(i + 1) * 4].to_string())
@@ -530,8 +634,28 @@ fn read_ip_addresses(name: &str) -> Vec<String> {
             }
         }
     }
-
     addrs
+}
+
+/// Parse `ip -o addr show dev <name>` output into a list of CIDR addresses.
+fn read_ip_via_iproute(name: &str) -> Option<Vec<String>> {
+    let out = std::process::Command::new("ip")
+        .args(["-o", "addr", "show", "dev", name])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut addrs = Vec::new();
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Find "inet" or "inet6" token, address is the next token.
+        for (i, &tok) in parts.iter().enumerate() {
+            if (tok == "inet" || tok == "inet6") && i + 1 < parts.len() {
+                addrs.push(parts[i + 1].to_string());
+                break;
+            }
+        }
+    }
+    Some(addrs)
 }
 
 /// Read IPv4 addresses for an interface from /proc/net/fib_trie.

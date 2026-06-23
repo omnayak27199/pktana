@@ -770,6 +770,131 @@
       .hero-cta { flex-direction: column; }
       .hero-cta .btn { width: 100%; }
     }
+
+    /* ── Net Probe ───────────────────────────────────────────── */
+    .np-probe-btn { position: relative; }
+    .np-probe-btn::after {
+      content: ''; position: absolute; inset: -3px;
+      border-radius: inherit;
+      border: 1px solid rgba(234,88,12,0.45);
+      animation: np-ring 2.4s ease-out infinite;
+      pointer-events: none;
+    }
+    @keyframes np-ring { 0%{transform:scale(1);opacity:.6} 100%{transform:scale(1.3);opacity:0} }
+    @media (max-width: 860px) { .np-btn-label { display: none; } }
+
+    #np-overlay {
+      display: none; position: fixed; inset: 0; z-index: 9998;
+      background: rgba(3,7,11,0.84);
+      backdrop-filter: blur(14px) saturate(120%);
+      align-items: center; justify-content: center; padding: 16px;
+    }
+    #np-overlay.show { display: flex; }
+    .np-win {
+      background: #0a0f14;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      box-shadow: 0 32px 80px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.06);
+      width: 100%; max-width: 660px; max-height: 92vh;
+      display: flex; flex-direction: column; overflow: hidden;
+      animation: np-zoom .32s cubic-bezier(.34,1.56,.64,1);
+    }
+    @keyframes np-zoom { from{opacity:0;transform:scale(.88) translateY(14px)} to{opacity:1;transform:none} }
+    .np-titlebar {
+      display: flex; align-items: center; gap: 7px;
+      padding: 11px 16px;
+      background: rgba(255,255,255,0.025);
+      border-bottom: 1px solid rgba(255,255,255,0.07); flex-shrink: 0;
+    }
+    .np-dot { width: 12px; height: 12px; border-radius: 50%; }
+    .np-dot.r{background:#ff5f57}.np-dot.y{background:#febc2e}.np-dot.g{background:#28c840}
+    .np-titlebar-name {
+      flex: 1; text-align: center; margin-right: 31px;
+      font-family: "JetBrains Mono", monospace; font-size: .7rem; color: rgba(255,255,255,.28);
+    }
+    .np-scroll { flex: 1; overflow-y: auto; padding: 20px 22px 16px; }
+    .np-scroll::-webkit-scrollbar{width:4px}
+    .np-scroll::-webkit-scrollbar-track{background:transparent}
+    .np-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px}
+    .np-header { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+    .np-sonar {
+      width: 52px; height: 52px; flex-shrink: 0;
+      display: grid; place-items: center; position: relative;
+    }
+    .np-sonar-core {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--primary); z-index: 2; position: relative;
+      animation: sc-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes sc-pulse{0%,100%{transform:scale(1);box-shadow:0 0 0 3px rgba(234,88,12,.2)}50%{transform:scale(1.12);box-shadow:0 0 0 6px rgba(234,88,12,.1)}}
+    .np-ring {
+      position: absolute; border-radius: 50%;
+      border: 1px solid rgba(234,88,12,.5);
+      width: 10px; height: 10px;
+      top: 50%; left: 50%; margin: -5px 0 0 -5px;
+      animation: ring-out 2s ease-out infinite;
+    }
+    .np-ring:nth-child(2){animation-delay:0s}
+    .np-ring:nth-child(3){animation-delay:.6s}
+    .np-ring:nth-child(4){animation-delay:1.2s}
+    @keyframes ring-out{0%{transform:scale(1);opacity:.7}100%{transform:scale(5.5);opacity:0}}
+    .np-head-label {
+      font-family: "JetBrains Mono", monospace; font-size: .68rem; font-weight: 700;
+      color: var(--primary-l); letter-spacing: .12em; text-transform: uppercase; margin-bottom: 4px;
+    }
+    .np-head-status { font-family: "JetBrains Mono", monospace; font-size: .75rem; color: rgba(255,255,255,.38); }
+    .np-pgbar-wrap { height: 3px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; margin-bottom: 5px; }
+    .np-pgbar {
+      height: 100%; width: 0%; border-radius: 2px;
+      background: linear-gradient(90deg,var(--primary),var(--primary-l));
+      box-shadow: 0 0 6px rgba(234,88,12,.7);
+      transition: width .35s ease;
+    }
+    .np-pct { font-family: "JetBrains Mono", monospace; font-size: .64rem; color: rgba(255,255,255,.28); text-align: right; margin-bottom: 14px; }
+    .np-lines { font-family: "JetBrains Mono", monospace; font-size: .77rem; line-height: 2; }
+    .np-row { display: grid; grid-template-columns: 58px 1fr auto; gap: 0 10px; align-items: baseline; animation: row-in .18s ease; }
+    @keyframes row-in{from{opacity:0;transform:translateX(-5px)}to{opacity:1;transform:none}}
+    .np-row-lbl { color: rgba(234,88,12,.85); font-weight: 700; font-size: .68rem; letter-spacing: .04em; white-space: nowrap; }
+    .np-row-val { color: #cbd5e1; min-width: 0; }
+    .np-row-val.org { color: var(--primary-l); }
+    .np-row-val.dim { color: rgba(255,255,255,.42); }
+    .np-row-val.pending { color: rgba(255,255,255,.28); }
+    .np-row-val.grn { color: #4ade80; }
+    .np-cursor { display: inline-block; width: 7px; height: .88em; background: var(--primary-l); vertical-align: middle; animation: cblk 1s step-end infinite; }
+    @keyframes cblk{0%,100%{opacity:1}50%{opacity:0}}
+    .np-alert-badge { font-size: .55rem; font-weight: 700; letter-spacing: .05em; color: #f87171; background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.25); border-radius: 3px; padding: 1px 6px; white-space: nowrap; animation: badge-pop .25s cubic-bezier(.34,1.56,.64,1), badge-blink 1.5s ease-in-out 2; }
+    @keyframes badge-pop{from{transform:scale(.5);opacity:0}to{transform:scale(1);opacity:1}}
+    @keyframes badge-blink{0%,100%{opacity:1}50%{opacity:.2}}
+    .np-ok-badge { font-size: .55rem; font-weight: 700; letter-spacing: .05em; color: #4ade80; background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.2); border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
+    .np-mute-btn { background: none; border: none; cursor: pointer; font-size: .88rem; padding: 0 3px; opacity: .4; transition: opacity .15s; line-height: 1; }
+    .np-mute-btn:hover { opacity: .95; }
+    .np-card {
+      margin-top: 14px; border: 1px solid rgba(234,88,12,.25);
+      border-radius: 10px; background: rgba(234,88,12,.06);
+      padding: 14px 16px; display: none; animation: row-in .3s ease;
+    }
+    .np-card.show { display: block; }
+    .np-card-eyebrow { font-family: "JetBrains Mono", monospace; font-size: .65rem; font-weight: 700; color: rgba(234,88,12,.6); letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; }
+    .np-card-name { font-size: 1.12rem; font-weight: 900; color: #fff; letter-spacing: -.03em; margin-bottom: 3px; }
+    .np-card-desc { font-family: "JetBrains Mono", monospace; font-size: .74rem; color: rgba(255,255,255,.42); }
+    .np-footer {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+      padding: 11px 22px; border-top: 1px solid rgba(255,255,255,.06); flex-shrink: 0;
+    }
+    .np-footer-note { font-size: .73rem; color: rgba(255,255,255,.28); font-family: "JetBrains Mono", monospace; }
+    .np-footer-note strong { color: rgba(234,88,12,.75); }
+    .np-close-btn {
+      background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.1);
+      color: rgba(255,255,255,.5); border-radius: 8px; padding: 6px 14px;
+      font-size: .78rem; cursor: pointer; font-family: "JetBrains Mono", monospace; transition: all .15s;
+    }
+    .np-close-btn:hover{background:rgba(255,255,255,.13);color:#fff;}
+    @media (max-width:540px) {
+      .np-win{border-radius:14px;}
+      .np-scroll{padding:14px 13px 10px;}
+      .np-row{grid-template-columns:52px 1fr auto;font-size:.7rem;}
+      .np-sonar{width:42px;height:42px;}
+    }
   </style>
 </head>
 
@@ -803,11 +928,17 @@
       </nav>
       <div class="nav-right">
         <span class="nav-version">v0.5.0</span>
+        <button onclick="npOpen()" class="btn btn-ghost np-probe-btn" style="padding:8px 14px;font-size:0.85rem;" title="Scan your network identity">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
+          </svg>
+          <span class="np-btn-label">Net Probe</span>
+        </button>
         <a href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer" class="btn btn-ghost" style="padding:8px 16px;font-size:0.85rem;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
           GitHub
         </a>
-        <a href="#download" class="btn btn-primary" style="padding:8px 18px;font-size:0.85rem;">Download</a>
+        <!-- <a href="#download" class="btn btn-primary" style="padding:8px 18px;font-size:0.85rem;">Download</a>-->
       </div>
     </div>
   </div>
@@ -1528,6 +1659,534 @@
 
       renderReviews();
     })();
+  </script>
+
+  <!-- ── Net Probe Modal ──────────────────────────────────────── -->
+  <div id="np-overlay" role="dialog" aria-modal="true" aria-label="Network Intelligence Probe">
+    <div class="np-win">
+      <div class="np-titlebar">
+        <span class="np-dot r"></span>
+        <span class="np-dot y"></span>
+        <span class="np-dot g"></span>
+        <span class="np-titlebar-name">NEURAL SCAN v2.0 · pktana</span>
+        <button class="np-mute-btn" id="np-mute-btn" onclick="npToggleMute()" title="Toggle sounds">🔊</button>
+      </div>
+      <div class="np-scroll">
+        <div class="np-header">
+          <div class="np-sonar">
+            <span class="np-ring"></span>
+            <span class="np-ring"></span>
+            <span class="np-ring"></span>
+            <span class="np-sonar-core"></span>
+          </div>
+          <div>
+            <div class="np-head-label">Network Intelligence Probe</div>
+            <div class="np-head-status" id="np-status">Initializing probe...</div>
+          </div>
+        </div>
+        <div class="np-pgbar-wrap"><div class="np-pgbar" id="np-pgbar"></div></div>
+        <div class="np-pct" id="np-pct">0%</div>
+        <div class="np-lines" id="np-lines"></div>
+        <div class="np-card" id="np-card">
+          <div class="np-card-eyebrow">Network Profile Identified</div>
+          <div class="np-card-name" id="np-card-name">—</div>
+          <div class="np-card-desc" id="np-card-desc">—</div>
+        </div>
+      </div>
+      <div class="np-footer">
+        <div class="np-footer-note">Data is <strong>never stored or transmitted</strong> — runs entirely in your browser</div>
+        <button class="np-close-btn" onclick="npClose()">✕ Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    var hasBluetooth = !!(navigator.bluetooth);
+    var npMuted = false;
+    var _ctx = null;
+
+    // ── Sound Engine ──────────────────────────────────────────
+    function npAudio(){
+      if(!_ctx) try{_ctx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}
+      return _ctx;
+    }
+    function npBeep(freq,dur,type,vol){
+      if(npMuted) return;
+      var ctx=npAudio(); if(!ctx) return;
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value=freq; o.type=type||'square';
+      g.gain.setValueAtTime(vol||0.04,ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+dur);
+      o.start(); o.stop(ctx.currentTime+dur);
+    }
+    function npTick()    { npBeep(1400,0.012,'square',0.022); }
+    function npChime()   { npBeep(1800,0.06,'sine',0.04); }
+    function npWarn()    { npBeep(880,0.07,'square',0.05); setTimeout(function(){npBeep(660,0.07,'square',0.05);},85); }
+    function npFanfare() { [523,659,784,1047].forEach(function(f,i){setTimeout(function(){npBeep(f,0.14,'sine',0.06);},i*120);}); }
+    function npBLEBeep() {
+      var ctx=npAudio(); if(!ctx||npMuted) return;
+      var o=ctx.createOscillator(), g=ctx.createGain();
+      o.connect(g); g.connect(ctx.destination); o.type='sine';
+      o.frequency.setValueAtTime(280,ctx.currentTime);
+      o.frequency.exponentialRampToValueAtTime(1400,ctx.currentTime+0.35);
+      g.gain.setValueAtTime(0.06,ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.35);
+      o.start(); o.stop(ctx.currentTime+0.35);
+    }
+    window.npToggleMute = function(){
+      npMuted=!npMuted;
+      document.getElementById('np-mute-btn').textContent=npMuted?'🔇':'🔊';
+    };
+
+    // ── Open / Close ──────────────────────────────────────────
+    function npOpen(){
+      document.getElementById('np-overlay').classList.add('show');
+      // Resume audio context on user gesture
+      if(_ctx && _ctx.state==='suspended') _ctx.resume();
+      npScan();
+    }
+    function npClose(){
+      document.getElementById('np-overlay').classList.remove('show');
+      setTimeout(npReset, 400);
+    }
+    document.getElementById('np-overlay').addEventListener('click', function(e){
+      if(e.target===this) npClose();
+    });
+    window.npOpen  = npOpen;
+    window.npClose = npClose;
+
+    // ── Reset ─────────────────────────────────────────────────
+    function npReset(){
+      document.getElementById('np-lines').innerHTML = '';
+      document.getElementById('np-pgbar').style.width = '0%';
+      document.getElementById('np-pct').textContent = '0%';
+      var card = document.getElementById('np-card');
+      card.classList.remove('show');
+      card.innerHTML = '<div class="np-card-eyebrow">Network Profile Identified</div><div class="np-card-name" id="np-card-name">—</div><div class="np-card-desc" id="np-card-desc">—</div>';
+      document.getElementById('np-status').textContent = 'Initializing probe...';
+    }
+
+    // ── Helpers ───────────────────────────────────────────────
+    function npProg(p){ document.getElementById('np-pgbar').style.width=p+'%'; document.getElementById('np-pct').textContent=p+'%'; }
+    function npStatus(t){ document.getElementById('np-status').textContent=t; }
+    function npSleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+
+    function npAddRow(tag, value, cls){
+      var wrap=document.getElementById('np-lines');
+      var row=document.createElement('div');
+      row.className='np-row';
+      row.innerHTML='<span class="np-row-lbl">'+tag+'</span><span class="np-row-val '+(cls||'')+'">'+value+'</span><span></span>';
+      wrap.appendChild(row);
+      wrap.scrollTop=wrap.scrollHeight;
+      return row;
+    }
+
+    async function npRowTyped(tag, value, cls, badge){
+      var wrap=document.getElementById('np-lines');
+      var row=document.createElement('div');
+      row.className='np-row';
+      var tagEl=document.createElement('span');
+      tagEl.className='np-row-lbl';
+      tagEl.textContent=tag;
+      var valEl=document.createElement('span');
+      valEl.className='np-row-val '+(cls||'');
+      var badgeSlot=document.createElement('span');
+      row.appendChild(tagEl); row.appendChild(valEl); row.appendChild(badgeSlot);
+      wrap.appendChild(row);
+      wrap.scrollTop=wrap.scrollHeight;
+      // Typewriter
+      var spd=value.length>24?12:value.length>12?18:28;
+      for(var i=0;i<value.length;i++){
+        valEl.textContent+=value[i];
+        if(i%3===0) npTick();
+        await npSleep(spd);
+      }
+      // Badge
+      if(badge){
+        var b=document.createElement('span');
+        b.className=badge==='ok'?'np-ok-badge':'np-alert-badge';
+        b.textContent=badge==='ok'?'✓ OK':'⚠ '+badge;
+        badgeSlot.appendChild(b);
+        if(badge!=='ok') npWarn();
+        else npChime();
+      }
+      wrap.scrollTop=wrap.scrollHeight;
+      return row;
+    }
+
+    function npAddSection(title){
+      var wrap=document.getElementById('np-lines');
+      var sec=document.createElement('div');
+      sec.style.cssText='color:rgba(234,88,12,.5);font-size:.62rem;letter-spacing:.15em;text-transform:uppercase;margin:14px 0 2px;padding:5px 0 2px;border-top:1px solid rgba(255,255,255,.06);font-family:"JetBrains Mono",monospace;';
+      sec.textContent='── '+title+' ──';
+      wrap.appendChild(sec);
+      wrap.scrollTop=wrap.scrollHeight;
+    }
+
+    // ── UA Parser ─────────────────────────────────────────────
+    function npParseUA(ua){
+      var browser='Unknown', os='Unknown', device='Desktop';
+      if(/Android/.test(ua)){os='Android';device='Mobile';}
+      else if(/iPhone/.test(ua)){os='iOS';device='Mobile';}
+      else if(/iPad/.test(ua)){os='iPadOS';device='Tablet';}
+      else if(/Windows NT 10\.0/.test(ua)) os='Windows 10/11';
+      else if(/Windows NT 6\.3/.test(ua))  os='Windows 8.1';
+      else if(/Mac OS X ([\d_]+)/.test(ua)){var m=ua.match(/Mac OS X ([\d_]+)/);os='macOS '+(m?m[1].replace(/_/g,'.'):'');}
+      else if(/CrOS/.test(ua)) os='Chrome OS';
+      else if(/Linux/.test(ua)) os='Linux';
+
+      if(/Edg\/(\d+)/.test(ua)){var m2=ua.match(/Edg\/(\d+)/);browser='Edge '+(m2?m2[1]:'');}
+      else if(/OPR\/(\d+)/.test(ua)){var m2=ua.match(/OPR\/(\d+)/);browser='Opera '+(m2?m2[1]:'');}
+      else if(/Firefox\/(\d+)/.test(ua)){var m2=ua.match(/Firefox\/(\d+)/);browser='Firefox '+(m2?m2[1]:'');}
+      else if(/Chrome\/(\d+)/.test(ua)){var m2=ua.match(/Chrome\/(\d+)/);browser='Chrome '+(m2?m2[1]:'');}
+      else if(/Version\/(\d+).*Safari/.test(ua)){var m2=ua.match(/Version\/(\d+)/);browser='Safari '+(m2?m2[1]:'');}
+      return {browser:browser.trim(), os:os, device:device};
+    }
+
+    // ── Connection API ────────────────────────────────────────
+    function npConn(){
+      var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+      if(!c) return {};
+      var types={wifi:'Wi-Fi',cellular:'Cellular',ethernet:'Ethernet',bluetooth:'Bluetooth',none:'Offline'};
+      var etypes={'4g':'4G — Fast','3g':'3G — Medium','2g':'2G — Slow','slow-2g':'2G — Very Slow'};
+      return {
+        type:  types[c.type]||etypes[c.effectiveType]||c.effectiveType||null,
+        speed: c.downlink ? c.downlink+' Mbps' : null,
+        rtt:   c.rtt      ? c.rtt+' ms'        : null,
+        save:  c.saveData ? 'Enabled'           : null
+      };
+    }
+
+    // ── WebRTC Local IP ───────────────────────────────────────
+    function npGetLocalIP(){
+      return new Promise(function(resolve){
+        try {
+          var RTC=window.RTCPeerConnection||window.mozRTCPeerConnection||window.webkitRTCPeerConnection;
+          if(!RTC){resolve(null);return;}
+          var pc=new RTC({iceServers:[]});
+          pc.createDataChannel('');
+          pc.createOffer().then(function(o){return pc.setLocalDescription(o);});
+          pc.onicecandidate=function(e){
+            if(!e||!e.candidate||!e.candidate.candidate) return;
+            var m=e.candidate.candidate.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            if(m&&m[1]!=='0.0.0.0'&&!m[1].startsWith('0.')){
+              pc.onicecandidate=null; pc.close(); resolve(m[1]);
+            }
+          };
+          setTimeout(function(){resolve(null);},1500);
+        } catch(e2){resolve(null);}
+      });
+    }
+
+    // ── Performance Timing ────────────────────────────────────
+    function npGetPerf(){
+      try {
+        var nav=performance.getEntriesByType('navigation')[0];
+        if(!nav) return null;
+        return {
+          dns:  Math.round(nav.domainLookupEnd - nav.domainLookupStart),
+          tcp:  Math.round(nav.connectEnd      - nav.connectStart),
+          tls:  nav.secureConnectionStart>0 ? Math.round(nav.connectEnd-nav.secureConnectionStart) : null,
+          ttfb: Math.round(nav.responseStart   - nav.requestStart)
+        };
+      } catch(e){return null;}
+    }
+
+    // ── WebGL GPU ─────────────────────────────────────────────
+    function npGetGPU(){
+      try {
+        var canvas=document.createElement('canvas');
+        var gl=canvas.getContext('webgl')||canvas.getContext('experimental-webgl');
+        if(!gl) return null;
+        var ext=gl.getExtension('WEBGL_debug_renderer_info');
+        if(!ext) return {renderer:'WebGL active (renderer hidden)'};
+        return {
+          vendor:   gl.getParameter(ext.UNMASKED_VENDOR_WEBGL),
+          renderer: gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
+        };
+      } catch(e){return null;}
+    }
+
+    // ── Canvas Fingerprint ────────────────────────────────────
+    function npGetFingerprint(){
+      try {
+        var c=document.createElement('canvas');
+        c.width=256; c.height=36;
+        var ctx=c.getContext('2d');
+        ctx.fillStyle='#ea580c'; ctx.fillRect(0,0,256,36);
+        ctx.fillStyle='rgba(255,255,255,.55)';
+        ctx.font='13px serif';
+        ctx.fillText('pktana-probe '+navigator.language,10,24);
+        ctx.fillStyle='rgba(251,146,60,.4)';
+        ctx.beginPath(); ctx.arc(230,18,10,0,Math.PI*2); ctx.fill();
+        var data=c.toDataURL(), h=0;
+        for(var i=0;i<data.length;i++){h=((h<<5)-h)+data.charCodeAt(i);h|=0;}
+        return Math.abs(h).toString(16).toUpperCase().padStart(8,'0');
+      } catch(e){return null;}
+    }
+
+    // ── Battery API ───────────────────────────────────────────
+    function npGetBattery(){
+      if(!navigator.getBattery) return Promise.resolve(null);
+      return navigator.getBattery().then(function(b){
+        return {level:Math.round(b.level*100),charging:b.charging,
+                chargingTime:b.chargingTime,dischargingTime:b.dischargingTime};
+      }).catch(function(){return null;});
+    }
+
+    // ── Media Devices ─────────────────────────────────────────
+    function npGetMedia(){
+      if(!navigator.mediaDevices||!navigator.mediaDevices.enumerateDevices) return Promise.resolve(null);
+      return navigator.mediaDevices.enumerateDevices().then(function(devs){
+        return {
+          cameras:  devs.filter(function(d){return d.kind==='videoinput';}).length,
+          mics:     devs.filter(function(d){return d.kind==='audioinput';}).length,
+          speakers: devs.filter(function(d){return d.kind==='audiooutput';}).length
+        };
+      }).catch(function(){return null;});
+    }
+
+    // ── Exposure Score ────────────────────────────────────────
+    function npCalcScore(d){
+      var s=0;
+      if(d.ip)          s+=15;
+      if(d.isp)         s+=8;
+      if(d.location)    s+=12;
+      if(d.localIP)     s+=10;
+      if(d.gpu)         s+=6;
+      if(d.fingerprint) s+=10;
+      if(d.battery)     s+=5;
+      if(d.media&&(d.media.cameras||d.media.mics)) s+=6;
+      if(d.cores)       s+=4;
+      if(d.mem)         s+=4;
+      if(!navigator.doNotTrack||navigator.doNotTrack==='0') s+=8;
+      if(d.conn&&d.conn.type) s+=4;
+      return Math.min(s,100);
+    }
+
+    // ── Profile ───────────────────────────────────────────────
+    function npGetProfile(parsed, conn){
+      var device=parsed.device, os=parsed.os;
+      if(device==='Mobile')                          return {name:'Mobile Operative',  desc:'Always connected, always on the move.'};
+      if(/Linux/.test(os)&&device==='Desktop')       return {name:'Terminal Commander', desc:'Native pktana territory — lives in the shell.'};
+      if(/macOS/.test(os))                           return {name:'Unix Architect',     desc:'BSD roots, polished surface — every packet visible.'};
+      if((navigator.hardwareConcurrency||0)>=16)     return {name:'Compute Overlord',   desc:'High-core workstation — the network bows to you.'};
+      if(conn.speed&&parseFloat(conn.speed)>=500)    return {name:'Bandwidth Baron',    desc:'Riding the fast lane — gigabit territory.'};
+      if(device==='Tablet')                          return {name:'Mobile Analyst',     desc:'Portable power for network reconnaissance.'};
+      return {name:'Network Explorer', desc:'Curious about every packet flowing beneath.'};
+    }
+
+    // ── BLE GATT Connection ───────────────────────────────────
+    window.npBLEScan = async function(){
+      if(!navigator.bluetooth) return;
+      var btn=document.getElementById('np-ble-btn');
+      if(btn){btn.textContent='🔍 Select device from popup...';btn.disabled=true;}
+      try {
+        npBLEBeep();
+        var device=await navigator.bluetooth.requestDevice({
+          acceptAllDevices:true,
+          optionalServices:['battery_service','device_information','heart_rate']
+        });
+        var dname=(device.name||'Unknown Device').replace(/[<>&"]/g,function(c){return{'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c];});
+        if(btn) btn.textContent='⚡ Connecting to '+dname+'...';
+        var server=await device.gatt.connect();
+        npBLEBeep();
+
+        var battLevel=null, mfr=null, model=null;
+
+        try{
+          var bs=await server.getPrimaryService('battery_service');
+          var bc=await bs.getCharacteristic('battery_level');
+          battLevel=(await bc.readValue()).getUint8(0);
+        }catch(e){}
+
+        try{
+          var di=await server.getPrimaryService('device_information');
+          try{var mc=await di.getCharacteristic('manufacturer_name_string');mfr=new TextDecoder().decode(await mc.readValue()).trim();}catch(e){}
+          try{var mo=await di.getCharacteristic('model_number_string');model=new TextDecoder().decode(await mo.readValue()).trim();}catch(e){}
+        }catch(e){}
+
+        npAddSection('BLUETOOTH TARGET');
+        await npRowTyped('[NAME]', dname,                                          'grn',  null);
+        if(battLevel!==null) await npRowTyped('[BATT]', battLevel+'%',             battLevel<20?'org':'grn', battLevel<20?'LOW POWER':'ok');
+        if(mfr)              await npRowTyped('[MFR]',  mfr,                       '',     null);
+        if(model)            await npRowTyped('[MDL]',  model,                     '',     null);
+        if(battLevel===null&&!mfr&&!model) await npRowTyped('[INFO]','No readable GATT services','dim',null);
+        await npRowTyped('[LINK]','GATT session active via Bluetooth','grn',null);
+
+        npFanfare();
+        if(btn){btn.textContent='📡 Pair Another Device';btn.disabled=false;}
+        var sc=document.querySelector('.np-scroll'); if(sc) sc.scrollTop=99999;
+
+      } catch(e){
+        if(btn){btn.textContent='⚡ PAIR &amp; INTERROGATE BLE DEVICE';btn.disabled=false;}
+      }
+    };
+
+    // ── Show Final Card ───────────────────────────────────────
+    function npShowResult(score, prof){
+      var clr=score<40?'#4ade80':score<70?'#fb923c':'#f87171';
+      var lbl=score<40?'MINIMAL':score<70?'MODERATE':'HIGH';
+      var blebtn=hasBluetooth
+        ? '<button id="np-ble-btn" onclick="npBLEScan()" style="margin-top:12px;width:100%;background:rgba(234,88,12,.07);border:1px dashed rgba(234,88,12,.4);color:rgba(255,255,255,.75);border-radius:8px;padding:10px 12px;font-family:\'JetBrains Mono\',monospace;font-size:.73rem;cursor:pointer;transition:all .2s;text-align:left;letter-spacing:.04em;" onmouseover="this.style.background=\'rgba(234,88,12,.15)\'" onmouseout="this.style.background=\'rgba(234,88,12,.07)\'">⚡ PAIR &amp; INTERROGATE BLE DEVICE</button>'
+        : '';
+      var card=document.getElementById('np-card');
+      card.innerHTML=
+        '<div class="np-card-eyebrow">Mission Complete — Operative Profile</div>'+
+        '<div class="np-card-name">'+prof.name+'</div>'+
+        '<div class="np-card-desc">'+prof.desc+'</div>'+
+        '<div style="margin-top:14px;">'+
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'+
+            '<span style="font-family:\'JetBrains Mono\',monospace;font-size:.6rem;color:rgba(255,255,255,.3);letter-spacing:.12em;text-transform:uppercase;">Exposure Index</span>'+
+            '<span style="font-family:\'JetBrains Mono\',monospace;font-size:.7rem;font-weight:700;color:'+clr+';">'+score+'/100 — '+lbl+'</span>'+
+          '</div>'+
+          '<div style="height:5px;background:rgba(255,255,255,.07);border-radius:3px;overflow:hidden;">'+
+            '<div id="np-score-bar" style="height:100%;width:0%;background:linear-gradient(90deg,'+clr+','+clr+'cc);border-radius:3px;box-shadow:0 0 10px '+clr+'88;transition:width 1.4s cubic-bezier(.4,0,.2,1);"></div>'+
+          '</div>'+
+        '</div>'+
+        blebtn;
+      card.classList.add('show');
+      setTimeout(function(){
+        var bar=document.getElementById('np-score-bar');
+        if(bar) bar.style.width=score+'%';
+        var sc=document.querySelector('.np-scroll');
+        if(sc) sc.scrollTop=99999;
+      },80);
+    }
+
+    // ── Main Scan ─────────────────────────────────────────────
+    async function npScan(){
+      npReset();
+      var ua=navigator.userAgent;
+      var parsed=npParseUA(ua);
+      var conn=npConn();
+      var cores=navigator.hardwareConcurrency||null;
+      var mem=navigator.deviceMemory||null;
+      var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
+      var lang=navigator.language||'Unknown';
+      var scr=screen.width+'\xd7'+screen.height;
+      var vp=window.innerWidth+'\xd7'+window.innerHeight;
+      var touch=navigator.maxTouchPoints||0;
+      var D=80; // Short pause between rows (typewriter adds its own time)
+
+      // Kick off all async work immediately
+      var ipData=null, battery=null, media=null, localIP=null;
+      var ipFetch    = fetch('https://ipwho.is/').then(function(r){return r.json();}).then(function(d){if(d&&d.success)ipData=d;}).catch(function(){});
+      var batFetch   = npGetBattery().then(function(b){battery=b;});
+      var medFetch   = npGetMedia().then(function(m){media=m;});
+      var localFetch = npGetLocalIP().then(function(ip){localIP=ip;});
+      var gpu        = npGetGPU();
+      var fingerprint= npGetFingerprint();
+      var perf       = npGetPerf();
+
+      // ── DEVICE LAYER ──
+      npAddSection('DEVICE LAYER');
+      npStatus('PENETRATING DEVICE LAYER...'); npProg(4);
+
+      await npSleep(D); await npRowTyped('[OS]',  parsed.os,     '',    null);    npProg(8);
+      await npSleep(D); await npRowTyped('[DEV]', parsed.device, '',    null);    npProg(11);
+      await npSleep(D); await npRowTyped('[BRW]', parsed.browser,'',    null);    npProg(14);
+      if(cores)  { await npSleep(D); await npRowTyped('[CPU]', cores+' cores', '',    null);               npProg(18); }
+      if(mem)    { await npSleep(D); await npRowTyped('[RAM]', mem+' GB',       '',    null);               npProg(21); }
+      if(gpu)    { await npSleep(D); await npRowTyped('[GPU]', gpu.renderer||gpu.vendor||'WebGL', 'dim', 'FINGERPRINTED'); npProg(25); }
+      if(touch>0){ await npSleep(D); await npRowTyped('[INP]', touch+' touch points',   'dim', null);       npProg(28); }
+      else        { await npSleep(D); await npRowTyped('[INP]', 'Mouse / Trackpad',      'dim', null);       npProg(28); }
+      if(fingerprint){ await npSleep(D); await npRowTyped('[FP]', '0x'+fingerprint, 'dim', 'UNIQUE ID');     npProg(32); }
+
+      await Promise.race([batFetch, npSleep(600)]);
+      if(battery){
+        var batStr=battery.level+'%'+(battery.charging?' Charging':'');
+        if(!battery.charging&&battery.dischargingTime&&battery.dischargingTime<Infinity){
+          var bh=Math.floor(battery.dischargingTime/3600), bm=Math.floor((battery.dischargingTime%3600)/60);
+          if(bh||bm) batStr+=' ~'+bh+'h'+bm+'m left';
+        }
+        await npSleep(D); await npRowTyped('[BAT]', batStr, battery.level<20?'org':'grn', battery.level<20?'LOW POWER':null); npProg(36);
+      }
+
+      // ── NETWORK LAYER ──
+      npAddSection('NETWORK LAYER');
+      npStatus('TRIANGULATING YOUR NODE...'); npProg(40);
+
+      await Promise.race([localFetch, npSleep(1500)]);
+      if(localIP){ await npSleep(D); await npRowTyped('[LAN]', localIP, 'org', 'LAN EXPOSED'); npProg(44); }
+
+      await npSleep(D);
+      var ipRow=npAddRow('[IP]','<span class="np-cursor"></span>','pending');
+      npProg(48);
+
+      await Promise.race([ipFetch, npSleep(4000)]);
+      var ipValEl=ipRow.querySelector('.np-row-val');
+      if(ipData){
+        ipValEl.className='np-row-val';
+        ipValEl.textContent=ipData.ip;
+        var ipBadge=document.createElement('span');
+        ipBadge.className='np-alert-badge';
+        ipBadge.textContent='⚠ VISIBLE';
+        ipRow.appendChild(ipBadge);
+        npWarn();
+      } else {
+        ipValEl.className='np-row-val dim';
+        ipValEl.textContent='Not detected';
+      }
+      npProg(54);
+
+      await npSleep(D); await npRowTyped('[ISP]', (ipData&&(ipData.connection.isp||ipData.connection.org))||'Unknown', '', ipData?'TRACKED':null); npProg(58);
+      await npSleep(D); await npRowTyped('[LOC]', ipData?(ipData.city||'—')+', '+(ipData.country||'—'):'Unknown', '', ipData?'GEO EXPOSED':null); npProg(62);
+      if(ipData&&ipData.region){ await npSleep(D); await npRowTyped('[RGN]', ipData.region, 'dim', null); npProg(65); }
+      if(ipData&&ipData.timezone){ await npSleep(D); await npRowTyped('[TZS]', ipData.timezone.id||tz, 'dim', null); npProg(68); }
+
+      // ── CONNECTION LAYER ──
+      npAddSection('CONNECTION LAYER');
+      npStatus('INTERCEPTING PACKET STREAM...'); npProg(70);
+
+      if(conn.type) { await npSleep(D); await npRowTyped('[NET]', conn.type,  'org', null); npProg(73); }
+      if(conn.speed){ await npSleep(D); await npRowTyped('[BWD]', conn.speed, 'org', null); npProg(76); }
+      if(conn.rtt)  { await npSleep(D); await npRowTyped('[RTT]', conn.rtt,   'org', null); npProg(79); }
+      if(conn.save) { await npSleep(D); await npRowTyped('[SAV]', 'Enabled',  'org', null); npProg(81); }
+
+      // ── PACKET TIMING ──
+      if(perf){
+        npAddSection('PACKET TIMING ANALYSIS');
+        npStatus('DECODING NETWORK STACK...'); npProg(82);
+        if(perf.dns>=0)    { await npSleep(D); await npRowTyped('[DNS]', perf.dns+'ms',  '', perf.dns>50?'SLOW':null);   npProg(84); }
+        if(perf.tcp>0)     { await npSleep(D); await npRowTyped('[TCP]', perf.tcp+'ms',  '', perf.tcp>150?'SLOW':null);  npProg(86); }
+        if(perf.tls!==null){ await npSleep(D); await npRowTyped('[TLS]', perf.tls+'ms',  '', perf.tls>200?'SLOW':null);  npProg(88); }
+        if(perf.ttfb>=0)   { await npSleep(D); await npRowTyped('[TTB]', perf.ttfb+'ms', '', perf.ttfb>400?'SLOW':null); npProg(90); }
+      }
+
+      // ── BROWSER FINGERPRINT ──
+      npAddSection('BROWSER FINGERPRINT');
+      npStatus('EXTRACTING DIGITAL SIGNATURE...'); npProg(91);
+
+      await Promise.race([medFetch, npSleep(800)]);
+      if(media){
+        var mStr='';
+        if(media.cameras) mStr+=media.cameras+' cam ';
+        if(media.mics)    mStr+=media.mics+' mic ';
+        if(media.speakers)mStr+=media.speakers+' spkr';
+        if(mStr.trim()){ await npSleep(D); await npRowTyped('[MED]', mStr.trim(), 'dim', 'DETECTABLE'); npProg(93); }
+      }
+
+      var dnt=navigator.doNotTrack;
+      await npSleep(D); await npRowTyped('[DNT]', dnt==='1'?'Enabled':'Disabled', '', dnt==='1'?null:'TRACKABLE'); npProg(94);
+      await npSleep(D); await npRowTyped('[SCR]', scr,   'dim', null); npProg(95);
+      await npSleep(D); await npRowTyped('[VP]',  vp,    'dim', null); npProg(96);
+      await npSleep(D); await npRowTyped('[TZ]',  tz,    'dim', null); npProg(97);
+      await npSleep(D); await npRowTyped('[LNG]', lang,  'dim', null); npProg(98);
+      await npSleep(D); await npRowTyped('[CKE]', navigator.cookieEnabled?'Enabled':'Blocked', '', navigator.cookieEnabled?'TRACKABLE':null); npProg(99);
+      await npSleep(D); await npRowTyped('[SW]',  ('serviceWorker' in navigator)?'Supported':'None', 'dim', null); npProg(100);
+
+      npStatus('MISSION COMPLETE');
+      npFanfare();
+      await npSleep(350);
+
+      var score=npCalcScore({ip:ipData,isp:ipData&&ipData.connection,location:ipData&&ipData.city,
+        localIP:localIP,gpu:gpu,fingerprint:fingerprint,battery:battery,media:media,cores:cores,mem:mem,conn:conn});
+      npShowResult(score, npGetProfile(parsed, conn));
+    }
+  })();
   </script>
 
 </body>

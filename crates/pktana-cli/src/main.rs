@@ -15,10 +15,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use pktana_core::{
-    analyze_hex, analyze_hex_file, build_flow_table, format_bytes, get_ethtool_report,
-    get_nic_dataplane, get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes,
-    routes_for_iface, sample_packets, CaptureConfig, CaptureError, LinuxCaptureEngine, NicInfo,
-    ParseError, ParsedPacket,
+    analyze_hex, analyze_hex_file, build_flow_table, format_bytes, get_bond_info, get_bridge_info,
+    get_bridge_port_info, get_ethtool_report, get_iommu_group, get_nic_dataplane, get_nic_info,
+    get_ptp_clocks, hex_dump, inspect, list_connections, list_network_namespaces, list_nics,
+    list_routes, list_xdp_dispatchers, routes_for_iface, sample_packets, scan_bpf_fs,
+    stp_state_label, CaptureConfig, CaptureError, LinuxCaptureEngine, NicInfo, ParseError,
+    ParsedPacket,
 };
 
 // ─── error type ─────────────────────────────────────────────────────────────
@@ -102,11 +104,23 @@ fn run() -> Result<(), CliError> {
         // ── NIC detail (sysfs/procfs — no external tools) ────────────────────
         "nic" => run_nic(&args[2..]),
 
+        // ── ip-addr-style interface address view ──────────────────────────────
+        "addr" | "address" => run_addr(&args[2..]),
+
         // ── ethtool-equivalent deep NIC inspection ──────────────────────────────
         "ethtool" | "et" => run_ethtool(&args[2..]),
 
         // ── NIC dataplane / bypass / offload inspector ────────────────────────
         "dp" | "dataplane" => run_dataplane(&args[2..]),
+
+        // ── BPF filesystem — pinned BPF objects in /sys/fs/bpf/ ─────────────
+        "bpf" => run_bpf_fs(),
+
+        // ── Network namespace enumeration ─────────────────────────────────────
+        "ns" | "netns" => run_netns(),
+
+        // ── Full hardware profile (bridge/bond/PTP/IOMMU/errors) ─────────────
+        "hw" | "hardware" => run_hw(&args[2..]),
 
         // ── deep packet inspection ────────────────────────────────────────────
         "inspect" => run_inspect(&args[2..]),
@@ -1114,6 +1128,128 @@ fn run_nic(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+// ─── ip-addr-style interface address view ────────────────────────────────────
+
+fn run_addr(args: &[String]) -> Result<(), CliError> {
+    let json = args.iter().any(|a| a == "--json" || a == "-j");
+    let target = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str());
+
+    // helper: print one NicInfo in the compact multi-line format
+    fn print_nic_addr(nic: &NicInfo) {
+        let state = if nic.is_up() { "UP" } else { "DOWN" };
+        let speed = nic.speed_label();
+        println!(
+            "{}: state {}  mac {}  mtu {}  speed {}",
+            nic.name, state, nic.mac, nic.mtu, speed
+        );
+        for ip in &nic.ip_addresses {
+            println!("    inet  {ip}");
+        }
+        if let Some(alias) = &nic.ifalias {
+            println!("    alias: {alias}");
+        }
+        if let Some(master) = &nic.master {
+            println!("    master: {master}");
+        }
+        if nic.is_bridge {
+            println!("    bridge-master");
+        }
+        if nic.is_bond {
+            println!("    bond-member");
+        }
+        println!("    carrier changes: {}", nic.carrier_changes);
+        if let Some(driver) = &nic.driver {
+            println!("    driver: {driver}");
+        }
+    }
+
+    // helper: serialize one NicInfo as JSON string (all fields)
+    fn nic_to_json(nic: &NicInfo) -> String {
+        let state = if nic.is_up() { "UP" } else { "DOWN" };
+        let ips = nic
+            .ip_addresses
+            .iter()
+            .map(|ip| format!("\"{}\"", ip))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            concat!(
+                r#"{{"name":"{name}","state":"{state}","mac":"{mac}","mtu":{mtu},"#,
+                r#""speed_label":"{speed}","duplex":"{duplex}","driver":"{driver}","#,
+                r#""loopback":{loopback},"promisc":{promisc},"#,
+                r#""ip_addresses":[{ips}],"#,
+                r#""rx_bytes":{rxb},"rx_packets":{rxp},"rx_errors":{rxe},"rx_dropped":{rxd},"#,
+                r#""tx_bytes":{txb},"tx_packets":{txp},"tx_errors":{txe},"tx_dropped":{txd},"#,
+                r#""rx_crc_errors":{crc},"rx_missed_errors":{missed},"rx_frame_errors":{frame},"#,
+                r#""rx_fifo_errors":{fifo},"tx_carrier_errors":{carrier_err},"collisions":{coll},"#,
+                r#""carrier_changes":{cc},"master":"{master}","is_bridge":{bridge},"is_bond":{bond},"#,
+                r#""ifalias":"{alias}"}}"#
+            ),
+            name = nic.name,
+            state = state,
+            mac = nic.mac,
+            mtu = nic.mtu,
+            speed = nic.speed_label(),
+            duplex = nic.duplex.as_deref().unwrap_or(""),
+            driver = nic.driver.as_deref().unwrap_or(""),
+            loopback = nic.is_loopback(),
+            promisc = nic.is_promisc(),
+            ips = ips,
+            rxb = nic.rx_bytes,
+            rxp = nic.rx_packets,
+            rxe = nic.rx_errors,
+            rxd = nic.rx_dropped,
+            txb = nic.tx_bytes,
+            txp = nic.tx_packets,
+            txe = nic.tx_errors,
+            txd = nic.tx_dropped,
+            crc = nic.rx_crc_errors,
+            missed = nic.rx_missed_errors,
+            frame = nic.rx_frame_errors,
+            fifo = nic.rx_fifo_errors,
+            carrier_err = nic.tx_carrier_errors,
+            coll = nic.collisions,
+            cc = nic.carrier_changes,
+            master = nic.master.as_deref().unwrap_or(""),
+            bridge = nic.is_bridge,
+            bond = nic.is_bond,
+            alias = nic.ifalias.as_deref().unwrap_or(""),
+        )
+    }
+
+    match target {
+        // pktana addr  — show all interfaces
+        None => {
+            let nics = list_nics()?;
+            if json {
+                let items: Vec<String> = nics.iter().map(nic_to_json).collect();
+                println!("[{}]", items.join(","));
+                return Ok(());
+            }
+            let sep = "─".repeat(60);
+            for (i, nic) in nics.iter().enumerate() {
+                if i > 0 {
+                    println!("{sep}");
+                }
+                print_nic_addr(nic);
+            }
+        }
+        // pktana addr <iface>
+        Some(name) => {
+            let nic = get_nic_info(name)?;
+            if json {
+                println!("{}", nic_to_json(&nic));
+                return Ok(());
+            }
+            print_nic_addr(&nic);
+        }
+    }
+    Ok(())
+}
+
 // ─── deep packet inspection ───────────────────────────────────────────────────
 
 fn run_inspect(args: &[String]) -> Result<(), CliError> {
@@ -2109,6 +2245,50 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!("{bar}");
         }
 
+        // ── addr ──────────────────────────────────────────────────────────────
+        "addr" | "address" => {
+            println!("{bar}");
+            println!("{B}  pktana addr{R}  —  Interface address view (like ip addr show)");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana addr{R}");
+            println!("  {Y}pktana addr <IFACE>{R}");
+            println!("  {Y}pktana addr [--json | -j]{R}");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Shows interfaces and their assigned IP addresses in a compact multi-line");
+            println!("  format similar to `ip addr show`.  No external tools are used.");
+            println!();
+            println!("  Without an argument, lists all interfaces.");
+            println!("  With an interface name, shows that interface only.");
+            println!();
+            println!("{B}FIELDS{R}");
+            println!("  state         — UP / DOWN");
+            println!("  mac           — hardware address");
+            println!("  mtu           — maximum transmission unit in bytes");
+            println!("  speed         — link speed (e.g. 1G, 10G)");
+            println!("  inet          — each assigned IPv4 / IPv6 address with prefix");
+            println!("  alias         — ifalias label (if set)");
+            println!("  master        — bridge or bond master interface (if member)");
+            println!("  bridge-master — indicates this interface is a bridge");
+            println!("  bond-member   — indicates this interface is a bond");
+            println!("  carrier chg   — total link-up/down transitions since boot");
+            println!("  driver        — kernel module managing the NIC");
+            println!();
+            println!("{B}FLAGS{R}");
+            println!("  --json / -j   — emit full NicInfo as JSON (all counters + metadata)");
+            println!();
+            println!("{B}REPLACES{R}");
+            println!("  ip addr show · ip addr show <iface>");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana addr             # all interfaces");
+            println!("  pktana addr eth0        # single interface");
+            println!("  pktana addr eth0 --json # full JSON output");
+            println!("{bar}");
+        }
+
         // ── ethtool ──────────────────────────────────────────────────────────
         "ethtool" | "et" => {
             println!("{bar}");
@@ -2877,6 +3057,31 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         );
     }
 
+    // ── XDP dispatchers (libxdp multi-prog, pinned in /sys/fs/bpf/xdp/) ─────
+    {
+        let dispatchers = list_xdp_dispatchers();
+        let mine: Vec<_> = dispatchers
+            .iter()
+            .filter(|d| d.iface.as_deref() == Some(name))
+            .collect();
+        if !mine.is_empty() {
+            println!("  XDP dispatchers:");
+            for d in &mine {
+                let slots = d.slots.join("  ");
+                println!("    dispatch-{}-{}  slots: {}", d.prog_id, d.link_id, slots);
+            }
+        } else if !dispatchers.is_empty() {
+            // There are dispatchers but none matched this iface — show unmatched count
+            let unmatched: Vec<_> = dispatchers.iter().filter(|d| d.iface.is_none()).collect();
+            if !unmatched.is_empty() {
+                println!(
+                    "  XDP dispatchers: {} pinned in /sys/fs/bpf/xdp/ (ifindex not resolved — run as root for full correlation)",
+                    unmatched.len()
+                );
+            }
+        }
+    }
+
     // ── AF_XDP ───────────────────────────────────────────────────────────────
     if dp.afxdp_sockets == 0 {
         println!("  AF_XDP sockets : none");
@@ -2925,7 +3130,7 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
 
     println!();
 
-    // ── PCI identity ──────────────────────────────────────────────────────────
+    // ── PCI identity + link ───────────────────────────────────────────────────
     println!("  PCI");
     println!(
         "    Address      : {}",
@@ -2946,6 +3151,19 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
             .as_deref()
             .unwrap_or("—")
     );
+    {
+        let cur_speed = dp.pci_link_speed.as_deref().unwrap_or("—");
+        let cur_width = dp
+            .pci_link_width
+            .map(|w| format!("x{w}"))
+            .unwrap_or_else(|| "—".into());
+        let max_speed = dp.pci_max_link_speed.as_deref().unwrap_or("—");
+        let max_width = dp
+            .pci_max_link_width
+            .map(|w| format!("x{w}"))
+            .unwrap_or_else(|| "—".into());
+        println!("    Link speed   : {cur_speed} {cur_width}  (max: {max_speed} {max_width})");
+    }
 
     println!();
 
@@ -2957,6 +3175,25 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         // Group into rows of 3 for compact display
         for chunk in dp.hw_features_on.chunks(3) {
             println!("    {}", chunk.join("    "));
+        }
+    }
+
+    println!();
+
+    // ── TC / BPF ─────────────────────────────────────────────────────────────
+    println!("  TC BPF");
+    if !dp.tc_clsact {
+        println!("    clsact qdisc  : not present");
+    } else {
+        println!("    clsact qdisc  : PRESENT");
+        if dp.tc_bpf_directions.is_empty() {
+            println!("    BPF filters   : none");
+        } else {
+            println!("    BPF filters   : {}", dp.tc_bpf_directions.join(", "));
+            if !dp.tc_bpf_prog_ids.is_empty() {
+                let ids: Vec<String> = dp.tc_bpf_prog_ids.iter().map(|id| id.to_string()).collect();
+                println!("    prog IDs      : {}", ids.join(", "));
+            }
         }
     }
 
@@ -2984,6 +3221,291 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         pktana_core::BypassMode::Hybrid => {
             println!("    XDP and AF_XDP are both active — hybrid zero-copy path.");
         }
+    }
+
+    Ok(())
+}
+
+// ─── full hardware profile ────────────────────────────────────────────────────
+
+fn run_hw(args: &[String]) -> Result<(), CliError> {
+    let name = match args.first() {
+        Some(n) => n.as_str(),
+        None => return Err(CliError::Usage("usage: pktana hw <INTERFACE>".into())),
+    };
+
+    println!("Hardware Profile — {name}");
+    println!("{}", "═".repeat(56));
+    println!();
+
+    // ── NIC basic info ────────────────────────────────────────────────────────
+    if let Ok(nic) = get_nic_info(name) {
+        println!("  Interface      : {}  ({})", nic.name, nic.state);
+        println!("  MAC            : {}", nic.mac);
+        println!("  MTU            : {}", nic.mtu);
+        if let Some(alias) = &nic.ifalias {
+            println!("  Alias          : {alias}");
+        }
+
+        // Layer-2 role
+        if nic.is_bridge {
+            println!("  L2 Role        : Bridge master");
+        } else if nic.is_bond {
+            println!("  L2 Role        : Bond master");
+        } else if let Some(ref master) = nic.master {
+            println!("  L2 Role        : Enslaved to '{master}'");
+        }
+
+        println!();
+
+        // ── Extended error counters ───────────────────────────────────────────
+        println!("  Error Counters");
+        println!("    rx_crc_errors    : {}", nic.rx_crc_errors);
+        println!("    rx_missed_errors : {}", nic.rx_missed_errors);
+        println!("    rx_frame_errors  : {}", nic.rx_frame_errors);
+        println!("    rx_fifo_errors   : {}", nic.rx_fifo_errors);
+        println!("    tx_carrier_errors: {}", nic.tx_carrier_errors);
+        println!("    collisions       : {}", nic.collisions);
+
+        println!();
+
+        // ── Link stability ────────────────────────────────────────────────────
+        println!("  Link Stability");
+        println!("    carrier_changes  : {}", nic.carrier_changes);
+    }
+
+    println!();
+
+    // ── Bridge master ─────────────────────────────────────────────────────────
+    if let Some(br) = get_bridge_info(name) {
+        println!("  Bridge");
+        println!("    Bridge ID      : {}", br.bridge_id);
+        println!(
+            "    STP            : {}",
+            if br.stp_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "    VLAN filtering : {}",
+            if br.vlan_filtering { "yes" } else { "no" }
+        );
+        println!("    Ageing time    : {} jiffies", br.ageing_time_jiffies);
+        if br.ports.is_empty() {
+            println!("    Ports          : (none)");
+        } else {
+            println!("    Ports          : {}", br.ports.join("  "));
+        }
+        println!();
+    }
+
+    // ── Bridge port ───────────────────────────────────────────────────────────
+    if let Some(bp) = get_bridge_port_info(name) {
+        println!("  Bridge Port");
+        println!("    Bridge         : {}", bp.bridge);
+        println!(
+            "    STP state      : {} ({})",
+            bp.stp_state,
+            stp_state_label(bp.stp_state)
+        );
+        println!("    Port ID        : {}", bp.port_id);
+        println!("    Path cost      : {}", bp.path_cost);
+        println!(
+            "    Hairpin        : {}",
+            if bp.hairpin { "on" } else { "off" }
+        );
+        println!(
+            "    Learning       : {}",
+            if bp.learning { "on" } else { "off" }
+        );
+        println!();
+    }
+
+    // ── Bond master ───────────────────────────────────────────────────────────
+    if let Some(bond) = get_bond_info(name) {
+        println!("  Bond");
+        println!("    Mode           : {}", bond.mode);
+        println!(
+            "    Active slave   : {}",
+            bond.active_slave.as_deref().unwrap_or("—")
+        );
+        println!("    Slaves         : {}", bond.slaves.join("  "));
+        println!("    MII monitor    : {} ms", bond.miimon);
+        println!("    Link failures  : {}", bond.link_failures);
+        println!();
+    }
+
+    // ── PTP hardware clocks ───────────────────────────────────────────────────
+    let ptps = get_ptp_clocks(name);
+    if !ptps.is_empty() {
+        println!("  PTP Clocks");
+        for ptp in &ptps {
+            println!("    {} — {}", ptp.device, ptp.clock_name);
+            println!("      max adj      : {} ppb", ptp.max_adj_ppb);
+            println!("      ext ts inputs: {}", ptp.n_extts);
+            println!("      period outs  : {}", ptp.n_periodic_outputs);
+        }
+        println!();
+    }
+
+    // ── IOMMU group ───────────────────────────────────────────────────────────
+    if let Some(iommu) = get_iommu_group(name) {
+        println!("  IOMMU Group    : {}", iommu.group_id);
+        println!("    Members      : {}", iommu.members.join("  "));
+        if iommu.members.len() > 1 {
+            println!("    ⚠  Multiple devices share this IOMMU group.");
+            println!("       For DPDK/VFIO passthrough all members must be bound to vfio-pci.");
+        }
+        println!();
+    }
+
+    // ── XDP dispatchers linked to this interface ──────────────────────────────
+    let dispatchers = list_xdp_dispatchers();
+    let mine: Vec<_> = dispatchers
+        .iter()
+        .filter(|d| d.iface.as_deref() == Some(name))
+        .collect();
+    if !mine.is_empty() {
+        println!("  XDP Dispatchers (libxdp, /sys/fs/bpf/xdp/)");
+        for d in &mine {
+            println!("    dispatch-{}-{}", d.prog_id, d.link_id);
+            for slot in &d.slots {
+                println!("      {slot}");
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+// ─── BPF filesystem ───────────────────────────────────────────────────────────
+
+fn run_bpf_fs() -> Result<(), CliError> {
+    let objects = scan_bpf_fs();
+
+    println!("BPF Filesystem — /sys/fs/bpf/");
+    println!("{}", "═".repeat(56));
+    println!();
+
+    if objects.is_empty() {
+        println!("  (no pinned BPF objects found — /sys/fs/bpf/ is empty or not mounted)");
+        println!();
+        println!("  Tip: mount -t bpf bpf /sys/fs/bpf/ to enable BPF filesystem.");
+        return Ok(());
+    }
+
+    let dirs: Vec<&str> = objects
+        .iter()
+        .filter(|o| o.is_dir)
+        .map(|o| o.path.as_str())
+        .collect();
+    let files: Vec<&str> = objects
+        .iter()
+        .filter(|o| !o.is_dir)
+        .map(|o| o.path.as_str())
+        .collect();
+
+    println!("  Pinned objects : {}", files.len());
+    println!("  Directories    : {}", dirs.len());
+    println!();
+
+    if !files.is_empty() {
+        println!("  Pinned BPF objects (programs / maps):");
+        for path in &files {
+            // Strip the /sys/fs/bpf/ prefix for brevity.
+            let display = path.strip_prefix("/sys/fs/bpf/").unwrap_or(path);
+            println!("    {display}");
+        }
+        println!();
+    }
+
+    if !dirs.is_empty() {
+        println!("  Directories:");
+        for path in &dirs {
+            let display = path.strip_prefix("/sys/fs/bpf/").unwrap_or(path);
+            println!("    {display}/");
+        }
+        println!();
+    }
+
+    println!("  Tip: use 'bpftool prog list' or 'bpftool map list' for full details.");
+    Ok(())
+}
+
+// ─── network namespace enumeration ────────────────────────────────────────────
+
+fn run_netns() -> Result<(), CliError> {
+    let namespaces = list_network_namespaces();
+
+    println!("Network Namespaces");
+    println!("{}", "═".repeat(56));
+    println!();
+
+    if namespaces.is_empty() {
+        println!("  (no namespaces found — /proc not accessible)");
+        return Ok(());
+    }
+
+    println!(
+        "  Found {} distinct network namespace(s)\n",
+        namespaces.len()
+    );
+
+    for ns in &namespaces {
+        let label = if ns.is_host {
+            "HOST namespace".to_string()
+        } else {
+            format!("namespace  inode:{}", ns.inode)
+        };
+        println!("  ┌─ {label}");
+        println!("  │  inode      : {}", ns.inode);
+
+        // Show up to 5 representative processes.
+        let shown_pids: Vec<String> = ns
+            .pids
+            .iter()
+            .zip(ns.comms.iter())
+            .take(5)
+            .map(|(pid, comm)| format!("{pid}({comm})"))
+            .collect();
+        let extra = if ns.pids.len() > 5 {
+            format!(" +{} more", ns.pids.len() - 5)
+        } else {
+            String::new()
+        };
+        println!("  │  processes  : {}{extra}", shown_pids.join("  "));
+
+        // Interfaces visible in this namespace.
+        if ns.interfaces.is_empty() {
+            println!("  │  interfaces : (none readable)");
+        } else {
+            println!("  │  interfaces : {}", ns.interfaces.join("  "));
+        }
+
+        // XDP info (host namespace only via sysfs).
+        if !ns.xdp_per_iface.is_empty() {
+            for (iface, ids) in &ns.xdp_per_iface {
+                let id_strs: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+                println!("  │  XDP        : {iface}  prog_ids={}", id_strs.join(","));
+            }
+        } else if ns.is_host {
+            println!("  │  XDP        : no programs attached on host interfaces");
+        } else {
+            println!("  │  XDP        : (requires nsenter to read prog IDs)");
+        }
+
+        // AF_XDP sockets.
+        if !ns.afxdp_per_iface.is_empty() {
+            for (iface, cnt) in &ns.afxdp_per_iface {
+                println!("  │  AF_XDP     : {iface}  sockets={cnt}");
+            }
+        }
+
+        println!("  └─");
+        println!();
     }
 
     Ok(())
