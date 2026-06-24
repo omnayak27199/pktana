@@ -929,22 +929,108 @@ pub mod inner {
                     .unwrap_or_default()
                     .trim()
                     .to_string();
-                let uptime = std::fs::read_to_string("/proc/uptime").unwrap_or_default();
-                let up_secs = uptime.split_whitespace().next().unwrap_or("0");
+                let uptime_raw = std::fs::read_to_string("/proc/uptime").unwrap_or_default();
+                let up_secs = uptime_raw.split_whitespace().next().unwrap_or("0");
                 let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
-                let mut mem_total = "0";
+                let mut mem_total = 0u64;
+                let mut mem_free = 0u64;
+                let mut mem_avail = 0u64;
+                let mut mem_buffers = 0u64;
+                let mut mem_cached = 0u64;
                 for line in meminfo.lines() {
-                    if line.starts_with("MemTotal:") {
-                        mem_total = line.split_whitespace().nth(1).unwrap_or("0");
-                        break;
+                    let mut parts = line.split_whitespace();
+                    match parts.next() {
+                        Some("MemTotal:") => {
+                            mem_total = parts.next().unwrap_or("0").parse().unwrap_or(0)
+                        }
+                        Some("MemFree:") => {
+                            mem_free = parts.next().unwrap_or("0").parse().unwrap_or(0)
+                        }
+                        Some("MemAvailable:") => {
+                            mem_avail = parts.next().unwrap_or("0").parse().unwrap_or(0)
+                        }
+                        Some("Buffers:") => {
+                            mem_buffers = parts.next().unwrap_or("0").parse().unwrap_or(0)
+                        }
+                        Some("Cached:") => {
+                            mem_cached = parts.next().unwrap_or("0").parse().unwrap_or(0)
+                        }
+                        _ => {}
                     }
                 }
+                // CPU info
+                let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+                let cpu_cores = cpuinfo
+                    .lines()
+                    .filter(|l| l.starts_with("processor"))
+                    .count();
+                let cpu_model = cpuinfo
+                    .lines()
+                    .find(|l| l.starts_with("model name"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                // Load average
+                let loadavg = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+                let load_parts: Vec<&str> = loadavg.split_whitespace().collect();
+                let load1 = load_parts.first().unwrap_or(&"0");
+                let load5 = load_parts.get(1).unwrap_or(&"0");
+                let load15 = load_parts.get(2).unwrap_or(&"0");
+                // Disk usage on /
+                let df_out = std::process::Command::new("df")
+                    .args(["-k", "/"])
+                    .output()
+                    .ok();
+                let (disk_total, disk_used, disk_free) = df_out
+                    .and_then(|o| {
+                        let s = String::from_utf8_lossy(&o.stdout).to_string();
+                        s.lines().nth(1).map(|l| {
+                            let p: Vec<&str> = l.split_whitespace().collect();
+                            (
+                                p.get(1).unwrap_or(&"0").parse::<u64>().unwrap_or(0),
+                                p.get(2).unwrap_or(&"0").parse::<u64>().unwrap_or(0),
+                                p.get(3).unwrap_or(&"0").parse::<u64>().unwrap_or(0),
+                            )
+                        })
+                    })
+                    .unwrap_or((0, 0, 0));
+                // OS release
+                let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+                let os_name = os_release
+                    .lines()
+                    .find(|l| l.starts_with("PRETTY_NAME="))
+                    .map(|l| {
+                        l.trim_start_matches("PRETTY_NAME=")
+                            .trim_matches('"')
+                            .to_string()
+                    })
+                    .unwrap_or_default();
                 let json = format!(
-                    r#"{{"hostname":"{}","version":"{}","uptime_sec":{},"mem_total_kb":{}}}"#,
+                    concat!(
+                        r#"{{"hostname":"{}","version":"{}","uptime_sec":{},"#,
+                        r#""mem_total_kb":{},"mem_free_kb":{},"mem_avail_kb":{},"mem_buffers_kb":{},"mem_cached_kb":{},"#,
+                        r#""cpu_cores":{},"cpu_model":"{}","#,
+                        r#""load1":{},"load5":{},"load15":{},"#,
+                        r#""disk_total_kb":{},"disk_used_kb":{},"disk_free_kb":{},"#,
+                        r#""os_name":"{}"}}"#
+                    ),
                     escape_json(&hostname),
                     escape_json(&version),
                     up_secs,
-                    mem_total
+                    mem_total,
+                    mem_free,
+                    mem_avail,
+                    mem_buffers,
+                    mem_cached,
+                    cpu_cores,
+                    escape_json(&cpu_model),
+                    load1,
+                    load5,
+                    load15,
+                    disk_total,
+                    disk_used,
+                    disk_free,
+                    escape_json(&os_name)
                 );
                 let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
                 let _ = stream.write_all(response.as_bytes());
@@ -1415,6 +1501,146 @@ pub mod inner {
                 } else {
                     let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n");
                 }
+            } else if request.starts_with("GET /api/hw?iface=") {
+                let start = "GET /api/hw?iface=".len();
+                let end = request[start..].find(' ').unwrap_or(0) + start;
+                let iface = decode_url(&request[start..end]);
+                let bridge = pktana_core::hw::get_bridge_info(&iface);
+                let bridge_port = pktana_core::hw::get_bridge_port_info(&iface);
+                let bond = pktana_core::hw::get_bond_info(&iface);
+                let ptp = pktana_core::hw::get_ptp_clocks(&iface);
+                let iommu = pktana_core::hw::get_iommu_group(&iface);
+                let bridge_json = if let Some(b) = &bridge {
+                    let ports_json = b
+                        .ports
+                        .iter()
+                        .map(|p| format!("\"{}\"", escape_json(p)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        r#"{{"bridge_id":"{}","stp":{},"vlan_filter":{},"ageing_jiffies":{},"ports":[{}]}}"#,
+                        escape_json(&b.bridge_id),
+                        b.stp_enabled,
+                        b.vlan_filtering,
+                        b.ageing_time_jiffies,
+                        ports_json
+                    )
+                } else {
+                    "null".to_string()
+                };
+                let bridge_port_json = if let Some(bp) = &bridge_port {
+                    format!(
+                        r#"{{"bridge":"{}","stp_state":{},"stp_label":"{}","port_id":"{}","path_cost":{},"hairpin":{},"learning":{}}}"#,
+                        escape_json(&bp.bridge),
+                        bp.stp_state,
+                        escape_json(pktana_core::hw::stp_state_label(bp.stp_state)),
+                        escape_json(&bp.port_id),
+                        bp.path_cost,
+                        bp.hairpin,
+                        bp.learning
+                    )
+                } else {
+                    "null".to_string()
+                };
+                let bond_json = if let Some(bo) = &bond {
+                    let slaves_json = bo
+                        .slaves
+                        .iter()
+                        .map(|s| format!("\"{}\"", escape_json(s)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        r#"{{"mode":"{}","active_slave":"{}","slaves":[{}],"miimon":{},"link_failures":{}}}"#,
+                        escape_json(&bo.mode),
+                        escape_json(bo.active_slave.as_deref().unwrap_or("")),
+                        slaves_json,
+                        bo.miimon,
+                        bo.link_failures
+                    )
+                } else {
+                    "null".to_string()
+                };
+                let ptp_json = ptp.iter().map(|p| {
+                    format!(r#"{{"device":"{}","clock_name":"{}","max_adj_ppb":{},"n_extts":{},"n_periodic":{}}}"#,
+                        escape_json(&p.device), escape_json(&p.clock_name), p.max_adj_ppb, p.n_extts, p.n_periodic_outputs)
+                }).collect::<Vec<_>>().join(",");
+                let iommu_json = if let Some(ig) = &iommu {
+                    let members_json = ig
+                        .members
+                        .iter()
+                        .map(|m| format!("\"{}\"", escape_json(m)))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        r#"{{"group_id":{},"members":[{}]}}"#,
+                        ig.group_id, members_json
+                    )
+                } else {
+                    "null".to_string()
+                };
+                let json = format!(
+                    r#"{{"bridge":{},"bridge_port":{},"bond":{},"ptp":[{}],"iommu":{}}}"#,
+                    bridge_json, bridge_port_json, bond_json, ptp_json, iommu_json
+                );
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/bpf ") {
+                let objs = pktana_core::dp::scan_bpf_fs();
+                let dispatchers = pktana_core::dp::list_xdp_dispatchers();
+                let objs_json = objs
+                    .iter()
+                    .map(|o| {
+                        format!(
+                            r#"{{"path":"{}","is_dir":{}}}"#,
+                            escape_json(&o.path),
+                            o.is_dir
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let disp_json = dispatchers
+                    .iter()
+                    .map(|d| {
+                        let slots_json = d
+                            .slots
+                            .iter()
+                            .map(|s| format!("\"{}\"", escape_json(s)))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        format!(
+                            r#"{{"prog_id":{},"link_id":{},"dir":"{}","slots":[{}],"iface":"{}"}}"#,
+                            d.prog_id,
+                            d.link_id,
+                            escape_json(&d.dir),
+                            slots_json,
+                            escape_json(d.iface.as_deref().unwrap_or(""))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let json = format!(
+                    r#"{{"pinned":[{}],"xdp_dispatchers":[{}]}}"#,
+                    objs_json, disp_json
+                );
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/ns ") {
+                let namespaces = pktana_core::dp::list_network_namespaces();
+                let ns_json = namespaces.iter().map(|ns| {
+                    let pids_json = ns.pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",");
+                    let comms_json = ns.comms.iter().map(|c| format!("\"{}\"", escape_json(c))).collect::<Vec<_>>().join(",");
+                    let ifaces_json = ns.interfaces.iter().map(|i| format!("\"{}\"", escape_json(i))).collect::<Vec<_>>().join(",");
+                    let afxdp_json = ns.afxdp_per_iface.iter().map(|(k, v)| format!("\"{}\":{}", escape_json(k), v)).collect::<Vec<_>>().join(",");
+                    let xdp_json = ns.xdp_per_iface.iter().map(|(k, v)| {
+                        let ids = v.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                        format!("\"{}\":[{}]", escape_json(k), ids)
+                    }).collect::<Vec<_>>().join(",");
+                    format!(r#"{{"inode":{},"is_host":{},"pids":[{}],"comms":[{}],"interfaces":[{}],"afxdp":{{{}}}, "xdp":{{{}}}}}"#,
+                        ns.inode, ns.is_host, pids_json, comms_json, ifaces_json, afxdp_json, xdp_json)
+                }).collect::<Vec<_>>().join(",");
+                let json = format!(r#"[{}]"#, ns_json);
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", json.len(), json);
+                let _ = stream.write_all(response.as_bytes());
             } else if request.starts_with("GET /api/geoip?ip=") {
                 let start = "GET /api/geoip?ip=".len();
                 let end = request[start..].find(' ').unwrap_or(0) + start;
@@ -2050,21 +2276,27 @@ pub mod inner {
         .card:hover { border-color:var(--border-hi); }
         .card-title { font-weight:700; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px; font-size:10px; color:var(--text-muted); letter-spacing:0.07em; text-transform:uppercase; }
         .kv-list { display:flex; flex-direction:column; gap:0; font-size:12px; }
-        .kv-item { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid rgba(24,40,64,0.6); padding:4px 0; }
+        .kv-item { display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid rgba(24,40,64,0.6); padding:5px 0; min-width:0; }
         .kv-item:last-child { border-bottom:none; }
         .kv-item:hover { border-bottom-color:var(--border-hi); }
-        .kv-item strong { font-weight:600; color:var(--text-muted); font-size:11px; flex-shrink:0; margin-right:8px; white-space:nowrap; }
-        .kv-item span { font-family:'Consolas','Courier New',monospace; color:var(--text-main); text-align:right; word-break:break-all; font-size:11px; }
+        .kv-item span { font-weight:600; color:var(--text-muted); font-size:11px; flex-shrink:0; white-space:nowrap; }
+        .kv-item strong { font-family:'Consolas','Courier New',monospace; color:var(--text-main); text-align:right; word-break:break-word; font-size:11px; flex:1; min-width:0; overflow:hidden; }
 
         /* ── Hardware panel ── */
-        #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:11px 13px; display:flex; flex-direction:column; gap:9px; }
-        #hardware .card { padding:9px 12px; }
-        #hardware .card-title { font-size:9px; padding-bottom:5px; margin-bottom:7px; }
-        #hardware .kv-list { gap:0; font-size:11px; }
-        #hardware .kv-item { padding:2px 0; }
-        #hardware .hw-section { margin:7px 0 3px; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); font-weight:700; border-top:1px solid var(--border); padding-top:5px; }
+        #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
+        #hardware .hw-top-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; align-items:start; }
+        #hardware .hw-ethtool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0 24px; margin-top:4px; }
+        #hardware .card { padding:10px 13px; }
+        #hardware .card-title { font-size:10px; padding-bottom:6px; margin-bottom:8px; }
+        #hardware .kv-list { gap:0; font-size:12px; }
+        #hardware .kv-item { padding:3px 0; }
+        #hardware .kv-item strong { font-size:11px; min-width:110px; }
+        #hardware .kv-item span { font-size:11px; }
+        #hardware .hw-section { margin:8px 0 3px; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); font-weight:700; border-top:1px solid var(--border); padding-top:5px; }
         #hardware .hw-section:first-child { border-top:none; margin-top:0; padding-top:0; }
-        #hardware .hw-feat { font-size:11px; line-height:1.65; color:var(--text-muted); word-break:break-word; padding:1px 0; font-family:'Consolas','Courier New',monospace; }
+        #hardware .hw-feat { font-size:11px; line-height:1.7; color:var(--text-muted); word-break:break-word; padding:1px 0; font-family:'Consolas','Courier New',monospace; }
+        @media (max-width:900px) { #hardware .hw-top-grid { grid-template-columns:1fr 1fr; } #hardware .hw-ethtool-grid { grid-template-columns:1fr 1fr; } }
+        @media (max-width:600px) { #hardware .hw-top-grid { grid-template-columns:1fr; } #hardware .hw-ethtool-grid { grid-template-columns:1fr; } }
 
         /* ── Settings table ── */
         .settings-table { width:100%; border-collapse:collapse; font-size:12px; }
@@ -2271,16 +2503,110 @@ pub mod inner {
         async function loadServerInfo() {
             try {
                 const res = await fetch('/api/server_info');
-                const data = await res.json();
-                const formatBytes = (b) => { const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; };
-                const formatUptime = (s) => { s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sc=s%60; return (d?d+'d ':'')+(h?h+'h ':'')+(m?m+'m ':'')+sc+'s'; };
-                const kvRow = (k,v) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #334155;"><strong>${k}:</strong><span>${v}</span></div>`;
+                const d = await res.json();
+                const fmtKB = (kb) => { let b=kb*1024; const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<3){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; };
+                const fmtUp = (s) => { s=Math.floor(s); const dy=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sc=s%60; return (dy?dy+'d ':'')+(h?h+'h ':'')+(m?m+'m ':'')+sc+'s'; };
+                const memUsed = d.mem_total_kb - d.mem_avail_kb;
+                const memPct = Math.round(memUsed / d.mem_total_kb * 100);
+                const diskPct = d.disk_total_kb > 0 ? Math.round(d.disk_used_kb / d.disk_total_kb * 100) : 0;
+                const bar = (pct, col='var(--primary)') => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:72px;height:4px;background:var(--border);border-radius:3px;flex-shrink:0;"><span style="display:block;width:${pct}%;height:100%;background:${col};border-radius:3px;"></span></span><span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">${pct}%</span></span>`;
+                const memCol = memPct > 85 ? 'var(--danger)' : memPct > 65 ? 'var(--warning)' : 'var(--success)';
+                const diskCol = diskPct > 85 ? 'var(--danger)' : diskPct > 65 ? 'var(--warning)' : 'var(--success)';
                 document.getElementById('serverContent').innerHTML =
-                    kvRow('Hostname', data.hostname) +
-                    kvRow('Kernel Version', data.version) +
-                    kvRow('Uptime', formatUptime(parseFloat(data.uptime_sec))) +
-                    kvRow('Total Memory', formatBytes(parseInt(data.mem_total_kb) * 1024));
-            } catch (e) { document.getElementById('serverContent').innerHTML = 'Error loading server info'; }
+                    kvRow('Hostname', d.hostname) +
+                    kvRow('OS', d.os_name || '—') +
+                    kvRow('Kernel', d.version) +
+                    kvRow('Uptime', fmtUp(parseFloat(d.uptime_sec))) +
+                    kvRow('CPU', `${d.cpu_cores} cores — ${d.cpu_model || '—'}`) +
+                    kvRow('Load Avg', `${d.load1} / ${d.load5} / ${d.load15} (1m/5m/15m)`) +
+                    kvRow('Memory', `${fmtKB(memUsed)} / ${fmtKB(d.mem_total_kb)} ${bar(memPct, memCol)}`) +
+                    kvRow('Mem Available', fmtKB(d.mem_avail_kb)) +
+                    kvRow('Buffers + Cached', fmtKB(d.mem_buffers_kb + d.mem_cached_kb)) +
+                    kvRow('Disk (/)', `${fmtKB(d.disk_used_kb)} / ${fmtKB(d.disk_total_kb)} ${bar(diskPct, diskCol)}`);
+            } catch (e) { document.getElementById('serverContent').innerHTML = 'Error: ' + e.message; }
+        }
+
+        async function loadBpf() {
+            try {
+                const res = await fetch('/api/bpf');
+                const d = await res.json();
+                // Pinned objects tree
+                const objs = d.pinned || [];
+                document.getElementById('bpfObjCount').textContent = `(${objs.length})`;
+                if (objs.length === 0) {
+                    document.getElementById('bpfPinned').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No pinned BPF objects found in /sys/fs/bpf/</span>';
+                } else {
+                    let tree = '';
+                    objs.forEach(o => {
+                        const icon = o.is_dir ? '📁' : '📄';
+                        const depth = (o.path.match(/\//g)||[]).length - 3;
+                        const indent = '&nbsp;'.repeat(Math.max(0, depth) * 4);
+                        const name = o.path.split('/').pop();
+                        tree += `<div style="padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${o.path}">${indent}${icon} <span style="color:${o.is_dir?'var(--info)':'var(--text-main)'};">${name}</span></div>`;
+                    });
+                    document.getElementById('bpfPinned').innerHTML = tree;
+                }
+                // XDP dispatchers
+                const disps = d.xdp_dispatchers || [];
+                document.getElementById('bpfDispCount').textContent = `(${disps.length})`;
+                if (disps.length === 0) {
+                    document.getElementById('bpfDispatchers').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No XDP dispatchers found.</span>';
+                } else {
+                    let html = '<div class="kv-list">';
+                    disps.forEach(d => {
+                        html += `<div class="hw-section">Dispatcher prog_id=${d.prog_id} link_id=${d.link_id}</div>`;
+                        html += kvRow('Interface', d.iface || '—');
+                        html += kvRow('Prog ID', d.prog_id);
+                        html += kvRow('Link ID', d.link_id);
+                        if (d.slots && d.slots.length) html += kvRow('Slots', d.slots.join(', '));
+                    });
+                    html += '</div>';
+                    document.getElementById('bpfDispatchers').innerHTML = html;
+                }
+            } catch (e) {
+                document.getElementById('bpfPinned').innerHTML = 'Error: ' + e.message;
+                document.getElementById('bpfDispatchers').innerHTML = '';
+            }
+        }
+
+        async function loadNs() {
+            try {
+                const res = await fetch('/api/ns');
+                const namespaces = await res.json();
+                if (!namespaces.length) {
+                    document.getElementById('nsContent').innerHTML = '<span style="color:var(--text-muted);font-style:italic;padding:20px;display:block;">No network namespaces detected (root access may be required).</span>';
+                    return;
+                }
+                let html = '<div class="hw-top-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));">';
+                namespaces.forEach(ns => {
+                    const label = ns.is_host ? 'Host namespace' : `Container NS (inode ${ns.inode})`;
+                    const comms = ns.comms.join(', ') || '—';
+                    const ifaces = ns.interfaces.join(', ') || '—';
+                    const pids = ns.pids.slice(0,6).join(', ') + (ns.pids.length > 6 ? ` +${ns.pids.length-6} more` : '');
+                    let xdpRows = '';
+                    for (const [iface, ids] of Object.entries(ns.xdp||{})) {
+                        xdpRows += kvRow('XDP on ' + iface, (ids||[]).join(', ') || '—');
+                    }
+                    let afxdpRows = '';
+                    for (const [iface, cnt] of Object.entries(ns.afxdp||{})) {
+                        afxdpRows += kvRow('AF_XDP on ' + iface, cnt + ' socket(s)');
+                    }
+                    html += `<div class="card">
+                        <div class="card-title">${ns.is_host ? '🌐 ' : '📦 '}${label}</div>
+                        <div class="kv-list">
+                            <div class="hw-section">Processes</div>
+                            ${kvRow('PIDs', pids || '—')}
+                            ${kvRow('Commands', comms)}
+                            <div class="hw-section">Interfaces</div>
+                            ${kvRow('Interfaces', ifaces)}
+                            ${xdpRows ? '<div class="hw-section">XDP Programs</div>' + xdpRows : ''}
+                            ${afxdpRows ? '<div class="hw-section">AF_XDP Sockets</div>' + afxdpRows : ''}
+                        </div>
+                    </div>`;
+                });
+                html += '</div>';
+                document.getElementById('nsContent').innerHTML = html;
+            } catch (e) { document.getElementById('nsContent').innerHTML = 'Error: ' + e.message; }
         }
 
         async function loadInterfaces() {
@@ -2435,7 +2761,7 @@ pub mod inner {
         <!-- Vertical Activity Bar (Left Sidebar) -->
         <div class="activity-bar">
             <div class="activity-icon active" onclick="switchTab('serverinfo')" title="Server Info">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
                     <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
                     <line x1="6" y1="6" x2="6.01" y2="6"></line>
@@ -2444,7 +2770,7 @@ pub mod inner {
                 <div class="icon-label">Server Info</div>
             </div>
             <div class="activity-icon" onclick="switchTab('pcap')" title="PCAP Analyzer">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                     <polyline points="14 2 14 8 20 8"></polyline>
                     <line x1="16" y1="13" x2="8" y2="13"></line>
@@ -2454,7 +2780,7 @@ pub mod inner {
                 <div class="icon-label">PCAP File</div>
             </div>
             <div class="activity-icon" onclick="switchTab('connections')" title="Connections">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="18" cy="5" r="3"></circle>
                     <circle cx="6" cy="12" r="3"></circle>
                     <circle cx="18" cy="19" r="3"></circle>
@@ -2464,14 +2790,14 @@ pub mod inner {
                 <div class="icon-label">Connections</div>
             </div>
             <div class="activity-icon" onclick="switchTab('terminal')" title="Terminal">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="4 17 10 11 4 5"></polyline>
                     <line x1="12" y1="19" x2="20" y2="19"></line>
                 </svg>
                 <div class="icon-label">Terminal</div>
             </div>
             <div class="activity-icon" onclick="switchTab('routes')" title="Routing Table">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="3 6 5 12 3 18"></polyline>
                     <polyline points="21 6 19 12 21 18"></polyline>
                     <line x1="8" y1="6" x2="16" y2="6"></line>
@@ -2481,16 +2807,16 @@ pub mod inner {
                 <div class="icon-label">Routes</div>
             </div>
             <div class="activity-icon" onclick="switchTab('nics')" title="Network Interfaces (NIC Stats)">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="6" width="20" height="12" rx="2"></rect>
-                    <circle cx="8" cy="12" r="1.5" fill="#ff8c42"></circle>
-                    <circle cx="12" cy="12" r="1.5" fill="#ff8c42"></circle>
-                    <circle cx="16" cy="12" r="1.5" fill="#ff8c42"></circle>
+                    <circle cx="8" cy="12" r="1.5" fill="currentColor"></circle>
+                    <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
+                    <circle cx="16" cy="12" r="1.5" fill="currentColor"></circle>
                 </svg>
                 <div class="icon-label">NICs</div>
             </div>
             <div class="activity-icon" onclick="switchTab('geoip')" title="GeoIP Lookup">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff8c42" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"></circle>
                     <line x1="2" y1="12" x2="22" y2="12"></line>
                     <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
@@ -2752,14 +3078,14 @@ pub mod inner {
         <!-- Hardware Panel -->
         <div id="hardware" class="panel">
             <div class="hw-scroll">
-                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">
+                <div class="hw-top-grid">
                     <div class="card"><div class="card-title">Interface Config</div><div class="kv-list" id="ifaceConfig">Select an interface above.</div></div>
                     <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
                     <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
                 </div>
                 <div class="card">
                     <div class="card-title">Ethtool Report</div>
-                    <div id="ethtoolDetail" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:0 20px;">Select an interface above.</div>
+                    <div id="ethtoolDetail" class="hw-ethtool-grid">Select an interface above.</div>
                 </div>
             </div>
         </div>
@@ -2850,6 +3176,7 @@ pub mod inner {
                 </div>
             </div>
         </div>
+
         </div> <!-- Close main-content -->
     </div> <!-- Close vscode-layout -->
 
@@ -3363,6 +3690,8 @@ pub mod inner {
                 if (fitAddon) setTimeout(() => fitAddon.fit(), 100);
                 if (term) term.focus();
             }
+            if (tabId === 'bpf') loadBpf();
+            if (tabId === 'ns') loadNs();
         };
 
         // ─── Multi-session capture API ───────────────────────────────────────
