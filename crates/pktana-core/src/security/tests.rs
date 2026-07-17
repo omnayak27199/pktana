@@ -1,9 +1,19 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::{Mutex, OnceLock};
+
 use crate::dpi::inspect;
 
 use super::*;
+
+/// Global store/config is process-wide; serialize tests that mutate it.
+fn store_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
 
 #[test]
 fn dlp_detects_http_basic() {
@@ -67,6 +77,7 @@ fn idps_signature_sqli() {
 
 #[test]
 fn drop_action_sets_verdict() {
+    let _guard = store_lock();
     clear_security_alerts();
     set_security_config(SecurityConfig {
         dlp_enabled: true,
@@ -90,6 +101,7 @@ fn drop_action_sets_verdict() {
 
 #[test]
 fn policy_rule_overrides_default_action() {
+    let _guard = store_lock();
     clear_security_alerts();
     set_security_config(SecurityConfig {
         dlp_enabled: true,
@@ -126,6 +138,7 @@ fn policy_rule_overrides_default_action() {
 
 #[test]
 fn clear_session_removes_alerts_and_flows() {
+    let _guard = store_lock();
     clear_security_alerts();
     set_security_config(SecurityConfig {
         dlp_enabled: true,
@@ -149,6 +162,7 @@ fn clear_session_removes_alerts_and_flows() {
 
 #[test]
 fn clear_engine_removes_only_that_engine() {
+    let _guard = store_lock();
     clear_security_alerts();
     set_security_config(SecurityConfig {
         dlp_enabled: true,
@@ -164,7 +178,15 @@ fn clear_engine_removes_only_that_engine() {
     dp.ip_dst = Some("8.8.8.8".parse().unwrap());
     dp.risk_score = 90;
     dp.risk_reasons.push("test".into());
-    evaluate_packet(&dp, 1, 100, "eth0", "s1");
+    let result = evaluate_packet(&dp, 1, 100, "eth0", "s1");
+    assert!(
+        result.alerts.iter().any(|a| a.engine == "dlp"),
+        "expected DLP alert in evaluate result"
+    );
+    assert!(
+        result.alerts.iter().any(|a| a.engine == "idps"),
+        "expected IDPS alert in evaluate result"
+    );
     assert!(list_security_alerts(50).iter().any(|a| a.engine == "dlp"));
     assert!(list_security_alerts(50).iter().any(|a| a.engine == "idps"));
 
