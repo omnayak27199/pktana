@@ -15,11 +15,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use pktana_core::{
-    analyze_hex, analyze_hex_file, build_flow_table, format_bytes, get_bond_info, get_bridge_info,
-    get_bridge_port_info, get_ethtool_report, get_iommu_group, get_nic_dataplane, get_nic_info,
-    get_ptp_clocks, hex_dump, inspect, list_connections, list_network_namespaces, list_nics,
-    list_routes, list_xdp_dispatchers, routes_for_iface, sample_packets, scan_bpf_fs,
-    stp_state_label, CaptureConfig, CaptureError, LinuxCaptureEngine, NicInfo, ParseError,
+    analyze_hex, analyze_hex_file, build_flow_table, check_drift, default_baseline_dir,
+    diagnose_path, enrich_bpf_prog_ids, evaluate_packet, format_bytes, get_bond_info,
+    get_bridge_info, get_bridge_port_info, get_ethtool_report, get_iommu_group, get_nic_dataplane,
+    get_nic_info, get_ptp_clocks, get_security_config, hex_dump, inspect, inspect_ebpf_interface,
+    list_connections, list_network_namespaces, list_nics, list_routes, list_xdp_dispatchers,
+    routes_for_iface, sample_packets, scan_bpf_fs, stp_state_label, summarize_ebpf_host,
+    CaptureConfig, CaptureError, IssueSeverity, LinuxCaptureEngine, NicInfo, ParseError,
     ParsedPacket,
 };
 
@@ -115,6 +117,9 @@ fn run() -> Result<(), CliError> {
 
         // ── BPF filesystem — pinned BPF objects in /sys/fs/bpf/ ─────────────
         "bpf" => run_bpf_fs(),
+
+        // ── Unified eBPF inspector (XDP, TC, pinned, namespaces) ───────────
+        "ebpf" => run_ebpf(&args[2..]),
 
         // ── Network namespace enumeration ─────────────────────────────────────
         "ns" | "netns" => run_netns(),
@@ -625,6 +630,34 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
         let dp = inspect(&pkt.data);
 
+        // DLP / IDPS evaluation when engines are enabled
+        let sec_cfg = get_security_config();
+        if sec_cfg.dlp_enabled || sec_cfg.idps_enabled {
+            let sec = evaluate_packet(
+                &dp,
+                pkt.timestamp_sec as u64,
+                bytes as u64,
+                &config.interface,
+                "",
+            );
+            for a in &sec.alerts {
+                let sev_color = match a.severity.as_str() {
+                    "critical" => "\x1b[1;31m",
+                    "high" => "\x1b[1;91m",
+                    "medium" => "\x1b[1;33m",
+                    _ => "\x1b[1;36m",
+                };
+                println!(
+                    "      {sev_color}[{}] {}\x1b[0m {} — {} ({})",
+                    a.engine.to_uppercase(),
+                    a.severity.to_uppercase(),
+                    a.title,
+                    a.detail,
+                    a.verdict
+                );
+            }
+        }
+
         // Flow analysis mode
         if let Some(ref mut analyzer) = analyzer {
             let results = analyzer.analyze_packet(&dp);
@@ -800,6 +833,32 @@ fn run_record(args: &[String]) -> Result<(), CliError> {
         total_bytes += bytes as u64;
 
         let dp = inspect(&pkt.data);
+        let sec_cfg = get_security_config();
+        if sec_cfg.dlp_enabled || sec_cfg.idps_enabled {
+            let sec = evaluate_packet(
+                &dp,
+                pkt.timestamp_sec as u64,
+                bytes as u64,
+                &config.interface,
+                "",
+            );
+            for a in &sec.alerts {
+                let sev_color = match a.severity.as_str() {
+                    "critical" => "\x1b[1;31m",
+                    "high" => "\x1b[1;91m",
+                    "medium" => "\x1b[1;33m",
+                    _ => "\x1b[1;36m",
+                };
+                println!(
+                    "      {sev_color}[{}] {}\x1b[0m {} — {} ({})",
+                    a.engine.to_uppercase(),
+                    a.severity.to_uppercase(),
+                    a.title,
+                    a.detail,
+                    a.verdict
+                );
+            }
+        }
         let proto = dp_proto_label(&dp);
         let src = dp_src_str(&dp);
         let dst = dp_dst_str(&dp);
@@ -2005,7 +2064,13 @@ fn print_usage() {
     println!("{C}INTERFACE & NIC INFO{R} {DIM}(sysfs/procfs){R}");
     println!("  {G}pktana nic{R} {Y}[--json] [IFACE]{R}     List all NICs or detail for one");
     println!("  {G}pktana ethtool{R} {Y}<IFACE>{R}          Driver, link, offloads, queues, IRQ affinity");
-    println!("  {G}pktana dp{R} {Y}<IFACE>{R}               Dataplane: XDP, AF_XDP, DPDK, SR-IOV");
+    println!("  {G}pktana dp{R} {Y}<IFACE> [--baseline save|check]{R}  Dataplane + optional baseline drift check");
+    println!("  {G}pktana ebpf{R} {Y}[IFACE|pinned|ns|dispatchers]{R}  eBPF program inventory & verification");
+    println!("  {G}pktana bpf{R}                      List pinned objects in /sys/fs/bpf/");
+    println!("  {G}pktana ns{R}                       Network namespaces with XDP/AF_XDP");
+    println!(
+        "  {G}pktana hw{R} {Y}<IFACE>{R}               Bridge/bond/PTP/IOMMU hardware profile"
+    );
     println!("  {G}pktana route{R} {Y}[--json] [IFACE]{R}   Full routing table (IPv4 + IPv6)");
     println!();
 
@@ -2355,18 +2420,80 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             println!();
             println!("{B}OUTPUT SECTIONS{R}");
             println!("  Bypass Mode  — detected packet I/O path");
-            println!("  XDP          — attached eBPF program IDs");
+            println!("  XDP          — attached eBPF program IDs and mode (sysfs + ip link)");
+            println!("  XDP dispatchers — libxdp multi-prog pins in /sys/fs/bpf/xdp/");
             println!("  AF_XDP       — count of zero-copy sockets (from /proc/net/xdp)");
             println!("  DPDK/PMD     — vfio/uio binding status and driver name");
             println!("  SR-IOV       — VF/PF role, VF count enabled/total");
             println!("  Queues       — RX / TX / combined queue counts");
-            println!("  PCI          — address, vendor ID, device ID, NUMA node");
+            println!("  PCI          — address, vendor ID, device ID, NUMA node, link speed");
             println!("  HW Offloads  — features currently enabled");
+            println!("  TC BPF       — clsact qdisc and TC-attached BPF program IDs");
             println!("  Guidance     — plain-English interpretation + recommendations");
+            println!();
+            println!("{B}RELATED{R}");
+            println!("  pktana ebpf <IFACE>   — focused eBPF verification for one interface");
+            println!("  pktana bpf            — pinned objects in /sys/fs/bpf/");
             println!();
             println!("{B}EXAMPLES{R}");
             println!("  pktana dp eth0      # check if eth0 is in DPDK/XDP bypass mode");
             println!("  pktana dp ens3f0    # check SR-IOV PF with VFs");
+            println!("{bar}");
+        }
+
+        "ebpf" => {
+            println!("{bar}");
+            println!("{B}  pktana ebpf{R}  —  eBPF program inventory and verification");
+            println!("{bar}");
+            println!();
+            println!("{B}SYNOPSIS{R}");
+            println!("  {Y}pktana ebpf{R}                      Host-wide eBPF summary");
+            println!("  {Y}pktana ebpf <IFACE>{R}               Full eBPF check for one interface");
+            println!("  {Y}pktana ebpf pinned{R}                Pinned objects in /sys/fs/bpf/");
+            println!("  {Y}pktana ebpf dispatchers{R}           libxdp XDP multi-prog dispatchers");
+            println!("  {Y}pktana ebpf ns{R}                    Network namespaces (XDP/AF_XDP)");
+            println!();
+            println!("{B}DESCRIPTION{R}");
+            println!("  Detects XDP, TC BPF, AF_XDP, and pinned BPF objects.");
+            println!("  Uses sysfs, /proc, ip link, tc, and bpftool (when available).");
+            println!();
+            println!("{B}EXAMPLES{R}");
+            println!("  pktana ebpf              # overview of all eBPF activity on host");
+            println!("  pktana ebpf eth0         # verify XDP/TC programs on eth0");
+            println!("  pktana ebpf pinned       # list Cilium/libxdp/tc pins");
+            println!("{bar}");
+        }
+
+        "bpf" => {
+            println!("{bar}");
+            println!("{B}  pktana bpf{R}  —  BPF filesystem pinned object inventory");
+            println!("{bar}");
+            println!();
+            println!("  Scans /sys/fs/bpf/ recursively. Categories: cilium, libxdp, tc, falco, …");
+            println!("  Alias: pktana ebpf pinned");
+            println!("{bar}");
+        }
+
+        "ns" | "netns" => {
+            println!("{bar}");
+            println!("{B}  pktana ns{R}  —  Network namespace enumeration");
+            println!("{bar}");
+            println!();
+            println!(
+                "  Groups /proc/*/ns/net by inode. Host namespace shows XDP prog IDs via sysfs."
+            );
+            println!("  Non-host namespaces show AF_XDP socket counts per interface.");
+            println!("  Alias: pktana ebpf ns · pktana netns");
+            println!("{bar}");
+        }
+
+        "hw" | "hardware" => {
+            println!("{bar}");
+            println!("{B}  pktana hw{R}  —  Extended hardware profile");
+            println!("{bar}");
+            println!();
+            println!("  Bridge/bond/PTP/IOMMU, error counters, XDP dispatchers for one interface.");
+            println!("  Usage: pktana hw <IFACE>");
             println!("{bar}");
         }
 
@@ -2824,7 +2951,7 @@ fn print_doc(cmd: &str) -> Result<(), CliError> {
             eprintln!();
             eprintln!("Available topics:");
             eprintln!(
-                "  capture  record  pcap  inspect  nic  ethtool  dp  route  conn  stats  watch  hex  file  demo  tui  web  geoip"
+                "  capture  record  pcap  inspect  nic  ethtool  dp  ebpf  bpf  ns  hw  route  conn  stats  watch  hex  file  demo  tui  web  geoip"
             );
             return Err(CliError::Usage(format!("unknown help topic '{other}'")));
         }
@@ -3029,12 +3156,61 @@ fn run_ethtool(args: &[String]) -> Result<(), CliError> {
 // ─── dataplane / bypass inspector ────────────────────────────────────────────
 
 fn run_dataplane(args: &[String]) -> Result<(), CliError> {
-    let name = match args.first() {
-        Some(n) => n.as_str(),
-        None => return Err(CliError::Usage("usage: pktana dp <INTERFACE>".into())),
-    };
+    let mut baseline: Option<&str> = None;
+    let mut name: Option<&str> = None;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--baseline" => {
+                i += 1;
+                baseline = args.get(i).map(|s| s.as_str());
+            }
+            other if !other.starts_with('-') => name = Some(other),
+            _ => {}
+        }
+        i += 1;
+    }
+    let name = name.ok_or_else(|| {
+        CliError::Usage("usage: pktana dp <INTERFACE> [--baseline save|check]".into())
+    })?;
+
+    if let Some(action) = baseline {
+        let dir = default_baseline_dir();
+        match action {
+            "save" => {
+                let snap = pktana_core::capture_snapshot(name)?;
+                let path = dir.join(format!("{name}.json"));
+                pktana_core::save_snapshot(&path, &snap)?;
+                println!("Saved baseline for {name} → {}", path.display());
+                return Ok(());
+            }
+            "check" => {
+                let baseline_path = dir.join(format!("{name}.json"));
+                if !baseline_path.exists() {
+                    println!("No baseline for {name} — run: pktana dp {name} --baseline save");
+                    return Ok(());
+                }
+                let (_, diffs) = check_drift(&dir, name)?;
+                if diffs.is_empty() {
+                    println!("✓ No drift on {name}");
+                } else {
+                    println!("DRIFT on {name} ({} field(s)):", diffs.len());
+                    for d in &diffs {
+                        println!("  {} : {} → {}", d.field, d.old_value, d.new_value);
+                    }
+                }
+                return Ok(());
+            }
+            other => {
+                return Err(CliError::Usage(format!(
+                    "unknown --baseline action '{other}' — use save or check"
+                )));
+            }
+        }
+    }
 
     let dp = get_nic_dataplane(name)?;
+    let ebpf = inspect_ebpf_interface(name).ok();
 
     println!("Dataplane Profile — {name}");
     println!("{}", "═".repeat(56));
@@ -3045,16 +3221,27 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
     println!();
 
     // ── XDP ──────────────────────────────────────────────────────────────────
-    if dp.xdp_prog_ids.is_empty() {
+    let xdp_ids = ebpf
+        .as_ref()
+        .map(|r| r.xdp_prog_ids.clone())
+        .filter(|ids| !ids.is_empty())
+        .unwrap_or_else(|| dp.xdp_prog_ids.clone());
+    let xdp_mode = ebpf
+        .as_ref()
+        .and_then(|r| r.xdp_mode.clone())
+        .or_else(|| dp.xdp_mode.clone());
+
+    if xdp_ids.is_empty() {
         println!("  XDP            : not attached");
     } else {
-        let ids: Vec<String> = dp.xdp_prog_ids.iter().map(|id| id.to_string()).collect();
-        let mode_str = dp.xdp_mode.as_deref().unwrap_or("unknown");
+        let ids: Vec<String> = xdp_ids.iter().map(|id| id.to_string()).collect();
+        let mode_str = xdp_mode.as_deref().unwrap_or("unknown");
         println!(
             "  XDP            : ATTACHED  (prog IDs: {}  mode: {})",
             ids.join(", "),
             mode_str
         );
+        print_bpf_prog_details("    ", &xdp_ids);
     }
 
     // ── XDP dispatchers (libxdp multi-prog, pinned in /sys/fs/bpf/xdp/) ─────
@@ -3182,7 +3369,33 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
 
     // ── TC / BPF ─────────────────────────────────────────────────────────────
     println!("  TC BPF");
-    if !dp.tc_clsact {
+    if let Some(ref report) = ebpf {
+        if !report.tc.clsact && report.tc.prog_ids.is_empty() {
+            println!("    clsact qdisc  : not detected");
+        } else {
+            println!(
+                "    clsact qdisc  : {}",
+                if report.tc.clsact {
+                    "PRESENT"
+                } else {
+                    "unknown"
+                }
+            );
+            if report.tc.prog_ids.is_empty() {
+                println!("    BPF filters   : none resolved");
+            } else {
+                let dirs = if report.tc.directions.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    report.tc.directions.join(", ")
+                };
+                println!("    BPF filters   : {dirs}");
+                let ids: Vec<String> = report.tc.prog_ids.iter().map(|id| id.to_string()).collect();
+                println!("    prog IDs      : {}", ids.join(", "));
+                print_bpf_prog_details("    ", &report.tc.prog_ids);
+            }
+        }
+    } else if !dp.tc_clsact {
         println!("    clsact qdisc  : not present");
     } else {
         println!("    clsact qdisc  : PRESENT");
@@ -3193,8 +3406,55 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
             if !dp.tc_bpf_prog_ids.is_empty() {
                 let ids: Vec<String> = dp.tc_bpf_prog_ids.iter().map(|id| id.to_string()).collect();
                 println!("    prog IDs      : {}", ids.join(", "));
+                print_bpf_prog_details("    ", &dp.tc_bpf_prog_ids);
             }
         }
+    }
+
+    if let Some(ref report) = ebpf {
+        let prog_pins: Vec<_> = report
+            .pinned_matches
+            .iter()
+            .filter(|p| p.kind == "xdp" || p.kind == "tc")
+            .collect();
+        let map_pins: Vec<_> = report
+            .pinned_matches
+            .iter()
+            .filter(|p| p.kind == "map")
+            .collect();
+        if !prog_pins.is_empty() || !map_pins.is_empty() {
+            println!();
+            println!(
+                "  Pinned BPF     : {} program(s), {} map(s) correlated (role: {})",
+                prog_pins.len(),
+                map_pins.len(),
+                report.iface_kind
+            );
+            for pin in prog_pins {
+                let id = pin
+                    .prog_id
+                    .map(|i| format!("id {i}"))
+                    .unwrap_or_else(|| "id ?".to_string());
+                println!(
+                    "    [{kind}] {name}  {id}",
+                    kind = pin.kind,
+                    name = pin.pin_name
+                );
+            }
+            for pin in map_pins {
+                println!("    [map] {}", pin.pin_name);
+            }
+        }
+    }
+
+    let ebpf_active = ebpf.as_ref().map(|r| r.ebpf_active()).unwrap_or_else(|| {
+        !dp.xdp_prog_ids.is_empty()
+            || (!dp.tc_bpf_prog_ids.is_empty() && dp.tc_clsact)
+            || dp.afxdp_sockets > 0
+    });
+    if ebpf_active {
+        println!();
+        println!("  eBPF Status    : ACTIVE on this interface");
     }
 
     println!();
@@ -3204,7 +3464,11 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
     match dp.bypass_mode {
         pktana_core::BypassMode::KernelStack => {
             println!("    Packets are processed by the Linux kernel network stack.");
-            println!("    To enable zero-copy: load an AF_XDP program or bind to DPDK.");
+            if ebpf_active {
+                println!("    TC/XDP eBPF hooks may still inspect or modify traffic in-kernel.");
+            } else {
+                println!("    To enable zero-copy: load an AF_XDP program or bind to DPDK.");
+            }
         }
         pktana_core::BypassMode::Xdp => {
             println!("    An XDP eBPF program is intercepting packets at the driver.");
@@ -3220,6 +3484,24 @@ fn run_dataplane(args: &[String]) -> Result<(), CliError> {
         }
         pktana_core::BypassMode::Hybrid => {
             println!("    XDP and AF_XDP are both active — hybrid zero-copy path.");
+        }
+    }
+
+    if let Ok(diag) = diagnose_path(name) {
+        if !diag.issues.is_empty() || !diag.recommendations.is_empty() {
+            println!();
+            println!("  Diagnostics");
+            for issue in &diag.issues {
+                let sev = match issue.severity {
+                    IssueSeverity::Critical => "CRIT",
+                    IssueSeverity::Warning => "WARN",
+                    IssueSeverity::Info => "INFO",
+                };
+                println!("    [{sev}] {} — {}", issue.code, issue.message);
+            }
+            for rec in &diag.recommendations {
+                println!("    → {rec}");
+            }
         }
     }
 
@@ -3381,10 +3663,256 @@ fn run_hw(args: &[String]) -> Result<(), CliError> {
     Ok(())
 }
 
+// ─── BPF / eBPF helpers ───────────────────────────────────────────────────────
+
+fn print_bpf_prog_details(indent: &str, ids: &[u32]) {
+    if ids.is_empty() {
+        return;
+    }
+    let details = enrich_bpf_prog_ids(ids);
+    let has_meta = details
+        .iter()
+        .any(|d| d.name.is_some() || d.prog_type.is_some() || d.tag.is_some());
+    if !has_meta {
+        return;
+    }
+    for d in details {
+        let name = d.name.as_deref().unwrap_or("—");
+        let ptype = d.prog_type.as_deref().unwrap_or("—");
+        let tag = d.tag.as_deref().unwrap_or("—");
+        println!(
+            "{indent}prog {id}: name={name}  type={ptype}  tag={tag}",
+            id = d.id
+        );
+    }
+}
+
+fn run_ebpf(args: &[String]) -> Result<(), CliError> {
+    match args.first().map(|s| s.as_str()) {
+        None => run_ebpf_summary(),
+        Some("pinned") | Some("fs") => run_bpf_fs(),
+        Some("ns") | Some("netns") => run_netns(),
+        Some("dispatchers") | Some("xdp-dispatchers") => run_ebpf_dispatchers(),
+        Some("help") | Some("--help") | Some("-h") => {
+            print_doc("ebpf")?;
+            Ok(())
+        }
+        Some(iface) => run_ebpf_iface(iface),
+    }
+}
+
+fn run_ebpf_summary() -> Result<(), CliError> {
+    let summary = summarize_ebpf_host();
+
+    println!("eBPF Host Summary");
+    println!("{}", "═".repeat(56));
+    println!();
+    println!("  Pinned objects     : {}", summary.pinned_objects);
+    println!("  XDP dispatchers    : {}", summary.xdp_dispatchers);
+    println!("  Network namespaces : {}", summary.network_namespaces);
+    println!();
+
+    if !summary.pinned_categories.is_empty() {
+        println!("  Pinned by category:");
+        let mut cats: Vec<_> = summary.pinned_categories.iter().collect();
+        cats.sort_by_key(|(k, _)| k.as_str());
+        for (cat, count) in cats {
+            println!("    {cat:<12} {count}");
+        }
+        println!();
+    }
+
+    if summary.interfaces_with_xdp.is_empty() {
+        println!("  XDP attachments    : none detected");
+    } else {
+        println!("  XDP attachments:");
+        for (iface, ids) in &summary.interfaces_with_xdp {
+            let id_str: Vec<String> = ids.iter().map(|i| i.to_string()).collect();
+            println!("    {iface:<16} prog_ids={}", id_str.join(","));
+        }
+    }
+    println!();
+
+    if summary.interfaces_with_tc_bpf.is_empty() {
+        println!("  TC BPF attachments : none detected");
+    } else {
+        println!("  TC BPF attachments:");
+        for (iface, tc) in &summary.interfaces_with_tc_bpf {
+            println!(
+                "    {iface:<16} directions={}  prog_ids={}",
+                tc.directions.join(","),
+                tc.prog_ids
+                    .iter()
+                    .map(|i| i.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
+    }
+
+    println!();
+    println!("  Commands:");
+    println!("    pktana ebpf <IFACE>       Full eBPF check for one interface");
+    println!("    pktana ebpf pinned        List /sys/fs/bpf/ pinned objects");
+    println!("    pktana ebpf dispatchers   List libxdp XDP dispatchers");
+    println!("    pktana ebpf ns            Network namespace XDP/AF_XDP map");
+    Ok(())
+}
+
+fn run_ebpf_iface(name: &str) -> Result<(), CliError> {
+    let report = inspect_ebpf_interface(name).map_err(CliError::Io)?;
+
+    println!("eBPF Check — {name}");
+    println!("{}", "═".repeat(56));
+    println!();
+
+    let all_prog_ids = report.all_prog_ids();
+
+    println!(
+        "  Status         : {}",
+        if report.ebpf_active() {
+            "eBPF ACTIVE"
+        } else {
+            "no eBPF programs detected"
+        }
+    );
+    println!("  Interface kind : {}", report.iface_kind);
+    println!();
+
+    if report.xdp_prog_ids.is_empty() {
+        println!("  XDP            : not attached (sysfs/ip/bpftool)");
+    } else {
+        let mode = report.xdp_mode.as_deref().unwrap_or("unknown");
+        println!(
+            "  XDP            : {} program(s)  mode={mode}",
+            report.xdp_prog_ids.len()
+        );
+        print_bpf_prog_details("    ", &report.xdp_prog_ids);
+    }
+
+    let dispatchers = list_xdp_dispatchers();
+    let mine: Vec<_> = dispatchers
+        .iter()
+        .filter(|d| d.iface.as_deref() == Some(name))
+        .collect();
+    if !mine.is_empty() {
+        println!("  XDP dispatchers:");
+        for d in &mine {
+            println!(
+                "    dispatch-{}-{}  slots: {}",
+                d.prog_id,
+                d.link_id,
+                d.slots.join("  ")
+            );
+        }
+    }
+
+    println!();
+    if !report.tc.clsact && report.tc.prog_ids.is_empty() {
+        println!("  TC BPF         : not detected");
+    } else if report.tc.prog_ids.is_empty() {
+        println!("  TC BPF         : clsact/hooks present, no prog IDs resolved");
+    } else {
+        let dirs = if report.tc.directions.is_empty() {
+            "unknown".to_string()
+        } else {
+            report.tc.directions.join(", ")
+        };
+        println!(
+            "  TC BPF         : {} program(s) on {dirs}",
+            report.tc.prog_ids.len()
+        );
+        print_bpf_prog_details("    ", &report.tc.prog_ids);
+    }
+
+    if !report.bpftool_attachments.is_empty() {
+        println!("  bpftool net    :");
+        for att in &report.bpftool_attachments {
+            let id = att
+                .prog_id
+                .map(|i| i.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let mode = att.mode.as_deref().unwrap_or("");
+            let name = att.prog_name.as_deref().unwrap_or("");
+            println!(
+                "    [{hook}] id={id} {mode} {name}",
+                hook = att.hook,
+                mode = if mode.is_empty() { "" } else { mode },
+                name = name
+            );
+        }
+    }
+
+    let prog_pins: Vec<_> = report
+        .pinned_matches
+        .iter()
+        .filter(|p| p.kind == "xdp" || p.kind == "tc")
+        .collect();
+    let map_pins: Vec<_> = report
+        .pinned_matches
+        .iter()
+        .filter(|p| p.kind == "map")
+        .collect();
+    if !prog_pins.is_empty() || !map_pins.is_empty() {
+        println!("  Pinned in /sys/fs/bpf/ (correlated by interface role):");
+        for pin in &prog_pins {
+            let id = pin
+                .prog_id
+                .map(|i| format!("id {i}"))
+                .unwrap_or_else(|| "id ?".to_string());
+            println!(
+                "    [{kind}] {name}  {id}",
+                kind = pin.kind,
+                name = pin.pin_name
+            );
+        }
+        for pin in &map_pins {
+            println!("    [map] {}", pin.pin_name);
+        }
+    }
+
+    if report.afxdp_sockets > 0 {
+        println!("  AF_XDP         : {} socket(s)", report.afxdp_sockets);
+    }
+
+    if !all_prog_ids.is_empty() {
+        println!();
+        println!("  Verification:");
+        println!("    bpftool net show dev {name}");
+        println!("    bpftool prog show id <ID>");
+    }
+
+    Ok(())
+}
+
+fn run_ebpf_dispatchers() -> Result<(), CliError> {
+    let dispatchers = list_xdp_dispatchers();
+
+    println!("XDP Dispatchers — /sys/fs/bpf/xdp/");
+    println!("{}", "═".repeat(56));
+    println!();
+
+    if dispatchers.is_empty() {
+        println!("  (no libxdp dispatchers found)");
+        return Ok(());
+    }
+
+    for d in &dispatchers {
+        let iface = d.iface.as_deref().unwrap_or("—");
+        println!("  dispatch-{}-{}  iface={iface}", d.prog_id, d.link_id);
+        if !d.slots.is_empty() {
+            println!("    slots: {}", d.slots.join("  "));
+        }
+        println!("    path : {}", d.dir);
+    }
+    Ok(())
+}
+
 // ─── BPF filesystem ───────────────────────────────────────────────────────────
 
 fn run_bpf_fs() -> Result<(), CliError> {
     let objects = scan_bpf_fs();
+    let dispatchers = list_xdp_dispatchers();
 
     println!("BPF Filesystem — /sys/fs/bpf/");
     println!("{}", "═".repeat(56));
@@ -3397,41 +3925,53 @@ fn run_bpf_fs() -> Result<(), CliError> {
         return Ok(());
     }
 
-    let dirs: Vec<&str> = objects
-        .iter()
-        .filter(|o| o.is_dir)
-        .map(|o| o.path.as_str())
-        .collect();
-    let files: Vec<&str> = objects
-        .iter()
-        .filter(|o| !o.is_dir)
-        .map(|o| o.path.as_str())
-        .collect();
+    let dirs: Vec<_> = objects.iter().filter(|o| o.is_dir).collect();
+    let files: Vec<_> = objects.iter().filter(|o| !o.is_dir).collect();
 
     println!("  Pinned objects : {}", files.len());
     println!("  Directories    : {}", dirs.len());
+    println!("  XDP dispatchers: {}", dispatchers.len());
     println!();
+
+    let mut categories: HashMap<String, usize> = HashMap::new();
+    for obj in &files {
+        let key = obj.category.clone().unwrap_or_else(|| "other".to_string());
+        *categories.entry(key).or_insert(0) += 1;
+    }
+    if !categories.is_empty() {
+        println!("  By category:");
+        let mut cats: Vec<_> = categories.iter().collect();
+        cats.sort_by_key(|(k, _)| k.as_str());
+        for (cat, count) in cats {
+            println!("    {cat:<12} {count}");
+        }
+        println!();
+    }
 
     if !files.is_empty() {
         println!("  Pinned BPF objects (programs / maps):");
-        for path in &files {
-            // Strip the /sys/fs/bpf/ prefix for brevity.
-            let display = path.strip_prefix("/sys/fs/bpf/").unwrap_or(path);
-            println!("    {display}");
+        for obj in &files {
+            let display = obj.path.strip_prefix("/sys/fs/bpf/").unwrap_or(&obj.path);
+            let cat = obj
+                .category
+                .as_deref()
+                .map(|c| format!("[{c}] "))
+                .unwrap_or_default();
+            println!("    {cat}{display}");
         }
         println!();
     }
 
-    if !dirs.is_empty() {
-        println!("  Directories:");
-        for path in &dirs {
-            let display = path.strip_prefix("/sys/fs/bpf/").unwrap_or(path);
-            println!("    {display}/");
+    if !dispatchers.is_empty() {
+        println!("  libxdp dispatchers:");
+        for d in &dispatchers {
+            let iface = d.iface.as_deref().unwrap_or("—");
+            println!("    dispatch-{}-{}  iface={iface}", d.prog_id, d.link_id);
         }
         println!();
     }
 
-    println!("  Tip: use 'bpftool prog list' or 'bpftool map list' for full details.");
+    println!("  Tip: use 'bpftool prog list' or 'pktana ebpf <IFACE>' for attachment details.");
     Ok(())
 }
 

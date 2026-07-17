@@ -4,9 +4,14 @@
 pub mod inner {
     use dashmap::DashMap;
     use pktana_core::{
-        build_socket_process_map, geoip_lookup_str, get_ethtool_report, get_nic_dataplane,
-        get_nic_info, hex_dump, inspect, list_connections, list_nics, list_routes,
-        list_xdp_dispatchers, CaptureConfig, LinuxCaptureEngine, ProcessInfo, SocketId,
+        build_socket_process_map, clear_security_alerts, clear_security_engine,
+        clear_security_for_interface, clear_security_for_session, evaluate_packet, geoip_lookup_str,
+        get_ethtool_report,
+        get_nic_dataplane, get_nic_info, get_security_config, hex_dump, inspect,
+        inspect_ebpf_interface, list_connections, list_network_namespaces, list_nics, list_routes,
+        list_security_alerts, list_security_flows, list_security_interfaces, list_security_rules,
+        list_xdp_dispatchers, security_stats, set_security_config, CaptureConfig,
+        LinuxCaptureEngine, ProcessInfo, SocketId,
     };
     use std::io::{Read, Write};
     use std::net::{IpAddr, TcpListener};
@@ -889,7 +894,143 @@ pub mod inner {
         if let Ok(bytes_read) = stream.read(&mut buffer) {
             let request = String::from_utf8_lossy(&buffer[..bytes_read]);
 
-            if request.starts_with("GET /api/interfaces ") {
+            if request.starts_with("GET /api/security/config ") {
+                let cfg = get_security_config();
+                let json = serde_json::to_string(&cfg).unwrap_or_else(|_| "{}".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("POST /api/security/config") {
+                let body_start = request.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+                let body = &request[body_start..];
+                let prev = get_security_config();
+                let mut cfg = prev.clone();
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+                    if let Some(b) = v.get("dlp_enabled").and_then(|x| x.as_bool()) {
+                        cfg.dlp_enabled = b;
+                    }
+                    if let Some(b) = v.get("idps_enabled").and_then(|x| x.as_bool()) {
+                        cfg.idps_enabled = b;
+                    }
+                    if let Some(s) = v.get("dlp_action").and_then(|x| x.as_str()) {
+                        cfg.dlp_action = s.to_string();
+                        cfg.dlp_mode = s.to_string();
+                    } else if let Some(s) = v.get("dlp_mode").and_then(|x| x.as_str()) {
+                        cfg.dlp_action = s.to_string();
+                        cfg.dlp_mode = s.to_string();
+                    }
+                    if let Some(s) = v.get("idps_action").and_then(|x| x.as_str()) {
+                        cfg.idps_action = s.to_string();
+                        cfg.idps_mode = s.to_string();
+                    } else if let Some(s) = v.get("idps_mode").and_then(|x| x.as_str()) {
+                        cfg.idps_action = s.to_string();
+                        cfg.idps_mode = s.to_string();
+                    }
+                    if let Some(s) = v.get("redirect_target").and_then(|x| x.as_str()) {
+                        cfg.redirect_target = s.to_string();
+                    }
+                    if let Some(ra) = v.get("rule_actions").and_then(|x| x.as_object()) {
+                        cfg.rule_actions.clear();
+                        for (k, val) in ra {
+                            if let Some(a) = val.as_str() {
+                                cfg.rule_actions.insert(k.clone(), a.to_string());
+                            }
+                        }
+                    }
+                    if let Some(rules) = v.get("policy_rules").and_then(|x| x.as_array()) {
+                        cfg.policy_rules = rules
+                            .iter()
+                            .filter_map(|r| serde_json::from_value(r.clone()).ok())
+                            .collect();
+                    }
+                }
+                cfg.normalize();
+                // When an engine is turned off, clear its logs so the UI does not keep stale alerts.
+                if prev.dlp_enabled && !cfg.dlp_enabled {
+                    clear_security_engine("dlp");
+                }
+                if prev.idps_enabled && !cfg.idps_enabled {
+                    clear_security_engine("idps");
+                }
+                set_security_config(cfg.clone());
+                let json = serde_json::to_string(&cfg).unwrap_or_else(|_| "{}".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/security/alerts") {
+                let alerts = list_security_alerts(500);
+                let json = serde_json::to_string(&alerts).unwrap_or_else(|_| "[]".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/security/flows") {
+                let engine = if request.contains("engine=dlp") {
+                    Some("dlp")
+                } else if request.contains("engine=idps") {
+                    Some("idps")
+                } else {
+                    None
+                };
+                let iface = request
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| {
+                        q.split('&').find_map(|pair| {
+                            let (k, v) = pair.split_once('=')?;
+                            if k == "iface" {
+                                Some(decode_url(v))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .filter(|s| !s.is_empty());
+                let flows = list_security_flows(engine, iface.as_deref(), 500);
+                let json = serde_json::to_string(&flows).unwrap_or_else(|_| "[]".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/security/rules ") {
+                let rules = list_security_rules();
+                let json = serde_json::to_string(&rules).unwrap_or_else(|_| "[]".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/security/stats ") {
+                let stats = security_stats();
+                let json = serde_json::to_string(&stats).unwrap_or_else(|_| "{}".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/security/interfaces") {
+                let ifaces = list_security_interfaces();
+                let json = serde_json::to_string(&ifaces).unwrap_or_else(|_| "[]".into());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("POST /api/security/clear ") {
+                clear_security_alerts();
+                let json = r#"{"ok":true}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    json.len(), json
+                );
+                let _ = stream.write_all(response.as_bytes());
+            } else if request.starts_with("GET /api/interfaces ") {
                 let ifaces = LinuxCaptureEngine::list_interfaces().unwrap_or_default();
                 let mut json = String::from("[");
                 for (i, iface) in ifaces.iter().enumerate() {
@@ -1134,7 +1275,15 @@ pub mod inner {
                 if let Some(end) = path.find(' ') {
                     let session_id = &path[..end];
 
-                    if SESSIONS.remove(session_id).is_some() {
+                    if let Some((_, session)) = SESSIONS.remove(session_id) {
+                        clear_security_for_session(session_id);
+                        let iface = session.interface.clone();
+                        let others_on_iface = SESSIONS
+                            .iter()
+                            .any(|entry| entry.value().interface == iface);
+                        if !others_on_iface && !iface.is_empty() {
+                            clear_security_for_interface(&iface);
+                        }
                         let json = r#"{"success":true}"#;
                         let response = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1319,18 +1468,44 @@ pub mod inner {
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let iface = decode_url(&request[start..end]);
                 if let Ok(dp) = get_nic_dataplane(&iface) {
+                    let ebpf = inspect_ebpf_interface(&iface).ok();
                     let bypass = format!("{}", dp.bypass_mode);
                     let driver = dp.userspace_driver.as_deref().unwrap_or("");
-                    let xdp_ids: Vec<String> =
-                        dp.xdp_prog_ids.iter().map(|i| i.to_string()).collect();
-                    let xdp_mode = dp.xdp_mode.as_deref().unwrap_or("");
-                    let tc_dirs = dp.tc_bpf_directions.join(", ");
-                    let tc_ids = dp
-                        .tc_bpf_prog_ids
-                        .iter()
-                        .map(|i| i.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
+
+                    let (xdp_prog_ids, xdp_mode_str) = if let Some(ref r) = ebpf {
+                        (
+                            r.xdp_prog_ids.clone(),
+                            r.xdp_mode.as_deref().unwrap_or("").to_string(),
+                        )
+                    } else {
+                        (
+                            dp.xdp_prog_ids.clone(),
+                            dp.xdp_mode.as_deref().unwrap_or("").to_string(),
+                        )
+                    };
+                    let xdp_ids: Vec<String> = xdp_prog_ids.iter().map(|i| i.to_string()).collect();
+
+                    let (tc_clsact, tc_dirs, tc_ids) = if let Some(ref r) = ebpf {
+                        (
+                            r.tc.clsact,
+                            r.tc.directions.join(", "),
+                            r.tc.prog_ids
+                                .iter()
+                                .map(|i| i.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    } else {
+                        (
+                            dp.tc_clsact,
+                            dp.tc_bpf_directions.join(", "),
+                            dp.tc_bpf_prog_ids
+                                .iter()
+                                .map(|i| i.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    };
                     let pci_link = format!(
                         "{} {}",
                         dp.pci_link_speed.as_deref().unwrap_or("—"),
@@ -1373,31 +1548,158 @@ pub mod inner {
                     } else {
                         String::new()
                     };
+
+                    let ebpf_active = ebpf.as_ref().map(|r| r.ebpf_active()).unwrap_or(false);
+                    let iface_kind = ebpf
+                        .as_ref()
+                        .map(|r| r.iface_kind.as_str())
+                        .unwrap_or("unknown");
+
+                    let pinned_json = ebpf
+                        .as_ref()
+                        .map(|r| {
+                            r.pinned_matches
+                                .iter()
+                                .map(|p| {
+                                    format!(
+                                        r#"{{"name":"{}","kind":"{}","path":"{}","prog_id":{}}}"#,
+                                        escape_json(&p.pin_name),
+                                        escape_json(&p.kind),
+                                        escape_json(&p.path),
+                                        p.prog_id
+                                            .map(|i| i.to_string())
+                                            .unwrap_or_else(|| "null".into())
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default();
+
+                    let bpftool_json = ebpf
+                        .as_ref()
+                        .map(|r| {
+                            r.bpftool_attachments
+                                .iter()
+                                .map(|a| {
+                                    format!(
+                                        r#"{{"hook":"{}","mode":"{}","prog_id":{},"prog_name":"{}","raw":"{}"}}"#,
+                                        escape_json(&a.hook),
+                                        escape_json(a.mode.as_deref().unwrap_or("")),
+                                        a.prog_id
+                                            .map(|i| i.to_string())
+                                            .unwrap_or_else(|| "null".into()),
+                                        escape_json(a.prog_name.as_deref().unwrap_or("")),
+                                        escape_json(&a.raw_line)
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        })
+                        .unwrap_or_default();
+
+                    let dispatchers_json = dispatchers
+                        .iter()
+                        .filter(|d| d.iface.as_deref() == Some(iface.as_str()))
+                        .map(|d| {
+                            let slots = d
+                                .slots
+                                .iter()
+                                .map(|s| format!("\"{}\"", escape_json(s)))
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            format!(
+                                r#"{{"prog_id":{},"link_id":{},"dir":"{}","slots":[{}],"iface":"{}"}}"#,
+                                d.prog_id,
+                                d.link_id,
+                                escape_json(&d.dir),
+                                slots,
+                                escape_json(d.iface.as_deref().unwrap_or(""))
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",");
+
+                    let ns_match = list_network_namespaces()
+                        .into_iter()
+                        .find(|ns| ns.interfaces.iter().any(|i| i == &iface));
+                    let (ns_inode, ns_is_host, ns_label) = ns_match
+                        .as_ref()
+                        .map(|ns| {
+                            (
+                                ns.inode,
+                                ns.is_host,
+                                if ns.is_host {
+                                    "host".to_string()
+                                } else {
+                                    format!("inode:{}", ns.inode)
+                                },
+                            )
+                        })
+                        .unwrap_or((0, true, String::new()));
+                    let ns_xdp = ns_match
+                        .as_ref()
+                        .and_then(|ns| {
+                            ns.xdp_per_iface
+                                .iter()
+                                .find(|(i, _)| i == &iface)
+                                .map(|(_, ids)| {
+                                    ids.iter()
+                                        .map(|i| i.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(",")
+                                })
+                        })
+                        .unwrap_or_default();
+                    let ns_afxdp = ns_match
+                        .as_ref()
+                        .and_then(|ns| {
+                            ns.afxdp_per_iface
+                                .iter()
+                                .find(|(i, _)| i == &iface)
+                                .map(|(_, cnt)| *cnt)
+                        })
+                        .unwrap_or(0);
+
                     let json = format!(
                         concat!(
-                            r#"{{"bypass_mode":"{bypass}","xdp_prog_ids":"{xdp_ids}","xdp_mode":"{xdp_mode}","#,
-                            r#""xdp_dispatchers":"{xdp_dispatchers}","afxdp_sockets":{afxdp},"#,
+                            r#"{{"bypass_mode":"{bypass}","ebpf_active":{ebpf_active},"iface_kind":"{iface_kind}","#,
+                            r#""xdp_prog_ids":"{xdp_ids}","xdp_mode":"{xdp_mode}","xdp_dispatchers":"{xdp_dispatchers}","#,
+                            r#""xdp_dispatchers_detail":[{dispatchers_json}],"afxdp_sockets":{afxdp},"#,
                             r#""dpdk_bound":{dpdk},"driver":"{driver}","#,
                             r#""tc_clsact":{tc_clsact},"tc_bpf_directions":"{tc_dirs}","tc_bpf_prog_ids":"{tc_ids}","#,
+                            r#""pinned_bpf":[{pinned_json}],"bpftool_net":[{bpftool_json}],"#,
+                            r#""ns_inode":{ns_inode},"ns_is_host":{ns_is_host},"ns_label":"{ns_label}","#,
+                            r#""ns_xdp_ids":"{ns_xdp}","ns_afxdp_sockets":{ns_afxdp},"#,
                             r#""rx_queues":{rx_q},"tx_queues":{tx_q},"combined_queues":{comb_q},"#,
                             r#""pci_address":"{pci_addr}","pci_vendor":"{pci_vendor}","pci_device":"{pci_dev}","#,
                             r#""pci_link":"{pci_link}","pci_max_link":"{pci_max_link}","numa_node":"{numa}","#,
                             r#""sriov":"{sriov}","hw_features_on":"{hw_on}"}}"#
                         ),
+                        ebpf_active = ebpf_active,
+                        iface_kind = iface_kind,
                         bypass = bypass,
                         xdp_ids = if xdp_ids.is_empty() {
                             "None".into()
                         } else {
                             xdp_ids.join(", ")
                         },
-                        xdp_mode = xdp_mode,
+                        xdp_mode = xdp_mode_str,
                         xdp_dispatchers = xdp_dispatchers,
+                        dispatchers_json = dispatchers_json,
                         afxdp = dp.afxdp_sockets,
                         dpdk = dp.dpdk_bound,
                         driver = driver,
-                        tc_clsact = dp.tc_clsact,
+                        tc_clsact = tc_clsact,
                         tc_dirs = tc_dirs,
                         tc_ids = tc_ids,
+                        pinned_json = pinned_json,
+                        bpftool_json = bpftool_json,
+                        ns_inode = ns_inode,
+                        ns_is_host = ns_is_host,
+                        ns_label = escape_json(&ns_label),
+                        ns_xdp = ns_xdp,
+                        ns_afxdp = ns_afxdp,
                         rx_q = dp.rx_queues,
                         tx_q = dp.tx_queues,
                         comb_q = dp.combined_queues,
@@ -1591,9 +1893,10 @@ pub mod inner {
                     .iter()
                     .map(|o| {
                         format!(
-                            r#"{{"path":"{}","is_dir":{}}}"#,
+                            r#"{{"path":"{}","is_dir":{},"category":"{}"}}"#,
                             escape_json(&o.path),
-                            o.is_dir
+                            o.is_dir,
+                            escape_json(o.category.as_deref().unwrap_or(""))
                         )
                     })
                     .collect::<Vec<_>>()
@@ -1819,6 +2122,7 @@ pub mod inner {
 
                     // Clone session_id for use in the packet handler closure
                     let session_id_for_handler = session_id.clone();
+                    let capture_iface = config.interface.clone();
 
                     let handle_pkt = move |pkt: pktana_core::CapturePacket<'_>| -> bool {
                         let dp = inspect(&pkt.data);
@@ -1837,6 +2141,20 @@ pub mod inner {
                                 let _ = write_stream.write_all(flow_msg.as_bytes());
                             }
                         }
+
+                        let ts_sec = pkt.timestamp_sec as u64;
+                        let sec_result = evaluate_packet(
+                            &dp,
+                            ts_sec,
+                            dp.frame_len as u64,
+                            &capture_iface,
+                            session_id_for_handler.as_deref().unwrap_or(""),
+                        );
+                        let sec_alerts = sec_result.alerts.clone();
+                        let sec_json =
+                            serde_json::to_string(&sec_alerts).unwrap_or_else(|_| "[]".into());
+                        let engines_json = serde_json::to_string(&sec_result.engines)
+                            .unwrap_or_else(|_| "[]".into());
 
                         let risk = dp.risk_score;
 
@@ -1897,14 +2215,35 @@ pub mod inner {
                         if app_lc == "dhcp" {
                             tags.push("dhcp-dora");
                         }
+                        if !sec_alerts.is_empty() {
+                            tags.push("security-alert");
+                            if sec_alerts.iter().any(|a| a.engine == "dlp") {
+                                tags.push("dlp-alert");
+                            }
+                            if sec_alerts.iter().any(|a| a.engine == "idps") {
+                                tags.push("idps-alert");
+                            }
+                        }
+                        if sec_result.dropped {
+                            tags.push("security-drop");
+                        }
+                        if sec_result.verdict == "redirect" {
+                            tags.push("security-redirect");
+                        }
+                        if sec_result.verdict == "pass" && !sec_alerts.is_empty() {
+                            tags.push("security-pass");
+                        }
+                        if sec_result.verdict == "quarantine" {
+                            tags.push("security-quarantine");
+                        }
                         let tags_str = tags.join(",");
 
                         // Hex dump: first 128 bytes (8 lines) for on-click display
                         let hex_text = hex_dump(&pkt.data, pkt.data.len().min(128)).join("\n");
 
                         let msg = format!(
-                            "data: {{\"ts_sec\":{}, \"ts_usec\":{}, \"summary\":\"{}\", \"len\": {}, \"risk\": {}, \"category\": \"{}\", \"proto\": \"{}\", \"src\":\"{}\", \"dst\":\"{}\", \"tags\":\"{}\", \"details\":\"{}\", \"hex\":\"{}\"}}\n\n",
-                            pkt.timestamp_sec, pkt.timestamp_usec, escape_json(&dp.one_liner()), dp.frame_len, risk, escape_json(dp.app_category.as_deref().unwrap_or("Unknown")), escape_json(proto), escape_json(&src), escape_json(&dst), tags_str, escape_json(&detail_text), escape_json(&hex_text)
+                            "data: {{\"ts_sec\":{}, \"ts_usec\":{}, \"summary\":\"{}\", \"len\": {}, \"risk\": {}, \"category\": \"{}\", \"proto\": \"{}\", \"src\":\"{}\", \"dst\":\"{}\", \"tags\":\"{}\", \"details\":\"{}\", \"hex\":\"{}\", \"security_alerts\":{}, \"security_verdict\":\"{}\", \"security_flow_key\":\"{}\", \"security_engines\":{}, \"security_dropped\":{}, \"security_redirect\":\"{}\"}}\n\n",
+                            pkt.timestamp_sec, pkt.timestamp_usec, escape_json(&dp.one_liner()), dp.frame_len, risk, escape_json(dp.app_category.as_deref().unwrap_or("Unknown")), escape_json(proto), escape_json(&src), escape_json(&dst), tags_str, escape_json(&detail_text), escape_json(&hex_text), sec_json, escape_json(&sec_result.verdict), escape_json(&sec_result.flow_key), engines_json, sec_result.dropped, escape_json(&sec_result.redirect_target)
                         );
 
                         // Update session stats if session_id is present
@@ -2271,18 +2610,30 @@ pub mod inner {
         .statusbar { background:var(--surface); border-top:1px solid var(--border); padding:5px 16px; font-size:11px; font-weight:600; color:var(--text-muted); display:flex; justify-content:space-between; flex-shrink:0; }
 
         /* ── Cards & kv-lists ── */
-        .grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; padding:14px; overflow:auto; }
-        .card { background:var(--surface); border:1px solid var(--border); padding:14px; border-radius:5px; }
-        .card:hover { border-color:var(--border-hi); }
-        .card-title { font-weight:700; border-bottom:1px solid var(--border); padding-bottom:8px; margin-bottom:10px; font-size:10px; color:var(--text-muted); letter-spacing:0.07em; text-transform:uppercase; }
+        .grid-3 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; padding:14px; }
+        .card { background:var(--surface); border:1px solid var(--border); padding:16px 18px; border-radius:8px; box-shadow:var(--shadow-sm); min-width:0; }
+        .card:hover { border-color:var(--border-hi); box-shadow:var(--shadow); }
+        .card-title { font-weight:700; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:12px; font-size:10px; color:var(--text-muted); letter-spacing:0.07em; text-transform:uppercase; }
+        .card-title-lg { font-size:13px; font-weight:700; color:var(--text-main); letter-spacing:0; text-transform:none; border:none; padding:0; margin:0 0 4px; }
+        .card-subtitle { font-size:12px; color:var(--text-muted); margin-bottom:14px; line-height:1.5; }
+
+        /* ── Server Info layout (fixes grid overlap) ── */
+        .panel-scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:20px 22px 24px; display:flex; flex-direction:column; gap:16px; }
+        .page-header { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; padding-bottom:4px; }
+        .page-header h2 { font-size:18px; font-weight:800; letter-spacing:-0.02em; color:var(--text-main); margin:0; }
+        .page-header p { font-size:12px; color:var(--text-muted); margin:4px 0 0; max-width:520px; line-height:1.55; }
+        .serverinfo-top { display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,340px); gap:16px; align-items:stretch; }
+        .serverinfo-stack { display:flex; flex-direction:column; gap:16px; min-width:0; }
+        @media (max-width:1024px) { .serverinfo-top { grid-template-columns:1fr; } }
+
         .kv-list { display:flex; flex-direction:column; gap:0; font-size:12px; }
-        .kv-item { display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid rgba(24,40,64,0.6); padding:5px 0; min-width:0; }
+        .kv-item { display:flex; justify-content:space-between; align-items:center; gap:8px; border-bottom:1px solid rgba(24,40,64,0.6); padding:6px 0; min-width:0; }
         .kv-item:last-child { border-bottom:none; }
         .kv-item:hover { border-bottom-color:var(--border-hi); }
         .kv-item span { font-weight:600; color:var(--text-muted); font-size:11px; flex-shrink:0; white-space:nowrap; }
         .kv-item strong { font-family:'Consolas','Courier New',monospace; color:var(--text-main); text-align:right; word-break:break-word; font-size:11px; flex:1; min-width:0; overflow:hidden; }
 
-        /* ── Hardware panel ── */
+        /* ── kv-lists (hardware overrides below) ── */
         #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
         #hardware .hw-top-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; align-items:start; }
         #hardware .hw-ethtool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0 24px; margin-top:4px; }
@@ -2312,6 +2663,104 @@ pub mod inner {
         .badge-danger  { background:rgba(239,68,68,0.14); color:var(--danger); border:1px solid rgba(239,68,68,0.28); }
         .badge-warning { background:rgba(245,158,11,0.14); color:var(--warning); border:1px solid rgba(245,158,11,0.28); }
         .badge-info    { background:rgba(56,189,248,0.14); color:var(--info); border:1px solid rgba(56,189,248,0.28); }
+        .badge-critical { background:rgba(220,38,38,0.18); color:#fca5a5; border:1px solid rgba(220,38,38,0.35); }
+
+        /* ── Feature toggles (DLP / IDPS) ── */
+        .security-section { padding:18px 20px; }
+        .feature-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
+        .feature-panel { position:relative; overflow:hidden; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:14px 16px; min-width:0; }
+        .feature-panel::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,var(--primary),var(--info)); opacity:0.35; }
+        .feature-panel.enabled { border-color:rgba(249,115,22,0.35); background:rgba(249,115,22,0.04); }
+        .feature-panel.enabled::before { opacity:1; }
+        .feature-card { position:relative; overflow:hidden; }
+        .feature-card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,var(--primary),var(--info)); opacity:0.6; }
+        .feature-card.enabled::before { opacity:1; }
+        .feature-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+        .feature-icon { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .feature-icon.dlp { background:rgba(56,189,248,0.12); color:var(--info); }
+        .feature-icon.idps { background:rgba(239,68,68,0.12); color:var(--danger); }
+        .feature-title { font-size:13px; font-weight:700; color:var(--text-main); letter-spacing:0; text-transform:none; margin:0; }
+        .feature-desc { font-size:11px; color:var(--text-muted); line-height:1.5; margin-top:4px; }
+        .feature-rules { margin-top:10px; display:flex; flex-wrap:wrap; gap:4px; }
+        .rule-chip { font-size:10px; padding:2px 7px; border-radius:10px; background:var(--surface2); border:1px solid var(--border); color:var(--text-muted); font-family:'Consolas','Courier New',monospace; }
+        .toggle-switch { position:relative; width:44px; height:24px; flex-shrink:0; }
+        .toggle-switch input { opacity:0; width:0; height:0; }
+        .toggle-slider { position:absolute; cursor:pointer; inset:0; background:var(--surface2); border:1px solid var(--border); border-radius:24px; transition:0.2s; }
+        .toggle-slider::before { content:''; position:absolute; height:18px; width:18px; left:2px; bottom:2px; background:var(--text-muted); border-radius:50%; transition:0.2s; }
+        .toggle-switch input:checked + .toggle-slider { background:rgba(249,115,22,0.25); border-color:var(--primary); }
+        .toggle-switch input:checked + .toggle-slider::before { transform:translateX(20px); background:var(--primary); }
+
+        /* ── Sessions card ── */
+        .sessions-card { margin:0; }
+        .sessions-header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+        .sessions-header .card-title { border:none; padding:0; margin:0; flex:1; }
+        .sessions-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+        .session-count-badge { font-size:11px; font-weight:700; padding:3px 10px; border-radius:12px; background:var(--surface2); border:1px solid var(--border); color:var(--text-muted); }
+        .session-count-badge.live { background:rgba(16,185,129,0.12); color:var(--success); border-color:rgba(16,185,129,0.3); }
+        .sessions-empty { text-align:center; padding:48px 24px; color:var(--text-muted); }
+        .sessions-empty-icon { font-size:40px; margin-bottom:12px; opacity:0.5; }
+        .sessions-empty-title { font-size:15px; font-weight:700; color:var(--text-main); margin-bottom:6px; }
+        .sessions-empty-hint { font-size:12px; line-height:1.6; max-width:360px; margin:0 auto 16px; }
+        .sessions-table-wrap { overflow-x:auto; max-height:360px; overflow-y:auto; border-radius:6px; border:1px solid var(--border); background:var(--surface2); }
+        .table-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+        .session-id { font-family:'Consolas','Courier New',monospace; font-size:11px; color:var(--text-muted); }
+        .session-pkts { font-family:'Consolas','Courier New',monospace; font-size:11px; }
+
+        /* ── Security panel ── */
+        #security.panel.active { overflow:hidden; }
+        #security .panel-scroll { gap:14px; }
+        #security .page-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:2px; }
+        #security .page-header h2 { margin:0 0 4px; font-size:20px; letter-spacing:-0.02em; }
+        #security .page-header p { margin:0; max-width:520px; }
+        .sec-status-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+        .sec-status-pill { display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:700; padding:5px 10px; border-radius:999px; border:1px solid var(--border); background:var(--surface2); color:var(--text-muted); }
+        .sec-status-pill.on { background:rgba(16,185,129,0.1); border-color:rgba(16,185,129,0.35); color:#6ee7b7; }
+        .sec-status-pill .dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
+        #security .sec-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:10px; padding:0; }
+        .sec-stat { background:linear-gradient(180deg, var(--surface) 0%, var(--surface2) 100%); border:1px solid var(--border); border-radius:10px; padding:14px 12px; text-align:center; position:relative; overflow:hidden; }
+        .sec-stat::before { content:''; position:absolute; inset:0 0 auto 0; height:2px; background:var(--border); opacity:0.9; }
+        .sec-stat.dlp::before { background:linear-gradient(90deg, transparent, var(--info), transparent); }
+        .sec-stat.idps::before { background:linear-gradient(90deg, transparent, var(--warning), transparent); }
+        .sec-stat.critical::before { background:linear-gradient(90deg, transparent, #f87171, transparent); }
+        .sec-stat.high::before { background:linear-gradient(90deg, transparent, var(--danger), transparent); }
+        .sec-stat-val { font-size:24px; font-weight:800; font-family:'JetBrains Mono','Consolas','Courier New',monospace; line-height:1.15; color:var(--text-main); }
+        .sec-stat-lbl { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.07em; margin-top:6px; font-weight:700; }
+        .sec-stat.critical .sec-stat-val { color:#fca5a5; }
+        .sec-stat.high .sec-stat-val { color:var(--danger); }
+        .sec-stat.dlp .sec-stat-val { color:var(--info); }
+        .sec-stat.idps .sec-stat-val { color:var(--warning); }
+        #securityAlertsBody tr.sev-critical td { border-left:3px solid #dc2626; }
+        #securityAlertsBody tr.sev-high td { border-left:3px solid var(--danger); }
+        #securityAlertsBody tr.sev-medium td { border-left:3px solid var(--warning); }
+        #securityAlertsBody tr.sev-low td { border-left:3px solid var(--info); }
+        .sec-engine { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; padding:2px 6px; border-radius:3px; }
+        .sec-engine.dlp { background:rgba(56,189,248,0.14); color:var(--info); }
+        .sec-engine.idps { background:rgba(239,68,68,0.14); color:var(--danger); }
+        .security-alert-badge { display:inline-block; font-size:9px; font-weight:800; padding:1px 6px; border-radius:8px; background:rgba(220,38,38,0.2); color:#fca5a5; border:1px solid rgba(220,38,38,0.35); margin-right:4px; letter-spacing:0.04em; vertical-align:middle; }
+        .verdict-badge { font-size:9px; font-weight:800; padding:2px 8px; border-radius:10px; text-transform:uppercase; letter-spacing:0.04em; }
+        .verdict-monitor { background:rgba(56,189,248,0.14); color:var(--info); border:1px solid rgba(56,189,248,0.28); }
+        .verdict-pass { background:rgba(16,185,129,0.14); color:var(--success); border:1px solid rgba(16,185,129,0.28); }
+        .verdict-drop { background:rgba(239,68,68,0.18); color:#fca5a5; border:1px solid rgba(239,68,68,0.35); }
+        .verdict-redirect { background:rgba(168,85,247,0.14); color:#c4b5fd; border:1px solid rgba(168,85,247,0.28); }
+        .verdict-quarantine { background:rgba(245,158,11,0.14); color:var(--warning); border:1px solid rgba(245,158,11,0.28); }
+        .sec-sub-nav { display:flex; gap:2px; flex-wrap:wrap; padding:4px; border:1px solid var(--border); border-radius:10px; background:var(--surface2); margin-bottom:6px; }
+        .sec-sub-btn { background:transparent; border:none; border-radius:7px; padding:8px 12px; cursor:pointer; font-size:12px; font-weight:600; color:var(--text-muted); transition:all 0.12s; }
+        .sec-sub-btn:hover { color:var(--text-main); background:rgba(255,255,255,0.03); }
+        .sec-sub-btn.active { color:var(--text-main); background:var(--surface); box-shadow:0 1px 0 rgba(0,0,0,0.25); border:1px solid var(--border); }
+        .sec-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:4px; padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+        .sec-toolbar .hint { font-size:11px; color:var(--text-muted); margin-left:auto; }
+        .sec-sub-panel { display:none; }
+        .sec-sub-panel.active { display:block; }
+        .sec-sub-panel .card { border-radius:10px; }
+        .policy-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px; margin-bottom:14px; }
+        .policy-row { display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap; }
+        .policy-row label { font-size:11px; font-weight:600; color:var(--text-muted); min-width:90px; }
+        .flow-row-click { cursor:pointer; }
+        .flow-row-click:hover td { background:rgba(249,115,22,0.08) !important; }
+        .pkt-dropped td { opacity:0.55; text-decoration:line-through; text-decoration-color:rgba(239,68,68,0.5); }
+        .ws-bg-sec-drop { background-color:#1a0808 !important; }
+        .security-section .feature-panel { border-radius:10px; }
+        .security-section .card-title { letter-spacing:-0.01em; }
 
         /* ── Toast notifications ── */
         #toastContainer { position:fixed; bottom:18px; right:18px; z-index:99999; display:flex; flex-direction:column; gap:6px; pointer-events:none; }
@@ -2422,10 +2871,11 @@ pub mod inner {
         .capture-dot { width:6px; height:6px; border-radius:50%; background:currentColor; }
 
         /* ── NIC iface card ── */
-        .iface-card { border:1px solid var(--border); border-radius:6px; padding:8px 11px; background:var(--surface); cursor:pointer; transition:border-color 0.12s; position:relative; overflow:hidden; }
+        .iface-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:10px; max-height:280px; overflow-y:auto; padding:2px; }
+        .iface-card { border:1px solid var(--border); border-radius:8px; padding:10px 12px; background:var(--surface2); cursor:pointer; transition:border-color 0.12s, box-shadow 0.12s, transform 0.12s; position:relative; overflow:hidden; min-width:0; }
         .iface-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--danger); }
         .iface-card.up::before { background:var(--success); }
-        .iface-card:hover { border-color:var(--border-hi); }
+        .iface-card:hover { border-color:var(--primary); box-shadow:var(--shadow); transform:translateY(-1px); }
         .iface-name   { font-weight:700; color:var(--primary); font-size:13px; font-family:monospace; }
         .iface-desc   { font-size:11px; color:var(--text-muted); margin-top:2px; }
         .iface-status { font-size:10px; font-weight:700; margin-top:3px; display:flex; align-items:center; gap:4px; letter-spacing:0.4px; text-transform:uppercase; }
@@ -2526,89 +2976,6 @@ pub mod inner {
             } catch (e) { document.getElementById('serverContent').innerHTML = 'Error: ' + e.message; }
         }
 
-        async function loadBpf() {
-            try {
-                const res = await fetch('/api/bpf');
-                const d = await res.json();
-                // Pinned objects tree
-                const objs = d.pinned || [];
-                document.getElementById('bpfObjCount').textContent = `(${objs.length})`;
-                if (objs.length === 0) {
-                    document.getElementById('bpfPinned').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No pinned BPF objects found in /sys/fs/bpf/</span>';
-                } else {
-                    let tree = '';
-                    objs.forEach(o => {
-                        const icon = o.is_dir ? '📁' : '📄';
-                        const depth = (o.path.match(/\//g)||[]).length - 3;
-                        const indent = '&nbsp;'.repeat(Math.max(0, depth) * 4);
-                        const name = o.path.split('/').pop();
-                        tree += `<div style="padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${o.path}">${indent}${icon} <span style="color:${o.is_dir?'var(--info)':'var(--text-main)'};">${name}</span></div>`;
-                    });
-                    document.getElementById('bpfPinned').innerHTML = tree;
-                }
-                // XDP dispatchers
-                const disps = d.xdp_dispatchers || [];
-                document.getElementById('bpfDispCount').textContent = `(${disps.length})`;
-                if (disps.length === 0) {
-                    document.getElementById('bpfDispatchers').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No XDP dispatchers found.</span>';
-                } else {
-                    let html = '<div class="kv-list">';
-                    disps.forEach(d => {
-                        html += `<div class="hw-section">Dispatcher prog_id=${d.prog_id} link_id=${d.link_id}</div>`;
-                        html += kvRow('Interface', d.iface || '—');
-                        html += kvRow('Prog ID', d.prog_id);
-                        html += kvRow('Link ID', d.link_id);
-                        if (d.slots && d.slots.length) html += kvRow('Slots', d.slots.join(', '));
-                    });
-                    html += '</div>';
-                    document.getElementById('bpfDispatchers').innerHTML = html;
-                }
-            } catch (e) {
-                document.getElementById('bpfPinned').innerHTML = 'Error: ' + e.message;
-                document.getElementById('bpfDispatchers').innerHTML = '';
-            }
-        }
-
-        async function loadNs() {
-            try {
-                const res = await fetch('/api/ns');
-                const namespaces = await res.json();
-                if (!namespaces.length) {
-                    document.getElementById('nsContent').innerHTML = '<span style="color:var(--text-muted);font-style:italic;padding:20px;display:block;">No network namespaces detected (root access may be required).</span>';
-                    return;
-                }
-                let html = '<div class="hw-top-grid" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr));">';
-                namespaces.forEach(ns => {
-                    const label = ns.is_host ? 'Host namespace' : `Container NS (inode ${ns.inode})`;
-                    const comms = ns.comms.join(', ') || '—';
-                    const ifaces = ns.interfaces.join(', ') || '—';
-                    const pids = ns.pids.slice(0,6).join(', ') + (ns.pids.length > 6 ? ` +${ns.pids.length-6} more` : '');
-                    let xdpRows = '';
-                    for (const [iface, ids] of Object.entries(ns.xdp||{})) {
-                        xdpRows += kvRow('XDP on ' + iface, (ids||[]).join(', ') || '—');
-                    }
-                    let afxdpRows = '';
-                    for (const [iface, cnt] of Object.entries(ns.afxdp||{})) {
-                        afxdpRows += kvRow('AF_XDP on ' + iface, cnt + ' socket(s)');
-                    }
-                    html += `<div class="card">
-                        <div class="card-title">${ns.is_host ? '🌐 ' : '📦 '}${label}</div>
-                        <div class="kv-list">
-                            <div class="hw-section">Processes</div>
-                            ${kvRow('PIDs', pids || '—')}
-                            ${kvRow('Commands', comms)}
-                            <div class="hw-section">Interfaces</div>
-                            ${kvRow('Interfaces', ifaces)}
-                            ${xdpRows ? '<div class="hw-section">XDP Programs</div>' + xdpRows : ''}
-                            ${afxdpRows ? '<div class="hw-section">AF_XDP Sockets</div>' + afxdpRows : ''}
-                        </div>
-                    </div>`;
-                });
-                html += '</div>';
-                document.getElementById('nsContent').innerHTML = html;
-            } catch (e) { document.getElementById('nsContent').innerHTML = 'Error: ' + e.message; }
-        }
-
         async function loadInterfaces() {
             try {
                 const res = await fetch('/api/interfaces');
@@ -2646,21 +3013,761 @@ pub mod inner {
                 const res = await fetch('/api/sessions');
                 const sessions = await res.json();
                 const list = document.getElementById('sessionsList');
+                const badge = document.getElementById('sessionCountBadge');
+                const activeCount = (sessions || []).filter(s => s.status === 'Active').length;
+                if (badge) {
+                    badge.textContent = `${(sessions || []).length} session${sessions.length !== 1 ? 's' : ''}${activeCount ? ` · ${activeCount} live` : ''}`;
+                    badge.classList.toggle('live', activeCount > 0);
+                }
                 if (!sessions || sessions.length === 0) {
-                    list.innerHTML = '<div style="text-align:center; padding:40px; color:var(--text-muted);"><div style="font-size:16px; margin-bottom:10px; font-weight:600;">No Active Sessions</div><div>Click "New Session" to start monitoring an interface.</div></div>';
+                    list.innerHTML = `<div class="sessions-empty">
+                        <div class="sessions-empty-icon">📡</div>
+                        <div class="sessions-empty-title">No Active Sessions</div>
+                        <div class="sessions-empty-hint">Start monitoring by clicking an interface above, or create a new session manually.</div>
+                        <button class="primary-btn" onclick="showCreateSessionDialog()">Create Session</button>
+                    </div>`;
                     return;
                 }
-                let html = '<table style="width:100%;border-collapse:collapse;"><tr style="background:#334155;"><th style="padding:8px;text-align:left;">ID</th><th style="padding:8px;text-align:left;">Interface</th><th style="padding:8px;text-align:left;">Status</th><th style="padding:8px;text-align:left;">Actions</th></tr>';
+                const fmtBytes = (b) => { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; };
+                let html = '<table class="settings-table"><thead><tr><th>Session ID</th><th>Interface</th><th>Status</th><th>Packets</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>';
                 sessions.forEach(s => {
-                    const viewBtn = `<button class="primary-btn" style="padding:4px 12px;font-size:12px;" onclick="viewSession('${s.id}', '${s.interface}')">View</button>`;
-                    const stopBtn = s.status === 'Active' ? `<button class="btn" style="padding:4px 12px;font-size:12px;" onclick="stopSession('${s.id}')">Stop</button>` : '';
-                    const deleteBtn = `<button class="btn" style="padding:4px 12px;font-size:12px;background:#dc2626;color:white;border:none;" onclick="deleteSession('${s.id}')">Delete</button>`;
-                    html += `<tr style="border-bottom:1px solid #334155;"><td style="padding:8px;">${s.id}</td><td style="padding:8px;">${s.interface}</td><td style="padding:8px;"><span style="color:${s.status === 'Active' ? '#10b981' : '#ef4444'};">${s.status}</span></td><td style="padding:8px;white-space:nowrap;">${viewBtn} ${stopBtn} ${deleteBtn}</td></tr>`;
+                    const isActive = s.status === 'Active';
+                    const statusBadge = isActive
+                        ? '<span class="badge badge-success">Active</span>'
+                        : '<span class="badge badge-danger">Stopped</span>';
+                    const viewBtn = `<button class="primary-btn" style="padding:4px 12px;font-size:11px;" onclick="viewSession('${s.id}', '${s.interface}')">View</button>`;
+                    const stopBtn = isActive ? `<button class="btn" style="padding:4px 12px;font-size:11px;" onclick="stopSession('${s.id}')">Stop</button>` : '';
+                    const deleteBtn = `<button class="btn" style="padding:4px 12px;font-size:11px;background:rgba(220,38,38,0.15);color:#fca5a5;border-color:rgba(220,38,38,0.3);" onclick="deleteSession('${s.id}')">Delete</button>`;
+                    html += `<tr>
+                        <td><span class="session-id">${s.id}</span></td>
+                        <td><strong>${s.interface}</strong></td>
+                        <td>${statusBadge}</td>
+                        <td class="session-pkts">${s.packet_count || 0}</td>
+                        <td class="session-pkts">${fmtBytes(s.bytes_captured || 0)}</td>
+                        <td><div class="table-actions">${viewBtn}${stopBtn}${deleteBtn}</div></td>
+                    </tr>`;
                 });
-                html += '</table>';
+                html += '</tbody></table>';
                 list.innerHTML = html;
             } catch (e) { console.error('Error loading sessions:', e); }
         }
+
+        let securityPollTimer = null;
+        let securityConfigCache = null;
+
+        function verdictBadge(v) {
+            const cls = v === 'drop' ? 'verdict-drop' : v === 'pass' ? 'verdict-pass' : v === 'redirect' ? 'verdict-redirect' : v === 'quarantine' ? 'verdict-quarantine' : 'verdict-monitor';
+            return `<span class="verdict-badge ${cls}">${escapeHtml(v || 'monitor')}</span>`;
+        }
+
+        async function loadSecurityConfig() {
+            try {
+                const res = await fetch('/api/security/config');
+                const cfg = await res.json();
+                securityConfigCache = cfg;
+                const dlpToggle = document.getElementById('dlpToggle');
+                const idpsToggle = document.getElementById('idpsToggle');
+                if (dlpToggle) dlpToggle.checked = !!cfg.dlp_enabled;
+                if (idpsToggle) idpsToggle.checked = !!cfg.idps_enabled;
+                const dlpAct = document.getElementById('dlpActionSelect');
+                const idpsAct = document.getElementById('idpsActionSelect');
+                const redirectIn = document.getElementById('redirectTargetInput');
+                if (dlpAct) dlpAct.value = cfg.dlp_action || cfg.dlp_mode || 'monitor';
+                if (idpsAct) idpsAct.value = cfg.idps_action || cfg.idps_mode || 'monitor';
+                if (redirectIn) redirectIn.value = cfg.redirect_target || '';
+                updateSecurityVisibility(cfg);
+                loadSecurityRules(cfg);
+                loadPolicyRules(cfg);
+            } catch (e) { console.error('Security config load failed:', e); }
+        }
+
+        function updateSecurityVisibility(cfg) {
+            const enabled = cfg && (cfg.dlp_enabled || cfg.idps_enabled);
+            const nav = document.getElementById('securityNavIcon');
+            const preview = document.getElementById('securityPreviewCard');
+            const filterGrp = document.getElementById('securityFilterGroup');
+            const dlpCard = document.getElementById('dlpFeatureCard');
+            const idpsCard = document.getElementById('idpsFeatureCard');
+            if (nav) {
+                nav.style.display = '';
+                nav.style.opacity = enabled ? '1' : '0.55';
+                nav.title = enabled ? 'Security (DLP / IDPS)' : 'Security — enable DLP or IDPS in Server Info';
+            }
+            if (preview) preview.style.display = enabled ? '' : 'none';
+            // Always show security protocol filters; optgroup display toggling is unreliable in browsers
+            if (filterGrp) filterGrp.style.display = '';
+            if (dlpCard) dlpCard.classList.toggle('enabled', cfg && cfg.dlp_enabled);
+            if (idpsCard) idpsCard.classList.toggle('enabled', cfg && cfg.idps_enabled);
+            const pillDlp = document.getElementById('secPillDlp');
+            const pillIdps = document.getElementById('secPillIdps');
+            if (pillDlp) {
+                pillDlp.classList.toggle('on', !!(cfg && cfg.dlp_enabled));
+                pillDlp.innerHTML = `<span class="dot"></span>DLP ${cfg && cfg.dlp_enabled ? 'On' : 'Off'}`;
+            }
+            if (pillIdps) {
+                pillIdps.classList.toggle('on', !!(cfg && cfg.idps_enabled));
+                pillIdps.innerHTML = `<span class="dot"></span>IDPS ${cfg && cfg.idps_enabled ? 'On' : 'Off'}`;
+            }
+            if (enabled) {
+                refreshSecurityPanel();
+                if (!securityPollTimer) {
+                    securityPollTimer = setInterval(() => {
+                        const secPanel = document.getElementById('security');
+                        const previewVisible = preview && preview.style.display !== 'none';
+                        if ((secPanel && secPanel.classList.contains('active')) || previewVisible) {
+                            refreshSecurityPanel();
+                        }
+                    }, 3000);
+                }
+            }
+        }
+
+        function showSecuritySub(name) {
+            const map = {
+                alerts: 'secSubAlerts', 'dlp-flows': 'secSubDlpFlows', 'idps-flows': 'secSubIdpsFlows',
+                policy: 'secSubPolicy', interfaces: 'secSubInterfaces',
+                'custom-dlp': 'secSubCustomDlp', 'custom-idps': 'secSubCustomIdps', threat: 'secSubThreat'
+            };
+            const btnMap = {
+                alerts: 'secSubBtnAlerts', 'dlp-flows': 'secSubBtnDlpFlows', 'idps-flows': 'secSubBtnIdpsFlows',
+                policy: 'secSubBtnPolicy', interfaces: 'secSubBtnInterfaces',
+                'custom-dlp': 'secSubBtnCustomDlp', 'custom-idps': 'secSubBtnCustomIdps', threat: 'secSubBtnThreat'
+            };
+            document.querySelectorAll('.sec-sub-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.sec-sub-btn').forEach(b => b.classList.remove('active'));
+            const panel = document.getElementById(map[name]);
+            const btn = document.getElementById(btnMap[name]);
+            if (panel) panel.classList.add('active');
+            if (btn) btn.classList.add('active');
+            if (name === 'dlp-flows') loadSecurityFlows('dlp');
+            if (name === 'idps-flows') loadSecurityFlows('idps');
+            if (name === 'policy') { loadSecurityRules(securityConfigCache); loadPolicyRules(securityConfigCache); }
+            if (name === 'interfaces') loadSecurityInterfaces();
+            if (name === 'custom-dlp') {
+                customDlpDraft = (securityConfigCache && securityConfigCache.dlp_custom_identifiers) ? JSON.parse(JSON.stringify(securityConfigCache.dlp_custom_identifiers)) : [];
+                renderCustomDlpTable();
+                renderBuiltinDlpToggles(securityConfigCache);
+            }
+            if (name === 'custom-idps') {
+                loadCustomIdpsArea(securityConfigCache);
+                renderBuiltinIdpsToggles(securityConfigCache);
+            }
+            if (name === 'threat') loadThreatIntel();
+        }
+
+        async function refreshSecurityPanel() {
+            loadSecurityStats();
+            loadSecurityAlerts(true);
+            loadSecurityFlows('dlp');
+            loadSecurityFlows('idps');
+            loadSecurityInterfaces();
+        }
+
+        async function toggleSecurityFeature(engine, enabled) {
+            const body = engine === 'dlp' ? { dlp_enabled: enabled } : { idps_enabled: enabled };
+            try {
+                const res = await fetch('/api/security/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const cfg = await res.json();
+                securityConfigCache = cfg;
+                updateSecurityVisibility(cfg);
+                refreshSecurityPanel();
+                toast(
+                    enabled
+                        ? `${engine.toUpperCase()} enabled`
+                        : `${engine.toUpperCase()} disabled — ${engine.toUpperCase()} logs cleared`,
+                    enabled ? 'success' : 'info'
+                );
+                if (enabled) switchTab('security');
+            } catch (e) { toast('Failed to update security config: ' + e, 'error'); }
+        }
+
+        async function setEngineAction(engine, action) {
+            const body = engine === 'dlp' ? { dlp_action: action, dlp_mode: action } : { idps_action: action, idps_mode: action };
+            try {
+                const res = await fetch('/api/security/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                securityConfigCache = await res.json();
+                toast(`${engine.toUpperCase()} default action: ${action}`, 'success');
+            } catch (e) { toast('Failed to set action: ' + e, 'error'); }
+        }
+
+        async function setRedirectTarget(target) {
+            try {
+                const res = await fetch('/api/security/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirect_target: target }) });
+                securityConfigCache = await res.json();
+                toast('Redirect target updated', 'info');
+            } catch (e) { toast('Failed to set redirect: ' + e, 'error'); }
+        }
+
+        async function setRuleAction(ruleId, action) {
+            const ra = (securityConfigCache && securityConfigCache.rule_actions) ? { ...securityConfigCache.rule_actions } : {};
+            if (!action || action === 'inherit') {
+                delete ra[ruleId];
+            } else {
+                ra[ruleId] = action;
+            }
+            try {
+                const res = await fetch('/api/security/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule_actions: ra }) });
+                securityConfigCache = await res.json();
+                toast(`Rule ${ruleId}: ${action || 'engine default'}`, 'info');
+            } catch (e) { toast('Failed to set rule action: ' + e, 'error'); }
+        }
+
+        async function loadSecurityStats() {
+            try {
+                const res = await fetch('/api/security/stats');
+                const s = await res.json();
+                const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+                set('statDlp', s.dlp_alerts || 0);
+                set('statIdps', s.idps_alerts || 0);
+                set('statCritical', s.critical || 0);
+                set('statHigh', s.high || 0);
+                set('statDropped', s.dropped || 0);
+                set('statRedirected', s.redirected || 0);
+                set('statScanned', s.packets_scanned || 0);
+            } catch (e) { /* ignore */ }
+        }
+
+        function jumpToSecurityFlow(src, dst, engine) {
+            if (!activeId) {
+                toast('Open a capture window first (pick an interface in Server Info)', 'warn');
+                switchTab('serverinfo');
+                return;
+            }
+            switchTab('dashboard');
+            const filter = document.getElementById('displayFilter');
+            const stream = document.getElementById('streamFilter');
+            if (filter) {
+                const parts = [];
+                if (src) parts.push(src.split(':')[0]);
+                if (dst) parts.push(dst.split(':')[0]);
+                filter.value = parts.join(' ');
+            }
+            if (stream && engine) {
+                stream.value = engine === 'dlp' ? 'dlp_alert' : engine === 'idps' ? 'idps_alert' : 'security_alert';
+            }
+            applyStreamFilter();
+            applyDisplayFilter();
+            document.getElementById('sb-status').textContent = `Filtered to flow ${src} → ${dst}`;
+        }
+
+        function renderSecurityFlowsTable(flows, targetId, engine) {
+            const tbody = document.getElementById(targetId);
+            if (!tbody) return;
+            if (!flows || flows.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No ${engine.toUpperCase()} flows yet. Start capture with ${engine.toUpperCase()} enabled.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = flows.map(f => {
+                const srcEsc = escapeHtml(f.src).replace(/'/g, "\\'");
+                const dstEsc = escapeHtml(f.dst).replace(/'/g, "\\'");
+                const geo = [f.src_country, f.dst_country].filter(Boolean).join(' → ') || '—';
+                return `<tr class="flow-row-click sev-${f.top_severity}" onclick="jumpToSecurityFlow('${srcEsc}','${dstEsc}','${engine}')" title="Click to filter packets for this flow">
+                    <td><code style="font-size:10px">${escapeHtml(f.interface || '—')}</code></td>
+                    <td><code style="font-size:10px">${escapeHtml(f.flow_key.substring(0, 20))}…</code></td>
+                    <td>${escapeHtml(f.protocol)}</td>
+                    <td>${escapeHtml(f.src)}</td>
+                    <td>${escapeHtml(f.dst)}</td>
+                    <td>${escapeHtml(geo)}</td>
+                    <td>${f.alert_count}</td>
+                    <td><code style="font-size:10px">${escapeHtml(f.top_rule)}</code></td>
+                    <td>${verdictBadge(f.verdict)}</td>
+                    <td>${formatBytes(f.bytes || 0)}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function loadSecurityFlows(engine, iface) {
+            try {
+                let url = `/api/security/flows?engine=${engine}`;
+                if (iface) url += `&iface=${encodeURIComponent(iface)}`;
+                const res = await fetch(url);
+                const flows = await res.json();
+                renderSecurityFlowsTable(flows, engine === 'dlp' ? 'dlpFlowsBody' : 'idpsFlowsBody', engine);
+            } catch (e) { console.error('Flow load failed:', e); }
+        }
+
+        function renderPolicyRulesTable(rules) {
+            const tbody = document.getElementById('policyRulesBody');
+            if (!tbody) return;
+            if (!rules || rules.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:24px;color:var(--text-muted);">No conditional policy rules. Add one to match by interface, IP, CIDR, or country.</td></tr>';
+                return;
+            }
+            const actionOpts = ['monitor','pass','drop','redirect','quarantine'];
+            const engineOpts = ['any','dlp','idps'];
+            tbody.innerHTML = rules.map((r, idx) => {
+                const engOpts = engineOpts.map(e => `<option value="${e}" ${r.engine === e ? 'selected' : ''}>${e}</option>`).join('');
+                const actOpts = actionOpts.map(a => `<option value="${a}" ${r.action === a ? 'selected' : ''}>${a}</option>`).join('');
+                return `<tr data-idx="${idx}">
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:70px" value="${escapeHtml(r.name || '')}" onchange="updatePolicyField(${idx}, 'name', this.value)"></td>
+                    <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="updatePolicyField(${idx}, 'enabled', this.checked)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:50px" type="number" value="${r.priority || 0}" onchange="updatePolicyField(${idx}, 'priority', parseInt(this.value)||0)"></td>
+                    <td><select class="form-input" style="font-size:10px;padding:2px 6px" onchange="updatePolicyField(${idx}, 'engine', this.value)">${engOpts}</select></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:70px" placeholder="eth0" value="${escapeHtml(r.interface || '')}" onchange="updatePolicyField(${idx}, 'interface', this.value)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:90px" placeholder="10.0.0.0/8" value="${escapeHtml(r.src_ip || '')}" onchange="updatePolicyField(${idx}, 'src_ip', this.value)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:90px" placeholder="8.8.8.8" value="${escapeHtml(r.dst_ip || '')}" onchange="updatePolicyField(${idx}, 'dst_ip', this.value)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:40px" placeholder="US" value="${escapeHtml(r.src_country || '')}" onchange="updatePolicyField(${idx}, 'src_country', this.value)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:40px" placeholder="CN" value="${escapeHtml(r.dst_country || '')}" onchange="updatePolicyField(${idx}, 'dst_country', this.value)"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:110px" placeholder="rule id" value="${escapeHtml(r.detection_rule || '')}" onchange="updatePolicyField(${idx}, 'detection_rule', this.value)"></td>
+                    <td><select class="form-input" style="font-size:10px;padding:2px 6px" onchange="updatePolicyField(${idx}, 'action', this.value)">${actOpts}</select></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:80px" placeholder="redirect" value="${escapeHtml(r.redirect_target || '')}" onchange="updatePolicyField(${idx}, 'redirect_target', this.value)"></td>
+                    <td><button class="btn" style="font-size:10px;padding:2px 8px" onclick="removePolicyRule(${idx})">✕</button></td>
+                </tr>`;
+            }).join('');
+        }
+
+        let policyRulesDraft = [];
+
+        function loadPolicyRules(cfg) {
+            policyRulesDraft = (cfg && cfg.policy_rules) ? JSON.parse(JSON.stringify(cfg.policy_rules)) : [];
+            renderPolicyRulesTable(policyRulesDraft);
+        }
+
+        function updatePolicyField(idx, field, value) {
+            if (!policyRulesDraft[idx]) return;
+            policyRulesDraft[idx][field] = value;
+        }
+
+        function addPolicyRule() {
+            policyRulesDraft.push({
+                id: 'rule_' + Date.now(),
+                name: 'New rule',
+                enabled: true,
+                priority: 50,
+                engine: 'any',
+                interface: '',
+                src_ip: '',
+                dst_ip: '',
+                src_country: '',
+                dst_country: '',
+                detection_rule: '',
+                action: 'monitor',
+                redirect_target: ''
+            });
+            renderPolicyRulesTable(policyRulesDraft);
+        }
+
+        function removePolicyRule(idx) {
+            policyRulesDraft.splice(idx, 1);
+            renderPolicyRulesTable(policyRulesDraft);
+        }
+
+        async function savePolicyRules() {
+            try {
+                const res = await fetch('/api/security/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policy_rules: policyRulesDraft })
+                });
+                securityConfigCache = await res.json();
+                policyRulesDraft = securityConfigCache.policy_rules || [];
+                renderPolicyRulesTable(policyRulesDraft);
+                toast('Policy rules saved', 'success');
+            } catch (e) { toast('Failed to save policy rules: ' + e, 'error'); }
+        }
+
+        async function loadSecurityInterfaces() {
+            try {
+                const res = await fetch('/api/security/interfaces');
+                const ifaces = await res.json();
+                const tbody = document.getElementById('securityInterfacesBody');
+                if (!tbody) return;
+                if (!ifaces || ifaces.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No per-interface stats yet. Start capture on an interface with DLP/IDPS enabled.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = ifaces.map(i => {
+                    const s = i.stats || {};
+                    return `<tr class="flow-row-click" onclick="filterSecurityByIface('${escapeHtml(i.interface).replace(/'/g, "\\'")}')" title="Click to filter DLP/IDPS flows for this interface">
+                        <td><strong>${escapeHtml(i.interface)}</strong></td>
+                        <td>${s.dlp_alerts || 0}</td>
+                        <td>${s.idps_alerts || 0}</td>
+                        <td>${i.dlp_flows || 0}</td>
+                        <td>${i.idps_flows || 0}</td>
+                        <td>${s.critical || 0}</td>
+                        <td>${s.high || 0}</td>
+                        <td>${s.dropped || 0}</td>
+                        <td>${s.redirected || 0}</td>
+                        <td>${s.packets_scanned || 0}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) { console.error('Interface stats load failed:', e); }
+        }
+
+        function filterSecurityByIface(iface) {
+            showSecuritySub('dlp-flows');
+            loadSecurityFlows('dlp', iface);
+            loadSecurityFlows('idps', iface);
+            toast('Filtered flows to interface: ' + iface, 'info');
+        }
+
+        async function loadSecurityRules(cfg) {
+            try {
+                const res = await fetch('/api/security/rules');
+                const rules = await res.json();
+                const tbody = document.getElementById('securityRulesBody');
+                if (!tbody) return;
+                const ra = (cfg && cfg.rule_actions) ? cfg.rule_actions : {};
+                tbody.innerHTML = rules.map(r => {
+                    const cur = ra[r.rule_id] || 'inherit';
+                    const opts = ['inherit','monitor','pass','drop','redirect','quarantine'].map(a =>
+                        `<option value="${a}" ${cur === a ? 'selected' : ''}>${a === 'inherit' ? 'Engine default' : a}</option>`
+                    ).join('');
+                    return `<tr><td><span class="sec-engine ${r.engine}">${r.engine}</span></td><td><code style="font-size:10px">${escapeHtml(r.rule_id)}</code></td><td>${escapeHtml(r.title)}</td><td>${escapeHtml(r.severity)}</td><td><select class="form-input" style="font-size:11px;padding:4px 8px;" onchange="setRuleAction('${r.rule_id}', this.value === 'inherit' ? '' : this.value)">${opts}</select></td></tr>`;
+                }).join('');
+            } catch (e) { console.error('Rules load failed:', e); }
+        }
+
+        function renderSecurityAlertsTable(alerts, targetId, compact) {
+            const tbody = document.getElementById(targetId);
+            if (!tbody) return;
+            if (!alerts || alerts.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="${compact ? 5 : 11}" style="text-align:center;padding:32px;color:var(--text-muted);">No security alerts yet. Start capture with DLP/IDPS enabled.</td></tr>`;
+                return;
+            }
+            const sevBadge = (s) => {
+                const cls = s === 'critical' ? 'badge-critical' : s === 'high' ? 'badge-danger' : s === 'medium' ? 'badge-warning' : 'badge-info';
+                return `<span class="badge ${cls}">${s}</span>`;
+            };
+            const rows = alerts.slice().reverse().slice(0, compact ? 8 : 500);
+            tbody.innerHTML = rows.map(a => {
+                const ts = new Date(a.ts * 1000).toLocaleTimeString();
+                const eng = `<span class="sec-engine ${a.engine}">${a.engine}</span>`;
+                const srcEsc = escapeHtml(a.src).replace(/'/g, "\\'");
+                const dstEsc = escapeHtml(a.dst).replace(/'/g, "\\'");
+                if (compact) {
+                    return `<tr class="sev-${a.severity} flow-row-click" onclick="jumpToSecurityFlow('${srcEsc}','${dstEsc}','${a.engine}')"><td>${ts}</td><td>${eng}</td><td>${sevBadge(a.severity)}</td><td><strong>${escapeHtml(a.title)}</strong><br><small style="color:var(--text-muted)">${escapeHtml((a.detail || '').substring(0,80))}</small></td><td>${escapeHtml(a.src)} → ${escapeHtml(a.dst)}</td></tr>`;
+                }
+                return `<tr class="sev-${a.severity} flow-row-click" onclick="jumpToSecurityFlow('${srcEsc}','${dstEsc}','${a.engine}')"><td>${ts}</td><td>${eng}</td><td>${sevBadge(a.severity)}</td><td>${verdictBadge(a.verdict || a.action)}</td><td><code style="font-size:10px">${escapeHtml(a.interface || '—')}</code></td><td>${escapeHtml(a.src)}${a.src_country ? ' <span class="badge badge-info">' + escapeHtml(a.src_country) + '</span>' : ''}</td><td>${escapeHtml(a.dst)}${a.dst_country ? ' <span class="badge badge-info">' + escapeHtml(a.dst_country) + '</span>' : ''}</td><td><code style="font-size:10px">${escapeHtml(a.rule_id)}</code></td><td><strong>${escapeHtml(a.title)}</strong></td><td><code style="font-size:10px">${escapeHtml(a.policy_id || '—')}</code></td></tr>`;
+            }).join('');
+        }
+
+        async function loadSecurityAlerts(previewOnly) {
+            try {
+                const res = await fetch('/api/security/alerts');
+                const alerts = await res.json();
+                renderSecurityAlertsTable(alerts, 'securityAlertsBody', false);
+                if (previewOnly || document.getElementById('securityPreviewList')) {
+                    const preview = document.getElementById('securityPreviewList');
+                    if (preview) {
+                        if (!alerts || alerts.length === 0) {
+                            preview.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">No alerts yet — start a capture session.</div>';
+                        } else {
+                            preview.innerHTML = `<table class="settings-table"><thead><tr><th>Time</th><th>Engine</th><th>Severity</th><th>Alert</th><th>Endpoints</th></tr></thead><tbody id="securityPreviewBody"></tbody></table>`;
+                            renderSecurityAlertsTable(alerts, 'securityPreviewBody', true);
+                        }
+                    }
+                }
+            } catch (e) { console.error('Security alerts load failed:', e); }
+        }
+
+        async function clearSecurityAlerts() {
+            if (!confirm('Clear all security alerts?')) return;
+            await fetch('/api/security/clear', { method: 'POST' });
+            loadSecurityStats();
+            loadSecurityAlerts();
+            toast('Security alerts cleared', 'info');
+        }
+
+        // ─── Custom DLP Identifiers ─────────────────────────────────────
+        let customDlpDraft = [];
+
+        function renderCustomDlpTable() {
+            const tbody = document.getElementById('customDlpBody');
+            if (!tbody) return;
+            if (!customDlpDraft.length) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No custom identifiers yet. Click "+ Add Identifier".</td></tr>';
+                return;
+            }
+            const sevOpts = ['low','medium','high','critical'].map(s => `<option value="${s}">${s}</option>`).join('');
+            tbody.innerHTML = customDlpDraft.map((r, i) => `
+                <tr>
+                    <td><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="customDlpDraft[${i}].enabled=this.checked"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:100px" value="${escapeHtml(r.name||'')}" onchange="customDlpDraft[${i}].name=this.value" placeholder="My Rule"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:200px" value="${escapeHtml(r.pattern||'')}" onchange="customDlpDraft[${i}].pattern=this.value" placeholder="regex:pattern or keyword"></td>
+                    <td><input class="form-input" style="font-size:10px;padding:2px 6px;width:80px" value="${escapeHtml(r.category||'custom')}" onchange="customDlpDraft[${i}].category=this.value"></td>
+                    <td><select class="form-input" style="font-size:10px;padding:2px 6px" onchange="customDlpDraft[${i}].severity=this.value">${sevOpts.replace(`value="${r.severity}"`, `value="${r.severity}" selected`)}</select></td>
+                    <td><button class="btn" style="font-size:10px;padding:2px 8px" onclick="customDlpDraft.splice(${i},1);renderCustomDlpTable()">✕</button></td>
+                </tr>`).join('');
+        }
+
+        function addCustomDlpIdentifier() {
+            customDlpDraft.push({ id: 'dlp_custom_' + Date.now(), name: 'New Identifier', pattern: '', category: 'custom', severity: 'high', enabled: true });
+            renderCustomDlpTable();
+        }
+
+        async function saveCustomDlpIdentifiers() {
+            try {
+                const res = await fetch('/api/security/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dlp_custom_identifiers: customDlpDraft }) });
+                securityConfigCache = await res.json();
+                toast('Custom DLP identifiers saved', 'success');
+            } catch(e) { toast('Save failed: ' + e, 'error'); }
+        }
+
+        function renderBuiltinDlpToggles(cfg) {
+            const el = document.getElementById('builtinDlpList');
+            if (!el) return;
+            fetch('/api/security/rules').then(r => r.json()).then(rules => {
+                const dlpRules = rules.filter(r => r.engine === 'dlp');
+                const disabled = (cfg && cfg.dlp_disabled_identifiers) || [];
+                el.innerHTML = dlpRules.map(r => {
+                    const on = !disabled.includes(r.rule_id);
+                    const col = on ? 'var(--success)' : 'var(--text-muted)';
+                    return `<label style="display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;" title="${escapeHtml(r.category)} — ${escapeHtml(r.severity)}">
+                        <input type="checkbox" id="dlpid_${r.rule_id}" ${on ? 'checked' : ''} style="accent-color:var(--primary);">
+                        <span style="color:${col};">${escapeHtml(r.rule_id.replace('dlp_',''))}</span>
+                    </label>`;
+                }).join('');
+            }).catch(() => { el.textContent = 'Failed to load rules.'; });
+        }
+
+        async function saveBuiltinDlpToggles() {
+            const el = document.getElementById('builtinDlpList');
+            if (!el) return;
+            const disabled = [];
+            el.querySelectorAll('input[type=checkbox]').forEach(cb => {
+                if (!cb.checked) {
+                    const id = cb.id.replace('dlpid_', '');
+                    disabled.push(id);
+                }
+            });
+            try {
+                const res = await fetch('/api/security/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dlp_disabled_identifiers: disabled }) });
+                securityConfigCache = await res.json();
+                toast('DLP identifier toggles saved', 'success');
+            } catch(e) { toast('Save failed: ' + e, 'error'); }
+        }
+
+        // ─── Custom IDPS Rules ───────────────────────────────────────────
+        function loadCustomIdpsArea(cfg) {
+            const el = document.getElementById('customIdpsRulesArea');
+            if (el && cfg && cfg.idps_custom_rules) el.value = cfg.idps_custom_rules.join('\n');
+            const ja3el = document.getElementById('ja3BlocklistArea');
+            if (ja3el && cfg && cfg.idps_blocked_ja3) ja3el.value = cfg.idps_blocked_ja3.join('\n');
+        }
+
+        async function saveCustomIdpsRules() {
+            const el = document.getElementById('customIdpsRulesArea');
+            if (!el) return;
+            const lines = el.value.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+            try {
+                const res = await fetch('/api/security/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ idps_custom_rules: lines }) });
+                securityConfigCache = await res.json();
+                toast(`${lines.length} custom IDPS rules saved`, 'success');
+                document.getElementById('idpsRuleValidationMsg').textContent = `✓ ${lines.length} rules active`;
+            } catch(e) { toast('Save failed: ' + e, 'error'); }
+        }
+
+        function validateCustomIdpsRules() {
+            const el = document.getElementById('customIdpsRulesArea');
+            const msg = document.getElementById('idpsRuleValidationMsg');
+            if (!el || !msg) return;
+            const lines = el.value.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+            let ok = 0, fail = 0;
+            lines.forEach(line => {
+                const lower = line.trim().toLowerCase();
+                if (lower.startsWith('alert ') && lower.includes('sid:') && lower.includes('msg:')) ok++;
+                else fail++;
+            });
+            msg.textContent = fail > 0 ? `⚠ ${fail} invalid rule(s), ${ok} valid` : `✓ ${ok} rule(s) valid`;
+            msg.style.color = fail > 0 ? 'var(--warning)' : 'var(--success)';
+        }
+
+        async function saveJa3Blocklist() {
+            const el = document.getElementById('ja3BlocklistArea');
+            if (!el) return;
+            const list = el.value.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#') && /^[a-f0-9]{32}$/i.test(l));
+            try {
+                const res = await fetch('/api/security/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ idps_blocked_ja3: list }) });
+                securityConfigCache = await res.json();
+                toast(`${list.length} JA3 fingerprints saved`, 'success');
+            } catch(e) { toast('Save failed: ' + e, 'error'); }
+        }
+
+        function renderBuiltinIdpsToggles(cfg) {
+            const el = document.getElementById('builtinIdpsList');
+            if (!el) return;
+            fetch('/api/security/rules').then(r => r.json()).then(rules => {
+                const idpsRules = rules.filter(r => r.engine === 'idps' && r.sid > 0);
+                const disabled = (cfg && cfg.idps_disabled_sids) || [];
+                el.innerHTML = idpsRules.map(r => {
+                    const on = !disabled.includes(r.sid);
+                    const col = r.severity === 'critical' ? 'var(--danger)' : r.severity === 'high' ? 'var(--warning)' : 'var(--text-muted)';
+                    return `<label style="display:inline-flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;" title="SID:${r.sid} — ${escapeHtml(r.severity)}">
+                        <input type="checkbox" id="idpssid_${r.sid}" ${on ? 'checked' : ''} style="accent-color:var(--primary);">
+                        <span style="color:${col};">${escapeHtml(r.title.substring(0,40))}</span>
+                    </label>`;
+                }).join('');
+            }).catch(() => { el.textContent = 'Failed to load rules.'; });
+        }
+
+        async function saveBuiltinIdpsToggles() {
+            const el = document.getElementById('builtinIdpsList');
+            if (!el) return;
+            const disabled = [];
+            el.querySelectorAll('input[type=checkbox]').forEach(cb => {
+                if (!cb.checked) {
+                    const sid = parseInt(cb.id.replace('idpssid_',''));
+                    if (!isNaN(sid)) disabled.push(sid);
+                }
+            });
+            try {
+                const res = await fetch('/api/security/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ idps_disabled_sids: disabled }) });
+                securityConfigCache = await res.json();
+                toast('IDPS SID toggles saved', 'success');
+            } catch(e) { toast('Save failed: ' + e, 'error'); }
+        }
+
+        // ─── Threat Intelligence Overview ────────────────────────────────
+        async function loadThreatIntel() {
+            try {
+                const res = await fetch('/api/security/alerts');
+                const alerts = await res.json();
+                renderThreatTimeline(alerts);
+                renderSeverityBars(alerts);
+                renderTopAttackers(alerts);
+                renderTopRules(alerts);
+                renderTopCountries(alerts);
+            } catch(e) { console.error('Threat intel load failed:', e); }
+        }
+
+        function renderThreatTimeline(alerts) {
+            const svg = document.getElementById('secThreatTimeline');
+            if (!svg) return;
+            const recent = (alerts || []).slice(-50);
+            const w = svg.clientWidth || 400;
+            const h = 60;
+            const bw = Math.max(2, Math.floor(w / Math.max(recent.length, 1)) - 1);
+            const colMap = { critical:'#ef4444', high:'#f97316', medium:'#eab308', low:'#3b82f6', info:'#64748b' };
+            svg.innerHTML = recent.map((a, i) => {
+                const col = colMap[a.severity] || '#64748b';
+                const bh = a.severity === 'critical' ? h : a.severity === 'high' ? h*0.75 : a.severity === 'medium' ? h*0.5 : h*0.3;
+                const x = i * (bw + 1);
+                const y = h - bh;
+                return `<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="${col}" opacity="0.85" rx="1" title="${escapeHtml(a.title)}"/>`;
+            }).join('');
+        }
+
+        function renderSeverityBars(alerts) {
+            const el = document.getElementById('secSeverityBars');
+            if (!el) return;
+            const counts = { critical:0, high:0, medium:0, low:0, info:0 };
+            (alerts||[]).forEach(a => { if (counts[a.severity] !== undefined) counts[a.severity]++; });
+            const total = Object.values(counts).reduce((s,v) => s+v, 0) || 1;
+            const colMap = { critical:'var(--danger)', high:'var(--warning)', medium:'#eab308', low:'var(--info)', info:'var(--text-muted)' };
+            el.innerHTML = Object.entries(counts).map(([sev, cnt]) => {
+                const pct = Math.round(cnt / total * 100);
+                return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;">
+                    <span style="width:60px;text-align:right;color:${colMap[sev]};font-weight:700;text-transform:uppercase;">${sev}</span>
+                    <div style="flex:1;background:var(--border);border-radius:3px;height:8px;">
+                        <div style="width:${pct}%;background:${colMap[sev]};border-radius:3px;height:100%;"></div>
+                    </div>
+                    <span style="width:32px;color:var(--text-muted);">${cnt}</span>
+                </div>`;
+            }).join('');
+        }
+
+        function renderTopAttackers(alerts) {
+            const tbody = document.getElementById('topAttackersBody');
+            if (!tbody) return;
+            const map = {};
+            (alerts||[]).forEach(a => {
+                const ip = a.src ? a.src.split(':')[0] : '?';
+                if (!map[ip]) map[ip] = { count: 0, topRule: '' };
+                map[ip].count++;
+                if (!map[ip].topRule) map[ip].topRule = a.rule_id;
+            });
+            const sorted = Object.entries(map).sort((a,b) => b[1].count - a[1].count).slice(0,10);
+            if (!sorted.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted);">No data yet.</td></tr>'; return; }
+            tbody.innerHTML = sorted.map(([ip, d], i) =>
+                `<tr><td style="color:var(--text-muted);">${i+1}</td><td><code style="font-size:11px;">${escapeHtml(ip)}</code></td><td><strong style="color:var(--danger);">${d.count}</strong></td><td><code style="font-size:10px;">${escapeHtml(d.topRule)}</code></td></tr>`
+            ).join('');
+        }
+
+        function renderTopRules(alerts) {
+            const tbody = document.getElementById('topRulesBody');
+            if (!tbody) return;
+            const map = {};
+            (alerts||[]).forEach(a => {
+                if (!map[a.rule_id]) map[a.rule_id] = { count: 0, engine: a.engine };
+                map[a.rule_id].count++;
+            });
+            const sorted = Object.entries(map).sort((a,b) => b[1].count - a[1].count).slice(0,10);
+            if (!sorted.length) { tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted);">No data yet.</td></tr>'; return; }
+            tbody.innerHTML = sorted.map(([rule, d], i) =>
+                `<tr><td style="color:var(--text-muted);">${i+1}</td><td><code style="font-size:10px;">${escapeHtml(rule)}</code></td><td><span class="sec-engine ${d.engine}">${d.engine}</span></td><td><strong>${d.count}</strong></td></tr>`
+            ).join('');
+        }
+
+        function renderTopCountries(alerts) {
+            const el = document.getElementById('topCountriesDiv');
+            if (!el) return;
+            const map = {};
+            (alerts||[]).forEach(a => {
+                if (a.src_country) { map[a.src_country] = (map[a.src_country]||0) + 1; }
+            });
+            const sorted = Object.entries(map).sort((a,b) => b[1]-a[1]).slice(0,8);
+            if (!sorted.length) { el.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px;">No geo data yet.</div>'; return; }
+            const total = sorted.reduce((s,[,v]) => s+v, 0) || 1;
+            el.innerHTML = sorted.map(([cc, cnt]) => {
+                const pct = Math.round(cnt / total * 100);
+                return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:5px;">
+                    <span style="width:30px;font-weight:700;color:var(--primary);">${escapeHtml(cc)}</span>
+                    <div style="flex:1;background:var(--border);border-radius:3px;height:6px;"><div style="width:${pct}%;background:var(--primary);border-radius:3px;height:100%;"></div></div>
+                    <span style="width:24px;color:var(--text-muted);">${cnt}</span>
+                </div>`;
+            }).join('');
+        }
+
+        // ─── CSV Export ──────────────────────────────────────────────────
+        async function exportSecurityCsv() {
+            try {
+                const res = await fetch('/api/security/alerts');
+                const alerts = await res.json();
+                if (!alerts || !alerts.length) { toast('No alerts to export', 'info'); return; }
+                const header = ['Time','Engine','Severity','Rule','Title','Detail','Source','Destination','Protocol','Action','Interface','Country Src','Country Dst'];
+                const rows = alerts.map(a => [
+                    new Date(a.ts*1000).toISOString(), a.engine, a.severity, a.rule_id, a.title,
+                    (a.detail||'').replace(/,/g,''), a.src, a.dst, a.protocol, a.action||'', a.interface||'', a.src_country||'', a.dst_country||''
+                ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
+                const csv = [header.join(','), ...rows].join('\n');
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'pktana-security-alerts.csv'; a.click();
+                URL.revokeObjectURL(url);
+                toast(`Exported ${alerts.length} alerts as CSV`, 'success');
+            } catch(e) { toast('Export failed: ' + e, 'error'); }
+        }
+
+        window.toggleSecurityFeature = toggleSecurityFeature;
+        window.loadSecurityConfig = loadSecurityConfig;
+        window.loadSecurityAlerts = loadSecurityAlerts;
+        window.clearSecurityAlerts = clearSecurityAlerts;
+        window.showSecuritySub = showSecuritySub;
+        window.setEngineAction = setEngineAction;
+        window.setRedirectTarget = setRedirectTarget;
+        window.setRuleAction = setRuleAction;
+        window.jumpToSecurityFlow = jumpToSecurityFlow;
+        window.refreshSecurityPanel = refreshSecurityPanel;
+        window.addPolicyRule = addPolicyRule;
+        window.savePolicyRules = savePolicyRules;
+        window.removePolicyRule = removePolicyRule;
+        window.updatePolicyField = updatePolicyField;
+        window.filterSecurityByIface = filterSecurityByIface;
+        window.loadSecurityInterfaces = loadSecurityInterfaces;
+        window.addCustomDlpIdentifier = addCustomDlpIdentifier;
+        window.saveCustomDlpIdentifiers = saveCustomDlpIdentifiers;
+        window.saveBuiltinDlpToggles = saveBuiltinDlpToggles;
+        window.saveCustomIdpsRules = saveCustomIdpsRules;
+        window.validateCustomIdpsRules = validateCustomIdpsRules;
+        window.saveJa3Blocklist = saveJa3Blocklist;
+        window.saveBuiltinIdpsToggles = saveBuiltinIdpsToggles;
+        window.exportSecurityCsv = exportSecurityCsv;
 
         function viewSession(sessionId, ifaceName) {
             // Store the session ID globally
@@ -2823,6 +3930,12 @@ pub mod inner {
                 </svg>
                 <div class="icon-label">GeoIP</div>
             </div>
+            <div class="activity-icon" id="securityNavIcon" onclick="switchTab('security')" title="Security (DLP / IDPS)">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+                <div class="icon-label">Security</div>
+            </div>
             <!-- Bottom Controls -->
             <div class="activity-bar-bottom">
                 <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Light/Dark Theme">🌙</button>
@@ -2847,30 +3960,425 @@ pub mod inner {
 
         <!-- Server Info Panel -->
         <div id="serverinfo" class="panel active">
-            <div class="grid-3">
-                <div class="card">
-                    <div class="card-title">System Information</div>
-                    <div class="kv-list" id="serverContent">Loading...</div>
-                </div>
-                <div class="card" style="grid-column: span 2;">
-                    <div class="card-title" style="font-size:13px; font-weight:600; color:var(--text-muted); margin-bottom:12px;">SELECT INTERFACE TO CAPTURE:</div>
-                    <div id="serverInterfacesList" style="display:flex; flex-wrap:wrap; gap:8px; min-height:100px; max-height:240px; overflow-y:auto;">Loading interfaces...</div>
-                </div>
-            </div>
-            
-            <!-- Session Manager -->
-            <div class="card" style="margin: 20px;">
-                <div class="card-title">
-                    Active Capture Sessions
-                    <div style="float:right; display:flex; gap:10px; align-items:center;">
-                        <button class="primary-btn" onclick="showCreateSessionDialog()">New Session</button>
-                        <button class="btn" onclick="loadSessions()">Refresh</button>
+            <div class="panel-scroll">
+                <div class="page-header">
+                    <div>
+                        <h2>Server Info</h2>
+                        <p>Monitor host resources, pick a capture interface, configure security engines, and manage live sessions.</p>
                     </div>
                 </div>
-                <div id="sessionsList" style="overflow-x:auto; overflow-y:auto; min-height:200px; max-height:360px;">
-                    <div style="text-align:center; padding:40px; color:var(--text-muted);">
-                        <div style="font-size:16px; margin-bottom:10px; font-weight:600;">No Active Sessions</div>
-                        <div>Click "New Session" to start monitoring an interface.</div>
+
+                <div class="serverinfo-top">
+                    <div class="card">
+                        <div class="card-title-lg">Select Interface to Capture</div>
+                        <div class="card-subtitle">Click an interface to open a capture window. UP interfaces are highlighted in green.</div>
+                        <div class="iface-grid" id="serverInterfacesList">Loading interfaces...</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">System Information</div>
+                        <div class="kv-list" id="serverContent">Loading...</div>
+                    </div>
+                </div>
+
+                <div class="card security-section" id="securityFeaturesCard">
+                    <div class="card-title">Security Features</div>
+                    <div class="card-subtitle">Enable DLP and IDPS engines — related alerts and filters appear automatically when active.</div>
+                    <div class="feature-grid">
+                        <div class="feature-panel" id="dlpFeatureCard">
+                            <div class="feature-header">
+                                <div style="display:flex;gap:10px;align-items:flex-start;min-width:0;">
+                                    <div class="feature-icon dlp">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                    </div>
+                                    <div style="min-width:0;">
+                                        <div class="feature-title">Data Loss Prevention (DLP)</div>
+                                        <div class="feature-desc">Detects cleartext credentials, PAN/SSN patterns, private keys, AWS keys, and sensitive HTTP payloads in live traffic.</div>
+                                    </div>
+                                </div>
+                                <label class="toggle-switch" title="Enable DLP engine">
+                                    <input type="checkbox" id="dlpToggle" onchange="toggleSecurityFeature('dlp', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="feature-rules" id="dlpRulesList">
+                                <span class="rule-chip">HTTP Basic Auth</span>
+                                <span class="rule-chip">PAN (Luhn)</span>
+                                <span class="rule-chip">SSN</span>
+                                <span class="rule-chip">Private Keys</span>
+                                <span class="rule-chip">AWS Keys</span>
+                                <span class="rule-chip">Cleartext Secrets</span>
+                                <span class="rule-chip">Large HTTP Body</span>
+                            </div>
+                            <div class="policy-row">
+                                <label>Default action</label>
+                                <select id="dlpActionSelect" class="form-input" onchange="setEngineAction('dlp', this.value)" style="width:140px;">
+                                    <option value="monitor">Monitor</option>
+                                    <option value="pass">Pass</option>
+                                    <option value="drop">Drop</option>
+                                    <option value="redirect">Redirect</option>
+                                    <option value="quarantine">Quarantine</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="feature-panel" id="idpsFeatureCard">
+                            <div class="feature-header">
+                                <div style="display:flex;gap:10px;align-items:flex-start;min-width:0;">
+                                    <div class="feature-icon idps">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+                                    </div>
+                                    <div style="min-width:0;">
+                                        <div class="feature-title">Intrusion Detection / Prevention (IDPS)</div>
+                                        <div class="feature-desc">Monitors DPI risk signals, suspicious ports, telnet, NTP amplification, DNS tunneling, and large ICMP probes.</div>
+                                    </div>
+                                </div>
+                                <label class="toggle-switch" title="Enable IDPS engine">
+                                    <input type="checkbox" id="idpsToggle" onchange="toggleSecurityFeature('idps', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                            <div class="feature-rules" id="idpsRulesList">
+                                <span class="rule-chip">DPI Risk Signals</span>
+                                <span class="rule-chip">High Risk Score</span>
+                                <span class="rule-chip">Suspicious Ports</span>
+                                <span class="rule-chip">Telnet</span>
+                                <span class="rule-chip">NTP Amplification</span>
+                                <span class="rule-chip">DNS Tunnel</span>
+                                <span class="rule-chip">Large ICMP</span>
+                            </div>
+                            <div class="policy-row">
+                                <label>Default action</label>
+                                <select id="idpsActionSelect" class="form-input" onchange="setEngineAction('idps', this.value)" style="width:140px;">
+                                    <option value="monitor">Monitor</option>
+                                    <option value="pass">Pass</option>
+                                    <option value="drop">Drop</option>
+                                    <option value="redirect">Redirect</option>
+                                    <option value="quarantine">Quarantine</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="policy-row" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+                        <label>Redirect target</label>
+                        <input type="text" id="redirectTargetInput" class="form-input" placeholder="e.g. 10.0.0.1:8443 or sink.internal" style="flex:1;min-width:200px;" onchange="setRedirectTarget(this.value)">
+                        <span style="font-size:11px;color:var(--text-muted);">Used when action is Redirect</span>
+                    </div>
+                    <div class="policy-row" style="margin-top:10px;">
+                        <label>Advanced</label>
+                        <button class="btn" onclick="switchTab('security'); showSecuritySub('policy');">Conditional Policy Rules</button>
+                        <button class="btn" onclick="switchTab('security'); showSecuritySub('interfaces');">DLP/IDPS by Interface</button>
+                        <span style="font-size:11px;color:var(--text-muted);">Match actions by src/dst IP, CIDR, country, interface</span>
+                    </div>
+                </div>
+
+                <div class="card sessions-card">
+                    <div class="sessions-header">
+                        <div class="card-title">Active Capture Sessions</div>
+                        <div class="sessions-actions">
+                            <span class="session-count-badge" id="sessionCountBadge">0 sessions</span>
+                            <button class="primary-btn" onclick="showCreateSessionDialog()">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline;margin-right:5px;vertical-align:middle;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                New Session
+                            </button>
+                            <button class="btn" onclick="loadSessions()">Refresh</button>
+                        </div>
+                    </div>
+                    <div id="sessionsList" class="sessions-table-wrap">
+                        <div class="sessions-empty">
+                            <div class="sessions-empty-icon">📡</div>
+                            <div class="sessions-empty-title">No Active Sessions</div>
+                            <div class="sessions-empty-hint">Start monitoring by clicking an interface above, or create a new session manually.</div>
+                            <button class="primary-btn" onclick="showCreateSessionDialog()">Create Session</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card sessions-card" id="securityPreviewCard" style="display:none;">
+                    <div class="sessions-header">
+                        <div class="card-title">Recent Security Alerts</div>
+                        <div class="sessions-actions">
+                            <button class="btn" onclick="switchTab('security')">Open Security Panel</button>
+                            <button class="btn" onclick="loadSecurityAlerts()">Refresh</button>
+                        </div>
+                    </div>
+                    <div id="securityPreviewList" class="sessions-table-wrap" style="max-height:220px;border:none;background:transparent;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Panel (DLP / IDPS) -->
+        <div id="security" class="panel">
+            <div class="panel-scroll">
+                <div class="page-header">
+                    <div>
+                        <h2>Security Center</h2>
+                        <p>Live DLP content inspection and Suricata-style IDPS alerts from active capture sessions.</p>
+                    </div>
+                    <div class="sec-status-row">
+                        <span class="sec-status-pill" id="secPillDlp"><span class="dot"></span>DLP Off</span>
+                        <span class="sec-status-pill" id="secPillIdps"><span class="dot"></span>IDPS Off</span>
+                    </div>
+                </div>
+                <div class="sec-stats" id="securityStats">
+                    <div class="sec-stat dlp"><div class="sec-stat-val" id="statDlp">0</div><div class="sec-stat-lbl">DLP Alerts</div></div>
+                    <div class="sec-stat idps"><div class="sec-stat-val" id="statIdps">0</div><div class="sec-stat-lbl">IDPS Alerts</div></div>
+                    <div class="sec-stat critical"><div class="sec-stat-val" id="statCritical">0</div><div class="sec-stat-lbl">Critical</div></div>
+                    <div class="sec-stat high"><div class="sec-stat-val" id="statHigh">0</div><div class="sec-stat-lbl">High</div></div>
+                    <div class="sec-stat"><div class="sec-stat-val" id="statDropped">0</div><div class="sec-stat-lbl">Dropped</div></div>
+                    <div class="sec-stat"><div class="sec-stat-val" id="statRedirected">0</div><div class="sec-stat-lbl">Redirected</div></div>
+                    <div class="sec-stat"><div class="sec-stat-val" id="statScanned">0</div><div class="sec-stat-lbl">Packets Scanned</div></div>
+                </div>
+
+                <div class="sec-sub-nav">
+                    <button class="sec-sub-btn active" id="secSubBtnAlerts" onclick="showSecuritySub('alerts')">Alerts</button>
+                    <button class="sec-sub-btn" id="secSubBtnDlpFlows" onclick="showSecuritySub('dlp-flows')">DLP Flows</button>
+                    <button class="sec-sub-btn" id="secSubBtnIdpsFlows" onclick="showSecuritySub('idps-flows')">IDPS Flows</button>
+                    <button class="sec-sub-btn" id="secSubBtnPolicy" onclick="showSecuritySub('policy')">Rule Policy</button>
+                    <button class="sec-sub-btn" id="secSubBtnInterfaces" onclick="showSecuritySub('interfaces')">By Interface</button>
+                    <button class="sec-sub-btn" id="secSubBtnCustomDlp" onclick="showSecuritySub('custom-dlp')">Custom DLP</button>
+                    <button class="sec-sub-btn" id="secSubBtnCustomIdps" onclick="showSecuritySub('custom-idps')">Custom IDPS</button>
+                    <button class="sec-sub-btn" id="secSubBtnThreat" onclick="showSecuritySub('threat')">Threat Intel</button>
+                </div>
+
+                <div class="sec-toolbar">
+                    <button class="btn" onclick="refreshSecurityPanel()">↺ Refresh</button>
+                    <button class="btn" onclick="exportSecurityCsv()" title="Export alerts as CSV">⬇ Export CSV</button>
+                    <button class="btn" onclick="clearSecurityAlerts()" style="background:rgba(220,38,38,0.15);color:#fca5a5;border-color:rgba(220,38,38,0.3);">✕ Clear All</button>
+                    <span class="hint">Click any row to jump to matching packets.</span>
+                </div>
+
+                <div id="secSubAlerts" class="sec-sub-panel active">
+                    <div class="card" style="padding:0;overflow:hidden;">
+                        <div class="sessions-table-wrap" style="max-height:calc(100vh - 420px);border:none;border-radius:8px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Engine</th>
+                                        <th>Severity</th>
+                                        <th>Verdict</th>
+                                        <th>Interface</th>
+                                        <th>Source</th>
+                                        <th>Destination</th>
+                                        <th>Rule</th>
+                                        <th>Title</th>
+                                        <th>Policy</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="securityAlertsBody">
+                                    <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted);">Enable DLP or IDPS and start capture to see alerts.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="secSubDlpFlows" class="sec-sub-panel">
+                    <div class="card" style="padding:0;overflow:hidden;">
+                        <div class="sessions-table-wrap" style="max-height:calc(100vh - 420px);border:none;border-radius:8px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr>
+                                        <th>Interface</th>
+                                        <th>Flow</th>
+                                        <th>Proto</th>
+                                        <th>Source</th>
+                                        <th>Destination</th>
+                                        <th>Geo</th>
+                                        <th>Alerts</th>
+                                        <th>Top Rule</th>
+                                        <th>Verdict</th>
+                                        <th>Bytes</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dlpFlowsBody">
+                                    <tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No DLP flows yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="secSubIdpsFlows" class="sec-sub-panel">
+                    <div class="card" style="padding:0;overflow:hidden;">
+                        <div class="sessions-table-wrap" style="max-height:calc(100vh - 420px);border:none;border-radius:8px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr>
+                                        <th>Interface</th>
+                                        <th>Flow</th>
+                                        <th>Proto</th>
+                                        <th>Source</th>
+                                        <th>Destination</th>
+                                        <th>Geo</th>
+                                        <th>Alerts</th>
+                                        <th>Top Rule</th>
+                                        <th>Verdict</th>
+                                        <th>Bytes</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="idpsFlowsBody">
+                                    <tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No IDPS flows yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="secSubPolicy" class="sec-sub-panel">
+                    <div class="card" style="margin-bottom:14px;">
+                        <div class="card-title">Conditional Policy Rules</div>
+                        <div class="card-subtitle">Apply monitor / pass / drop / redirect / quarantine based on interface, source/dest IP or CIDR, country code, and detection rule. Higher priority wins.</div>
+                        <div style="display:flex;gap:8px;margin:12px 0;">
+                            <button class="btn" onclick="addPolicyRule()">+ Add Rule</button>
+                            <button class="btn btn-primary" onclick="savePolicyRules()">Save Policy Rules</button>
+                        </div>
+                        <div class="sessions-table-wrap" style="max-height:280px;border-radius:6px;overflow-x:auto;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr><th>Name</th><th>On</th><th>Pri</th><th>Engine</th><th>Iface</th><th>Src IP</th><th>Dst IP</th><th>Src CC</th><th>Dst CC</th><th>Det. Rule</th><th>Action</th><th>Redirect</th><th></th></tr>
+                                </thead>
+                                <tbody id="policyRulesBody">
+                                    <tr><td colspan="13" style="text-align:center;padding:24px;color:var(--text-muted);">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Per-Rule Actions</div>
+                        <div class="card-subtitle">Override default engine action for individual detection rules when no conditional policy matches.</div>
+                        <div class="sessions-table-wrap" style="max-height:360px;border-radius:6px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr><th>Engine</th><th>Rule</th><th>Title</th><th>Severity</th><th>Action</th></tr>
+                                </thead>
+                                <tbody id="securityRulesBody">
+                                    <tr><td colspan="5" style="text-align:center;padding:24px;color:var(--text-muted);">Loading rules…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="secSubInterfaces" class="sec-sub-panel">
+                    <div class="card" style="padding:0;overflow:hidden;">
+                        <div style="padding:14px 18px;border-bottom:1px solid var(--border);">
+                            <div class="card-title" style="margin:0;">DLP / IDPS by Interface</div>
+                            <div class="card-subtitle" style="margin:4px 0 0;">Per-interface alert counts, flows, and enforcement stats from active capture sessions.</div>
+                        </div>
+                        <div class="sessions-table-wrap" style="max-height:calc(100vh - 420px);border:none;border-radius:8px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr>
+                                        <th>Interface</th>
+                                        <th>DLP Alerts</th>
+                                        <th>IDPS Alerts</th>
+                                        <th>DLP Flows</th>
+                                        <th>IDPS Flows</th>
+                                        <th>Critical</th>
+                                        <th>High</th>
+                                        <th>Dropped</th>
+                                        <th>Redirected</th>
+                                        <th>Scanned</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="securityInterfacesBody">
+                                    <tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">No per-interface stats yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Custom DLP Identifiers -->
+                <div id="secSubCustomDlp" class="sec-sub-panel">
+                    <div class="card" style="margin-bottom:14px;">
+                        <div class="card-title">Custom DLP Identifiers</div>
+                        <div class="card-subtitle">Add custom regex or keyword patterns for DLP detection. Use <code>regex:pattern</code> prefix for regular expressions, or plain text for substring match.</div>
+                        <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="addCustomDlpIdentifier()">+ Add Identifier</button>
+                            <button class="btn" onclick="saveCustomDlpIdentifiers()">Save All</button>
+                        </div>
+                        <div class="sessions-table-wrap" style="max-height:300px;border-radius:6px;">
+                            <table class="settings-table">
+                                <thead>
+                                    <tr><th>On</th><th>Name</th><th>Pattern</th><th>Category</th><th>Severity</th><th></th></tr>
+                                </thead>
+                                <tbody id="customDlpBody">
+                                    <tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No custom identifiers yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Built-in DLP Identifier Status</div>
+                        <div class="card-subtitle">Enable or disable built-in DLP detection rules individually.</div>
+                        <div id="builtinDlpList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;">Loading…</div>
+                        <div style="margin-top:12px;display:flex;gap:8px;">
+                            <button class="btn" onclick="saveBuiltinDlpToggles()">Save Toggles</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Custom IDPS Rules -->
+                <div id="secSubCustomIdps" class="sec-sub-panel">
+                    <div class="card" style="margin-bottom:14px;">
+                        <div class="card-title">Custom Suricata-style Rules</div>
+                        <div class="card-subtitle">Write custom IDS rules in Suricata format. Example: <code style="font-size:10px;">alert tcp any any -> any 80 (msg:"Test"; content:"evil"; sid:9000001;)</code></div>
+                        <textarea id="customIdpsRulesArea" class="form-input" style="width:100%;min-height:180px;font-family:monospace;font-size:11px;resize:vertical;margin:10px 0;" placeholder="# One rule per line&#10;alert tcp any any -> any 80 (msg:&quot;ET WEB Custom&quot;; content:&quot;payload&quot;; nocase; sid:9000001;)"></textarea>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="saveCustomIdpsRules()">Save Rules</button>
+                            <button class="btn" onclick="validateCustomIdpsRules()">Validate Syntax</button>
+                            <span id="idpsRuleValidationMsg" style="font-size:11px;align-self:center;color:var(--text-muted);"></span>
+                        </div>
+                    </div>
+                    <div class="card" style="margin-bottom:14px;">
+                        <div class="card-title">JA3 TLS Fingerprint Blocklist</div>
+                        <div class="card-subtitle">Add MD5 JA3 fingerprints to block/alert on (one per line). These are matched against incoming TLS ClientHello fingerprints.</div>
+                        <textarea id="ja3BlocklistArea" class="form-input" style="width:100%;min-height:100px;font-family:monospace;font-size:11px;resize:vertical;margin:10px 0;" placeholder="# One MD5 JA3 fingerprint per line&#10;e7d705a3286e19ea42f587b6d71c4c82"></textarea>
+                        <button class="btn btn-primary" onclick="saveJa3Blocklist()">Save JA3 Blocklist</button>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Built-in IDPS Rule Status</div>
+                        <div class="card-subtitle">Enable or disable built-in IDPS signatures by SID. Disabled rules will not fire alerts.</div>
+                        <div id="builtinIdpsList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;max-height:220px;overflow-y:auto;">Loading…</div>
+                        <div style="margin-top:12px;"><button class="btn" onclick="saveBuiltinIdpsToggles()">Save Toggles</button></div>
+                    </div>
+                </div>
+
+                <!-- Threat Intelligence Overview -->
+                <div id="secSubThreat" class="sec-sub-panel">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:14px;">
+                        <div class="card">
+                            <div class="card-title">Alert Timeline (Last 50)</div>
+                            <svg id="secThreatTimeline" width="100%" height="60" style="display:block;"></svg>
+                            <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">Each bar = one alert. Red=critical, orange=high, yellow=medium, blue=info.</div>
+                        </div>
+                        <div class="card">
+                            <div class="card-title">Severity Breakdown</div>
+                            <div id="secSeverityBars" style="display:flex;flex-direction:column;gap:6px;margin-top:8px;"></div>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;">
+                        <div class="card">
+                            <div class="card-title">Top Attackers (by Alert Count)</div>
+                            <table class="settings-table" style="margin-top:6px;">
+                                <thead><tr><th>#</th><th>Source IP</th><th>Alerts</th><th>Top Rule</th></tr></thead>
+                                <tbody id="topAttackersBody"><tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted);">No data yet.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="card">
+                            <div class="card-title">Top Rules Hit</div>
+                            <table class="settings-table" style="margin-top:6px;">
+                                <thead><tr><th>#</th><th>Rule</th><th>Engine</th><th>Hits</th></tr></thead>
+                                <tbody id="topRulesBody"><tr><td colspan="4" style="text-align:center;padding:16px;color:var(--text-muted);">No data yet.</td></tr></tbody>
+                            </table>
+                        </div>
+                        <div class="card">
+                            <div class="card-title">Top Source Countries</div>
+                            <div id="topCountriesDiv" style="margin-top:6px;">
+                                <div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px;">No geo data yet.</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2878,28 +4386,36 @@ pub mod inner {
 
         <!-- PCAP Panel -->
         <div id="pcap" class="panel">
-            <div style="padding:24px; display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start;">
-                <div class="card" style="flex:1; min-width:300px; max-width:560px;">
-                    <div class="card-title">Analyze PCAP on Server</div>
-                    <div style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">Provide an absolute path to a PCAP file on the server filesystem.</div>
-                    <div style="display:flex; gap:10px;">
-                        <input type="text" id="pcapRead" class="form-input" placeholder="/var/log/capture.pcap" style="flex-grow:1;">
-                        <button class="primary-btn" onclick="analyzePcap()">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:5px;vertical-align:middle;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Analyze
-                        </button>
+            <div class="panel-scroll">
+                <div class="page-header">
+                    <div>
+                        <h2>PCAP Analyzer</h2>
+                        <p>Analyze packet captures from the server filesystem or upload a file from your browser.</p>
                     </div>
                 </div>
-                <div class="card" style="flex:1; min-width:300px; max-width:560px;">
-                    <div class="card-title">Upload PCAP from Browser</div>
-                    <div class="drop-zone" id="pcapDropZone" onclick="document.getElementById('pcapUpload').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="event.preventDefault();this.classList.remove('drag-over');document.getElementById('pcapUpload').files=event.dataTransfer.files;uploadPcap()">
-                        <div class="drop-zone-icon">
-                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px;">
+                    <div class="card">
+                        <div class="card-title">Analyze PCAP on Server</div>
+                        <div class="card-subtitle">Provide an absolute path to a PCAP file on the server filesystem.</div>
+                        <div style="display:flex; gap:10px;">
+                            <input type="text" id="pcapRead" class="form-input" placeholder="/var/log/capture.pcap" style="flex-grow:1;">
+                            <button class="primary-btn" onclick="analyzePcap()">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:5px;vertical-align:middle;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Analyze
+                            </button>
                         </div>
-                        <p>Drop .pcap / .pcapng here</p>
-                        <small>or click to browse</small>
                     </div>
-                    <input type="file" id="pcapUpload" style="display:none;" accept=".pcap,.pcapng,.cap" onchange="uploadPcap()">
-                    <div style="font-size:11px; color:var(--text-muted); margin-top:8px; text-align:center;">Upload requires backend multipart API (planned)</div>
+                    <div class="card">
+                        <div class="card-title">Upload PCAP from Browser</div>
+                        <div class="drop-zone" id="pcapDropZone" onclick="document.getElementById('pcapUpload').click()" ondragover="event.preventDefault();this.classList.add('drag-over')" ondragleave="this.classList.remove('drag-over')" ondrop="event.preventDefault();this.classList.remove('drag-over');document.getElementById('pcapUpload').files=event.dataTransfer.files;uploadPcap()">
+                            <div class="drop-zone-icon">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            </div>
+                            <p>Drop .pcap / .pcapng here</p>
+                            <small>or click to browse</small>
+                        </div>
+                        <input type="file" id="pcapUpload" style="display:none;" accept=".pcap,.pcapng,.cap" onchange="uploadPcap()">
+                        <div style="font-size:11px; color:var(--text-muted); margin-top:8px; text-align:center;">Upload requires backend multipart API (planned)</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2944,6 +4460,15 @@ pub mod inner {
                             <option value="tls_handshake">🔒 TLS Handshakes</option>
                             <option value="dns_transaction">🌐 DNS Queries</option>
                             <option value="dhcp_dora">📡 DHCP DORA</option>
+                        </optgroup>
+                        <optgroup label="Security (DLP / IDPS)" id="securityFilterGroup">
+                            <option value="security_alert">🛡 All Security Alerts</option>
+                            <option value="dlp_alert">🔒 DLP Hits Only</option>
+                            <option value="idps_alert">⚠ IDPS Hits Only</option>
+                            <option value="security_drop">🚫 Dropped (Drop action)</option>
+                            <option value="security_pass">✓ Passed Through</option>
+                            <option value="security_redirect">↪ Redirected</option>
+                            <option value="security_quarantine">⛔ Quarantined</option>
                         </optgroup>
                     </select>
                 </div>
@@ -3059,18 +4584,20 @@ pub mod inner {
             <div class="panel-toolbar">
                 <input type="text" id="statsFilter" class="form-input" placeholder="Filter Statistics..." onkeyup="renderStats(this.value)" style="width: 250px;">
             </div>
-            <div class="grid-3">
-                <div class="card">
-                    <div class="card-title">Protocol Breakdown</div>
-                    <div class="kv-list" id="protoBreakdown">No data yet.</div>
-                </div>
-                <div class="card">
-                    <div class="card-title">Top Talkers (By Bytes)</div>
-                    <div class="kv-list" id="topTalkers">No data yet.</div>
-                </div>
-                <div class="card">
-                    <div class="card-title">Traffic Overview</div>
-                    <div class="kv-list" id="trafficOverview">No data yet.</div>
+            <div class="panel-scroll">
+                <div class="grid-3" style="padding:0;">
+                    <div class="card">
+                        <div class="card-title">Protocol Breakdown</div>
+                        <div class="kv-list" id="protoBreakdown">No data yet.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Top Talkers (By Bytes)</div>
+                        <div class="kv-list" id="topTalkers">No data yet.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Traffic Overview</div>
+                        <div class="kv-list" id="trafficOverview">No data yet.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3083,6 +4610,11 @@ pub mod inner {
                     <div class="card"><div class="card-title">Hardware Status</div><div class="kv-list" id="hwStatus">Select an interface above.</div></div>
                     <div class="card"><div class="card-title">Dataplane Path</div><div class="kv-list" id="dpStatus">Select an interface above.</div></div>
                 </div>
+                <div class="hw-top-grid">
+                    <div class="card"><div class="card-title">Pinned BPF <span id="hwPinnedCount" style="font-weight:normal;color:var(--text-muted);"></span></div><div class="kv-list" id="hwPinnedBpf" style="max-height:180px;overflow:auto;">—</div></div>
+                    <div class="card"><div class="card-title">XDP Dispatchers <span id="hwDispCount" style="font-weight:normal;color:var(--text-muted);"></span></div><div class="kv-list" id="hwDispatchers" style="max-height:180px;overflow:auto;">—</div></div>
+                    <div class="card"><div class="card-title">Network Namespace</div><div class="kv-list" id="hwNetNs">—</div></div>
+                </div>
                 <div class="card">
                     <div class="card-title">Ethtool Report</div>
                     <div id="ethtoolDetail" class="hw-ethtool-grid">Select an interface above.</div>
@@ -3092,43 +4624,49 @@ pub mod inner {
 
         <!-- Connections Panel -->
         <div id="connections" class="panel">
-            <div class="card" style="margin: 20px;">
-                <div class="card-title">
-                    Active Sockets (TCP/UDP) 
-                    <div style="float:right; display:flex; gap:10px;">
-                        <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('connContent', this.value)" style="padding: 4px 8px;">
-                        <button class="btn" onclick="loadConnections()">Refresh</button>
+            <div class="panel-scroll">
+                <div class="card">
+                    <div class="sessions-header">
+                        <div class="card-title">Active Sockets (TCP/UDP)</div>
+                        <div class="sessions-actions">
+                            <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('connContent', this.value)" style="padding:4px 8px;">
+                            <button class="btn" onclick="loadConnections()">Refresh</button>
+                        </div>
                     </div>
+                    <div id="connContent" class="sessions-table-wrap" style="max-height:calc(100vh - 220px);">Loading...</div>
                 </div>
-                <div id="connContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
         <!-- Routes Panel -->
         <div id="routes" class="panel">
-            <div class="card" style="margin: 20px;">
-                <div class="card-title">
-                    System Routing Table 
-                    <div style="float:right; display:flex; gap:10px;">
-                        <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('routeContent', this.value)" style="padding: 4px 8px;">
-                        <button class="btn" onclick="loadRoutes()">Refresh</button>
+            <div class="panel-scroll">
+                <div class="card">
+                    <div class="sessions-header">
+                        <div class="card-title">System Routing Table</div>
+                        <div class="sessions-actions">
+                            <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('routeContent', this.value)" style="padding:4px 8px;">
+                            <button class="btn" onclick="loadRoutes()">Refresh</button>
+                        </div>
                     </div>
+                    <div id="routeContent" class="sessions-table-wrap" style="max-height:calc(100vh - 220px);">Loading...</div>
                 </div>
-                <div id="routeContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
         <!-- NICs Panel -->
         <div id="nics" class="panel">
-            <div class="card" style="margin: 20px;">
-                <div class="card-title">
-                    All Network Interfaces
-                    <div style="float:right; display:flex; gap:10px;">
-                        <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('nicContent', this.value)" style="padding: 4px 8px;">
-                        <button class="btn" onclick="loadNics()">Refresh</button>
+            <div class="panel-scroll">
+                <div class="card">
+                    <div class="sessions-header">
+                        <div class="card-title">All Network Interfaces</div>
+                        <div class="sessions-actions">
+                            <input type="text" class="form-input" placeholder="Search..." onkeyup="filterTable('nicContent', this.value)" style="padding:4px 8px;">
+                            <button class="btn" onclick="loadNics()">Refresh</button>
+                        </div>
                     </div>
+                    <div id="nicContent" class="sessions-table-wrap" style="max-height:calc(100vh - 220px);">Loading...</div>
                 </div>
-                <div id="nicContent" style="overflow-x:auto; overflow-y:auto; max-height:calc(100vh - 260px);">Loading...</div>
             </div>
         </div>
 
@@ -3531,7 +5069,14 @@ pub mod inner {
                 'tcp_handshake': 'tcp-handshake',
                 'tls_handshake': 'tls-handshake',
                 'dns_transaction': 'dns-query',
-                'dhcp_dora': 'dhcp-dora'
+                'dhcp_dora': 'dhcp-dora',
+                'security_alert': 'security-alert',
+                'dlp_alert': 'dlp-alert',
+                'idps_alert': 'idps-alert',
+                'security_drop': 'security-drop',
+                'security_pass': 'security-pass',
+                'security_redirect': 'security-redirect',
+                'security_quarantine': 'security-quarantine'
             };
             return tagMap[sel.value] || '';
         }
@@ -3592,13 +5137,24 @@ pub mod inner {
             };
             
             // Tag-based selections clear the text filter; the tag is consumed by getRequiredTag()
-            const tagSelections = ['tcp_handshake','tls_handshake','dns_transaction','dhcp_dora'];
+            const tagSelections = [
+                'tcp_handshake','tls_handshake','dns_transaction','dhcp_dora',
+                'security_alert','dlp_alert','idps_alert',
+                'security_drop','security_pass','security_redirect','security_quarantine'
+            ];
             if (tagSelections.includes(filterValue)) {
                 displayFilterInput.value = '';
             } else {
                 displayFilterInput.value = filterMap[filterValue] || '';
             }
             applyDisplayFilter();
+            if (filterValue.startsWith('security_') || filterValue.endsWith('_alert')) {
+                const cfg = securityConfigCache;
+                const secOn = cfg && (cfg.dlp_enabled || cfg.idps_enabled);
+                if (!secOn) {
+                    toast('Enable DLP or IDPS in Server Info for security filters to match packets', 'warn');
+                }
+            }
         }
         
         function viewFlowDetails(src, dst) {
@@ -3678,7 +5234,9 @@ pub mod inner {
             if (tabId === 'connections') loadConnections();
             if (tabId === 'routes') loadRoutes();
             if (tabId === 'nics') loadNics();
-            if (tabId === 'serverinfo') { loadServerInfo(); loadInterfaces(); }
+            if (tabId === 'serverinfo') { loadServerInfo(); loadInterfaces(); loadSessions(); loadSecurityConfig(); }
+            if (tabId === 'dashboard' && typeof loadSecurityConfig === 'function') loadSecurityConfig();
+            if (tabId === 'security') { loadSecurityConfig(); refreshSecurityPanel(); showSecuritySub('alerts'); }
             if (tabId === 'hardware') {
                 if (activeId && Sessions[activeId] && !Sessions[activeId].isOffline) {
                     if (typeof loadNicDetail === 'function') loadNicDetail();
@@ -3690,8 +5248,6 @@ pub mod inner {
                 if (fitAddon) setTimeout(() => fitAddon.fit(), 100);
                 if (term) term.focus();
             }
-            if (tabId === 'bpf') loadBpf();
-            if (tabId === 'ns') loadNs();
         };
 
         // ─── Multi-session capture API ───────────────────────────────────────
@@ -3831,9 +5387,17 @@ pub mod inner {
 
                 const tr = document.createElement('tr');
                 tr.className = getWsClass(data.proto, data.risk);
+                if (data.security_dropped || data.security_verdict === 'drop') {
+                    tr.classList.add('pkt-dropped', 'ws-bg-sec-drop');
+                }
                 const riskBadge = data.risk >= 70 ? `<span class="risk-badge risk-high">HIGH ${data.risk}</span>` : data.risk >= 35 ? `<span class="risk-badge risk-medium">MED ${data.risk}</span>` : data.risk > 0 ? `<span class="risk-badge risk-low">LOW ${data.risk}</span>` : '';
+                const secBadge = (data.security_alerts && data.security_alerts.length > 0)
+                    ? data.security_alerts.map(a => `<span class="security-alert-badge" title="${escapeHtml(a.title)}">${a.engine.toUpperCase()}</span>`).join('')
+                    : '';
+                const vBadge = (data.security_verdict && data.security_alerts && data.security_alerts.length > 0)
+                    ? verdictBadge(data.security_verdict) : '';
                 const protoKey = escapeHtml(data.proto).toLowerCase().replace(/[^a-z0-9]/g,'');
-                tr.innerHTML = `<td>${data.index}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
+                tr.innerHTML = `<td>${data.index}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${vBadge}${secBadge}${riskBadge}${escapeHtml(data.summary)}</td>`;
                 if (data.tags) tr.setAttribute('data-tags', data.tags);
                 (function(p, row) { row.onclick = function() { showDetail(p, row); }; })(data, tr);
                 if (!packetMatchesFilter(tr, terms, requiredTag)) tr.style.display = 'none';
@@ -3981,6 +5545,10 @@ pub mod inner {
             S.packetStore.push(data);
             if (S.packetStore.length > MAX_PACKETS_IN_MEMORY) S.packetStore.shift();
 
+            if (data.security_alerts && data.security_alerts.length > 0) {
+                S.securityAlertCount = (S.securityAlertCount || 0) + data.security_alerts.length;
+            }
+
             // Per-session stats
             if (!S.protoStats[data.proto]) S.protoStats[data.proto] = { pkts: 0, bytes: 0 };
             S.protoStats[data.proto].pkts++; S.protoStats[data.proto].bytes += data.len;
@@ -4022,9 +5590,17 @@ pub mod inner {
                 const relTime = (ts - S.baseTs).toFixed(6);
                 const tr = document.createElement('tr');
                 tr.className = getWsClass(data.proto, data.risk);
-                const riskBadge = data.risk > 0 ? `<span style="color:var(--danger);font-weight:bold;">[Risk: ${data.risk}]</span> ` : '';
+                if (data.security_dropped || data.security_verdict === 'drop') {
+                    tr.classList.add('pkt-dropped', 'ws-bg-sec-drop');
+                }
+                const riskBadge = data.risk >= 70 ? `<span class="risk-badge risk-high">HIGH ${data.risk}</span>` : data.risk >= 35 ? `<span class="risk-badge risk-medium">MED ${data.risk}</span>` : data.risk > 0 ? `<span class="risk-badge risk-low">LOW ${data.risk}</span>` : '';
+                const secBadge = (data.security_alerts && data.security_alerts.length > 0)
+                    ? data.security_alerts.map(a => `<span class="security-alert-badge" title="${escapeHtml(a.title)}">${a.engine.toUpperCase()}</span>`).join('')
+                    : '';
+                const vBadge = (data.security_verdict && data.security_alerts && data.security_alerts.length > 0)
+                    ? verdictBadge(data.security_verdict) : '';
                 const protoKey2 = escapeHtml(data.proto).toLowerCase().replace(/[^a-z0-9]/g,'');
-                tr.innerHTML = `<td>${i+1}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey2}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${riskBadge}${escapeHtml(data.summary)}</td>`;
+                tr.innerHTML = `<td>${i+1}</td><td>${relTime}</td><td>${escapeHtml(data.src)}</td><td>${escapeHtml(data.dst)}</td><td><span class="proto-badge proto-${protoKey2}">${escapeHtml(data.proto)}</span></td><td>${data.len}</td><td class="info-cell" title="${escapeHtml(data.summary)}">${vBadge}${secBadge}${riskBadge}${escapeHtml(data.summary)}</td>`;
                 if (data.tags) tr.setAttribute('data-tags', data.tags);
                 (function(p, row) { row.onclick = function() { showDetail(p, row); }; })(data, tr);
                 if (!packetMatchesFilter(tr, terms, requiredTag)) tr.style.display = 'none';
@@ -4158,6 +5734,7 @@ pub mod inner {
             }
             renderSessionTabs();
             if (typeof loadSessions === 'function') loadSessions();
+            if (typeof refreshSecurityPanel === 'function') refreshSecurityPanel();
         }
 
         function stopActiveCapture() {
@@ -4263,6 +5840,16 @@ pub mod inner {
                 '<div class="detail-row"><span class="detail-val" style="color:var(--danger);font-weight:600;">$1</span></div>');
             formattedDetails = formattedDetails.replace(/^  (• .*)$/gm,
                 '<div class="detail-row"><span class="detail-val" style="color:var(--text-muted);">$1</span></div>');
+            if (pkt.security_alerts && pkt.security_alerts.length > 0) {
+                formattedDetails = '<div class="detail-header" style="color:var(--danger);">Security Engine Verdict</div>'
+                    + `<div class="detail-row"><span class="detail-key">Verdict:</span> <span class="detail-val">${verdictBadge(pkt.security_verdict || 'monitor')}</span></div>`
+                    + (pkt.security_flow_key ? `<div class="detail-row"><span class="detail-key">Flow:</span> <span class="detail-val">${escapeHtml(pkt.security_flow_key)}</span></div>` : '')
+                    + (pkt.security_redirect ? `<div class="detail-row"><span class="detail-key">Redirect:</span> <span class="detail-val">${escapeHtml(pkt.security_redirect)}</span></div>` : '')
+                    + '<div class="detail-header" style="color:var(--danger);margin-top:8px;">Security Alerts</div>'
+                    + pkt.security_alerts.map(a =>
+                        `<div class="detail-row"><span class="detail-key">${escapeHtml(a.engine.toUpperCase())} [${escapeHtml(a.severity)}]:</span> <span class="detail-val" style="color:var(--danger);font-weight:600;">${escapeHtml(a.title)}</span><br><span class="detail-val" style="color:var(--text-muted);font-size:11px;">${escapeHtml(a.detail)} — action: ${escapeHtml(a.action || a.verdict || 'monitor')}</span></div>`
+                    ).join('') + formattedDetails;
+            }
             document.getElementById('packetDetail').innerHTML = formattedDetails;
 
             // ── Hex Dump pane ──
@@ -4422,6 +6009,11 @@ pub mod inner {
 
                 let html = '';
 
+                // ── eBPF summary ──────────────────────────────────────────
+                html += dpSection('eBPF Status');
+                html += kvRow('Active', data.ebpf_active ? 'Yes' : 'No');
+                html += kvRow('Interface Kind', data.iface_kind || '—');
+
                 // ── XDP ───────────────────────────────────────────────────
                 html += dpSection('XDP / eBPF');
                 const xdpIds = data.xdp_prog_ids && data.xdp_prog_ids !== 'None' ? data.xdp_prog_ids : '—';
@@ -4434,10 +6026,19 @@ pub mod inner {
 
                 // ── TC BPF ─────────────────────────────────────────────────
                 html += dpSection('TC BPF');
-                html += kvRow('clsact qdisc', data.tc_clsact ? 'Present' : 'Not present');
-                if (data.tc_clsact) {
+                html += kvRow('clsact qdisc', data.tc_clsact ? 'Present' : 'Not detected');
+                if (data.tc_clsact || (data.tc_bpf_prog_ids && data.tc_bpf_prog_ids.length)) {
                     html += kvRow('BPF Directions', data.tc_bpf_directions || '—');
                     html += kvRow('BPF Prog IDs', data.tc_bpf_prog_ids || '—');
+                }
+
+                // ── bpftool net ────────────────────────────────────────────
+                if (data.bpftool_net && data.bpftool_net.length) {
+                    html += dpSection('bpftool net');
+                    data.bpftool_net.forEach(a => {
+                        const id = a.prog_id != null ? a.prog_id : '?';
+                        html += kvRow(a.hook || 'attach', `id ${id} ${a.mode || ''} ${a.prog_name || ''}`.trim());
+                    });
                 }
 
                 // ── Userspace Dataplane ────────────────────────────────────
@@ -4474,7 +6075,53 @@ pub mod inner {
                 }
 
                 document.getElementById('dpStatus').innerHTML = html;
-            } catch (e) { document.getElementById('dpStatus').innerHTML = 'Error loading dataplane info: ' + e.message; }
+
+                // ── Per-interface Pinned BPF ───────────────────────────────
+                const pins = data.pinned_bpf || [];
+                document.getElementById('hwPinnedCount').textContent = pins.length ? `(${pins.length})` : '';
+                if (!pins.length) {
+                    document.getElementById('hwPinnedBpf').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No correlated pinned objects</span>';
+                } else {
+                    let pinHtml = '';
+                    pins.forEach(p => {
+                        const id = p.prog_id != null ? `id ${p.prog_id}` : 'id ?';
+                        pinHtml += kvRow(`[${p.kind}] ${p.name}`, id);
+                    });
+                    document.getElementById('hwPinnedBpf').innerHTML = pinHtml;
+                }
+
+                // ── Per-interface XDP Dispatchers ──────────────────────────
+                const disps = data.xdp_dispatchers_detail || [];
+                document.getElementById('hwDispCount').textContent = disps.length ? `(${disps.length})` : '';
+                if (!disps.length) {
+                    document.getElementById('hwDispatchers').innerHTML = '<span style="color:var(--text-muted);font-style:italic;">None for this interface</span>';
+                } else {
+                    let dispHtml = '';
+                    disps.forEach(d => {
+                        dispHtml += hwSection(`dispatch-${d.prog_id}-${d.link_id}`);
+                        dispHtml += kvRow('Slots', (d.slots || []).join(', ') || '—');
+                        dispHtml += kvRow('Path', d.dir || '—');
+                    });
+                    document.getElementById('hwDispatchers').innerHTML = dispHtml;
+                }
+
+                // ── Network namespace for this interface ───────────────────
+                let nsHtml = '';
+                if (data.ns_label) {
+                    nsHtml += kvRow('Namespace', data.ns_is_host ? 'Host' : data.ns_label);
+                    if (data.ns_inode) nsHtml += kvRow('Inode', data.ns_inode);
+                    if (data.ns_xdp_ids) nsHtml += kvRow('XDP in NS', data.ns_xdp_ids);
+                    if (data.ns_afxdp_sockets > 0) nsHtml += kvRow('AF_XDP in NS', data.ns_afxdp_sockets);
+                } else {
+                    nsHtml = '<span style="color:var(--text-muted);font-style:italic;">Namespace not resolved</span>';
+                }
+                document.getElementById('hwNetNs').innerHTML = nsHtml;
+            } catch (e) {
+                document.getElementById('dpStatus').innerHTML = 'Error loading dataplane info: ' + e.message;
+                document.getElementById('hwPinnedBpf').innerHTML = '—';
+                document.getElementById('hwDispatchers').innerHTML = '—';
+                document.getElementById('hwNetNs').innerHTML = '—';
+            }
         }
 
         async function loadEthtool() {
@@ -4931,6 +6578,8 @@ pub mod inner {
             
             console.log('[DEBUG] Calling loadInterfaces, type:', typeof loadInterfaces);
             loadInterfaces();
+            if (typeof loadSecurityConfig === 'function') loadSecurityConfig();
+            if (typeof loadSessions === 'function') loadSessions();
 
             // Initial session strip render (shows empty-state hint)
             if (typeof renderSessionTabs === 'function') renderSessionTabs();

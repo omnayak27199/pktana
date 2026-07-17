@@ -8,8 +8,9 @@ pub mod inner {
     use serde::Deserialize;
 
     use pktana_core::{
-        geoip_lookup_str, get_ethtool_report, get_nic_dataplane, get_nic_info, inspect,
-        list_connections, list_nics, list_routes, CaptureConfig, FlowAnalyzer, LinuxCaptureEngine,
+        evaluate_packet, geoip_lookup_str, get_ethtool_report, get_nic_dataplane, get_nic_info,
+        get_security_config, inspect, list_connections, list_nics, list_routes, CaptureConfig,
+        FlowAnalyzer, LinuxCaptureEngine,
     };
 
     // ── Parameter structs ────────────────────────────────────────────────────────
@@ -63,6 +64,14 @@ pub mod inner {
     // ── Helper: build a concise text summary of a DeepPacket ────────────────────
 
     fn summarise_deep_packet(dp: &pktana_core::DeepPacket) -> serde_json::Value {
+        summarise_deep_packet_with_iface(dp, "", 0)
+    }
+
+    fn summarise_deep_packet_with_iface(
+        dp: &pktana_core::DeepPacket,
+        iface: &str,
+        ts: u64,
+    ) -> serde_json::Value {
         let proto = if dp.quic_detected {
             "QUIC".to_string()
         } else if dp.http2_detected {
@@ -113,7 +122,7 @@ pub mod inner {
             "LOW"
         };
 
-        serde_json::json!({
+        let mut out = serde_json::json!({
             "summary": dp.one_liner(),
             "protocol": proto,
             "src": src,
@@ -134,7 +143,31 @@ pub mod inner {
             "quic_detected": dp.quic_detected,
             "http2_detected": dp.http2_detected,
             "category": dp.app_category,
-        })
+        });
+
+        let sec_cfg = get_security_config();
+        if sec_cfg.dlp_enabled || sec_cfg.idps_enabled {
+            let sec = evaluate_packet(dp, ts, dp.frame_len as u64, iface, "");
+            if let Some(obj) = out.as_object_mut() {
+                obj.insert(
+                    "security_verdict".into(),
+                    serde_json::Value::String(sec.verdict),
+                );
+                obj.insert(
+                    "security_dropped".into(),
+                    serde_json::Value::Bool(sec.dropped),
+                );
+                obj.insert(
+                    "security_alerts".into(),
+                    serde_json::to_value(&sec.alerts).unwrap_or_else(|_| serde_json::json!([])),
+                );
+                obj.insert(
+                    "security_engines".into(),
+                    serde_json::to_value(&sec.engines).unwrap_or_else(|_| serde_json::json!([])),
+                );
+            }
+        }
+        out
     }
 
     // ── MCP Server struct ────────────────────────────────────────────────────────
@@ -202,7 +235,11 @@ pub mod inner {
                 let mut packets = Vec::new();
                 let stats = LinuxCaptureEngine::capture_streaming(&config, |pkt| {
                     let dp = inspect(&pkt.data);
-                    packets.push(summarise_deep_packet(&dp));
+                    packets.push(summarise_deep_packet_with_iface(
+                        &dp,
+                        &config.interface,
+                        pkt.timestamp_sec as u64,
+                    ));
                     true
                 })
                 .map_err(|e| e.to_string())?;
@@ -239,7 +276,11 @@ pub mod inner {
                 let stats = LinuxCaptureEngine::read_pcap_file(&path, |pkt| {
                     if count < max {
                         let dp = inspect(&pkt.data);
-                        packets.push(summarise_deep_packet(&dp));
+                        packets.push(summarise_deep_packet_with_iface(
+                            &dp,
+                            "pcap",
+                            pkt.timestamp_sec as u64,
+                        ));
                         count += 1;
                         true
                     } else {
@@ -427,7 +468,7 @@ pub mod inner {
                         "dropped": info.tx_dropped,
                     },
                     "dataplane": {
-                        "bypass_mode": format!("{:?}", dp.bypass_mode),
+                        "bypass_mode": format!("{}", dp.bypass_mode),
                         "xdp_prog_ids": dp.xdp_prog_ids,
                         "xdp_mode": dp.xdp_mode,
                         "afxdp_sockets": dp.afxdp_sockets,
@@ -435,6 +476,11 @@ pub mod inner {
                         "userspace_driver": dp.userspace_driver,
                         "sriov_vfs_enabled": dp.sriov_vfs_enabled,
                         "sriov_vfs_total": dp.sriov_vfs_total,
+                        "tc_clsact": dp.tc_clsact,
+                        "tc_bpf_directions": dp.tc_bpf_directions,
+                        "tc_bpf_prog_ids": dp.tc_bpf_prog_ids,
+                        "pci_link_speed": dp.pci_link_speed,
+                        "pci_link_width": dp.pci_link_width,
                         "hw_features_on": dp.hw_features_on,
                         "pci_address": dp.pci_address,
                     },

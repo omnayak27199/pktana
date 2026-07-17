@@ -52,9 +52,10 @@ pub mod inner {
     };
 
     use pktana_core::{
-        analyze_bytes, build_socket_process_map, geoip_lookup_str, get_nic_dataplane, hex_dump,
-        inspect, list_network_namespaces, scan_bpf_fs, CaptureConfig, CapturePacket, GeoInfo,
-        LinuxCaptureEngine, NicDataplane, ProcessInfo, SocketId,
+        analyze_bytes, build_socket_process_map, diagnose_path, evaluate_packet, geoip_lookup_str,
+        get_nic_dataplane, get_security_config, hex_dump, inspect, list_network_namespaces,
+        scan_bpf_fs, CaptureConfig, CapturePacket, GeoInfo, IssueSeverity, LinuxCaptureEngine,
+        NicDataplane, ProcessInfo, SocketId,
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -265,6 +266,33 @@ pub mod inner {
                 }
             }
 
+            // DLP / IDPS when engines are enabled (shared store with Web UI)
+            let mut sec_suffix = String::new();
+            let sec_cfg = get_security_config();
+            if sec_cfg.dlp_enabled || sec_cfg.idps_enabled {
+                let dp = inspect(&pkt.data);
+                let sec = evaluate_packet(
+                    &dp,
+                    pkt.timestamp_sec as u64,
+                    plen,
+                    self.interface.as_str(),
+                    "",
+                );
+                if !sec.alerts.is_empty() {
+                    let mut engines = Vec::new();
+                    for a in &sec.alerts {
+                        if !engines.contains(&a.engine) {
+                            engines.push(a.engine.clone());
+                        }
+                    }
+                    sec_suffix = format!(
+                        " [{}:{}]",
+                        engines.join("+").to_uppercase(),
+                        sec.verdict
+                    );
+                }
+            }
+
             let Ok(parsed) = analyze_bytes(&pkt.data) else {
                 let entry = PacketEntry {
                     no: self.next_pkt_no,
@@ -297,7 +325,7 @@ pub mod inner {
             } else {
                 dst_ip.clone()
             };
-            let info = build_info(summary);
+            let info = format!("{}{}", build_info(summary), sec_suffix);
 
             let entry = PacketEntry {
                 no: self.next_pkt_no,
@@ -1401,7 +1429,7 @@ pub mod inner {
         render_tab_bar(f, chunks[0], app);
 
         // ── Main dataplane panel ──────────────────────────────────────────────
-        let dp_text = if let Some(dp) = &app.nic_dataplane {
+        let mut dp_text = if let Some(dp) = &app.nic_dataplane {
             let mut lines = vec![
                 format!("  Interface      : {}", app.interface),
                 format!("  Bypass Mode    : {}", dp.bypass_mode),
@@ -1519,6 +1547,20 @@ pub mod inner {
             )
         };
 
+        if let Ok(diag) = diagnose_path(&app.interface) {
+            if !diag.issues.is_empty() {
+                dp_text.push_str("\n\n  Diagnostics");
+                for issue in &diag.issues {
+                    let sev = match issue.severity {
+                        IssueSeverity::Critical => "CRIT",
+                        IssueSeverity::Warning => "WARN",
+                        IssueSeverity::Info => "INFO",
+                    };
+                    dp_text.push_str(&format!("\n    [{sev}] {} — {}", issue.code, issue.message));
+                }
+            }
+        }
+
         f.render_widget(
             Paragraph::new(dp_text)
                 .block(
@@ -1575,7 +1617,7 @@ pub mod inner {
             "╚══════════════════════════════════════════════════════════╝",
             "",
             "  TABS",
-            "  1 / 2 / 3 / 4 / 5    Switch to Overview / Packets / Flows / Stats / Help",
+            "  1 / 2 / 3 / 4 / 5 / 6    Overview / Packets / Flows / Stats / Dataplane / Help",
             "  Tab / Shift+Tab       Cycle forward / backward",
             "",
             "  NAVIGATION",
