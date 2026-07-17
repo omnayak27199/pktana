@@ -285,11 +285,7 @@ pub mod inner {
                             engines.push(a.engine.clone());
                         }
                     }
-                    sec_suffix = format!(
-                        " [{}:{}]",
-                        engines.join("+").to_uppercase(),
-                        sec.verdict
-                    );
+                    sec_suffix = format!(" [{}:{}]", engines.join("+").to_uppercase(), sec.verdict);
                 }
             }
 

@@ -165,20 +165,12 @@ fn clear_engine_removes_only_that_engine() {
     dp.risk_score = 90;
     dp.risk_reasons.push("test".into());
     evaluate_packet(&dp, 1, 100, "eth0", "s1");
-    assert!(list_security_alerts(50)
-        .iter()
-        .any(|a| a.engine == "dlp"));
-    assert!(list_security_alerts(50)
-        .iter()
-        .any(|a| a.engine == "idps"));
+    assert!(list_security_alerts(50).iter().any(|a| a.engine == "dlp"));
+    assert!(list_security_alerts(50).iter().any(|a| a.engine == "idps"));
 
     clear_security_engine("dlp");
-    assert!(!list_security_alerts(50)
-        .iter()
-        .any(|a| a.engine == "dlp"));
-    assert!(list_security_alerts(50)
-        .iter()
-        .any(|a| a.engine == "idps"));
+    assert!(!list_security_alerts(50).iter().any(|a| a.engine == "dlp"));
+    assert!(list_security_alerts(50).iter().any(|a| a.engine == "idps"));
     assert!(list_security_flows(Some("dlp"), None, 10).is_empty());
 }
 
