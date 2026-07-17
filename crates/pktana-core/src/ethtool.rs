@@ -100,7 +100,7 @@ pub fn get_ethtool_report(name: &str) -> std::io::Result<EthtoolReport> {
         .and_then(|s| s.trim().parse::<u32>().ok());
 
     // ── link settings ────────────────────────────────────────────────────────
-    let speed_mbps = read_u32(&base, "speed").and_then(|v| if v == 0 { None } else { Some(v) });
+    let speed_mbps = read_u32(&base, "speed").filter(|&v| v != 0);
     let duplex = sysfs_str(&base, "duplex");
     let autoneg = sysfs_str(&base, "autoneg");
     let link_mode = read_u32(&base, "link_mode");
