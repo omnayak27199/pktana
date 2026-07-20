@@ -47,8 +47,8 @@ cargo install pktana-cli --features pcap,tui
 
 ```bash
 # Download from the GitHub releases page
-wget https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64.deb
-sudo dpkg -i pktana_0.5.0_amd64.deb
+wget https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64.deb
+sudo dpkg -i pktana_0.6.0_amd64.deb
 ```
 
 Package installs:
@@ -58,8 +58,8 @@ Package installs:
 ### RHEL / Rocky / AlmaLinux / CentOS (.rpm)
 
 ```bash
-wget https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.x86_64.rpm
-sudo rpm -ivh pktana-0.5.0-1.x86_64.rpm
+wget https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.x86_64.rpm
+sudo rpm -ivh pktana-0.6.0-1.x86_64.rpm
 ```
 
 ---
@@ -113,7 +113,7 @@ pktana capture eth0   # now works without sudo
 
 ```bash
 pktana --version
-# pktana v0.5.0 — Linux Packet Analyzer
+# pktana v0.6.0 — Linux Packet Analyzer
 # License: Apache-2.0
 # https://github.com/omnayak27199/pktana
 

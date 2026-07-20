@@ -10,6 +10,34 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.0] — 2026-07-20
+
+### Added
+
+#### Security — DLP (Data Loss Prevention)
+- Sophos-style content inspection engine with built-in identifiers for credentials, PAN/PCI, SSN, IBAN, passport patterns, bulk PII, private keys, and cloud API keys.
+- Protocol-aware scanners for HTTP, FTP, and SMTP payloads.
+- Custom regex data identifiers with category and severity.
+- Engine actions: monitor, drop, and redirect (with optional redirect target).
+
+#### Security — IDPS (Intrusion Detection / Prevention)
+- Suricata-style signature catalog and custom rule lines.
+- Heuristics for port scan, SSH brute-force, DNS tunneling, NTP amplification, Telnet, large ICMP, and suspicious ports.
+- DPI risk bridge, high risk-score alerts, and JA3 fingerprint blocklists.
+- Per-signature threshold windows before alerting.
+
+#### Security — Policy & Integration
+- Conditional policy rules scoped by engine, interface, addresses, and ports.
+- Per-interface / per-session alerts, flows, and stats with clear-on-disable.
+- Wired into all capture paths: live, pcap, Web UI, CLI, TUI, and MCP.
+- REST API: `/api/security/config`, `/api/security/alerts`, `/api/security/flows`, `/api/security/stats`.
+
+### Changed
+- Workspace version bumped to **0.6.0** across `Cargo.toml`, `Cargo.lock`, `pktana-cli` dep on `pktana-core`, `release.conf`, `install.sh`, packaging scripts, `.github/workflows/release.yml`, `deploy/centos/pktana.spec`, `index.html`, `README.md`, and wiki pages.
+- Landing page and README updated to highlight DLP/IDPS as first-class features.
+
+---
+
 ## [0.5.0] — 2026-06-04
 
 ### Added

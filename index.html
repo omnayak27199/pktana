@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>pktana — Linux Packet Analyzer</title>
-  <meta name="description" content="pktana is a modern Linux packet analyzer. Deep packet inspection, TLS JA3 fingerprinting, flow analysis, GeoIP, risk scoring — single static binary." />
+  <meta name="description" content="pktana is a modern Linux packet analyzer. Deep packet inspection, DLP, IDPS, TLS JA3 fingerprinting, flow analysis, GeoIP, risk scoring — single static binary." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -927,7 +927,7 @@
         <a href="#reviews">Reviews</a>
       </nav>
       <div class="nav-right">
-        <span class="nav-version">v0.5.0</span>
+        <span class="nav-version">v0.6.0</span>
         <button onclick="npOpen()" class="btn btn-ghost np-probe-btn" style="padding:8px 14px;font-size:0.85rem;" title="Scan your network identity">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
@@ -949,12 +949,12 @@
       <div class="hero-copy">
         <div class="hero-badge">
           <span class="hero-badge-dot"></span>
-          Latest release · v0.5.0
+          Latest release · v0.6.0
         </div>
         <h1>Deep packet<br>intelligence for<br><em>Linux engineers.</em></h1>
         <p class="hero-lead">
           pktana decodes every frame — Ethernet to TLS to gRPC — in a single pass.
-          Live DPI, JA3 fingerprinting, GeoIP, risk scoring, and a Wireshark-style TUI.
+          Live DPI, Sophos-style DLP, Suricata-style IDPS, JA3 fingerprinting, GeoIP, and a Wireshark-style TUI.
           One static Rust binary. Zero external dependencies.
         </p>
         <div class="hero-cta">
@@ -973,9 +973,9 @@
         </div>
         <div class="hero-stats">
           <div class="hero-stat"><strong>40+</strong><span>protocols decoded</span></div>
+          <div class="hero-stat"><strong>DLP</strong><span>+ IDPS inline engines</span></div>
           <div class="hero-stat"><strong>0–100</strong><span>risk score per packet</span></div>
           <div class="hero-stat"><strong>1</strong><span>static binary</span></div>
-          <div class="hero-stat"><strong>Zero</strong><span>external dependencies</span></div>
         </div>
       </div>
 
@@ -1052,8 +1052,9 @@
           </p>
           <p>
             Today pktana provides a strong foundation: raw frame decoding, L2–L7 protocol parsing, TCP/TLS/DNS/DHCP flow analysis,
-            JA3 fingerprinting, GeoIP, risk scoring, a full-screen TUI, a web UI, batch pcap modes, and optional live capture
-            through feature-gated <code style="background:var(--primary-faint);color:var(--primary-d);padding:2px 7px;border-radius:5px;font-size:0.85em;">pcap</code> support.
+            JA3 fingerprinting, GeoIP, risk scoring, production DLP and IDPS engines, a full-screen TUI, a web UI, batch pcap modes,
+            and optional live capture through feature-gated
+            <code style="background:var(--primary-faint);color:var(--primary-d);padding:2px 7px;border-radius:5px;font-size:0.85em;">pcap</code> support.
           </p>
           <p>
             The long-term vision: a Linux-native packet analysis platform with deeper L2–L7 coverage, native eBPF capture paths,
@@ -1067,7 +1068,7 @@
             <li>Flow-level traffic understanding at scale</li>
             <li>Production-friendly Linux deployment</li>
             <li>TLS/DNS/protocol security analysis</li>
-            <li>Future dataplane and eBPF observability</li>
+            <li>Inline DLP and IDPS on every capture path</li>
           </ul>
         </aside>
       </div>
@@ -1103,9 +1104,9 @@
                 <div class="dl-os-sub">el9 · x86_64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana-0.5.0-1.el9.x86_64.rpm</div>
+            <div class="dl-filename">pktana-0.6.0-1.el9.x86_64.rpm</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el9.x86_64.rpm">⬇ RPM</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el9.x86_64.rpm">⬇ RPM</a>
             </div>
           </div>
           <div class="dl-card">
@@ -1116,9 +1117,9 @@
                 <div class="dl-os-sub">el7 · x86_64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana-0.5.0-1.el7.x86_64.rpm</div>
+            <div class="dl-filename">pktana-0.6.0-1.el7.x86_64.rpm</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el7.x86_64.rpm">⬇ RPM</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el7.x86_64.rpm">⬇ RPM</a>
             </div>
           </div>
           <div class="dl-card">
@@ -1129,10 +1130,10 @@
                 <div class="dl-os-sub">Jammy · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.5.0_amd64_ubuntu22.04.deb</div>
+            <div class="dl-filename">pktana_0.6.0_amd64_ubuntu22.04.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu22.04.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-ubuntu22.04-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu22.04.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-ubuntu22.04-x86_64.tar.gz">tar.gz</a>
             </div>
           </div>
           <div class="dl-card">
@@ -1143,10 +1144,10 @@
                 <div class="dl-os-sub">Noble · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.5.0_amd64_ubuntu24.04.deb</div>
+            <div class="dl-filename">pktana_0.6.0_amd64_ubuntu24.04.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu24.04.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-ubuntu24.04-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu24.04.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-ubuntu24.04-x86_64.tar.gz">tar.gz</a>
             </div>
           </div>
           <div class="dl-card">
@@ -1157,10 +1158,10 @@
                 <div class="dl-os-sub">Bookworm · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.5.0_amd64_debian12.deb</div>
+            <div class="dl-filename">pktana_0.6.0_amd64_debian12.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_debian12.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-debian12-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_debian12.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-debian12-x86_64.tar.gz">tar.gz</a>
             </div>
           </div>
           <div class="dl-card">
@@ -1208,7 +1209,7 @@
         <div class="tag">Core Features</div>
         <h2 class="section-h">Production-grade packet analysis, today.</h2>
         <p class="section-sub">
-          pktana v0.5.0 is a fully capable packet analysis platform. Core and CLI split across two Rust crates, with deep protocol coverage and a single static binary.
+          pktana v0.6.0 adds production DLP and IDPS engines on top of full L2–L7 DPI. Core and CLI split across two Rust crates, with a single static binary.
         </p>
       </div>
       <div class="features-grid">
@@ -1216,6 +1217,22 @@
         <article class="feat-card">
           <div class="feat-icon">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3>DLP — Data Loss Prevention</h3>
+          <p>Sophos-style content inspection for credentials, PAN/PCI, SSN, IBAN, private keys, and cloud API keys across HTTP, FTP, and SMTP — plus custom regex identifiers.</p>
+        </article>
+
+        <article class="feat-card">
+          <div class="feat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <h3>IDPS — Intrusion Detection</h3>
+          <p>Suricata-style signatures and heuristics for port scans, SSH brute-force, DNS tunneling, NTP amplification, JA3 blocklists, and custom rule lines with monitor/drop/redirect actions.</p>
+        </article>
+
+        <article class="feat-card">
+          <div class="feat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           </div>
           <h3>Full L2–L7 DPI</h3>
           <p>Ethernet, ARP, IPv4, IPv6, TCP, UDP, ICMP, TLS, HTTP, DNS, QUIC, HTTP/2, gRPC, WebSocket, SSH, SIP, NTP, BGP — decoded in one pass with no external parsers.</p>
@@ -1311,6 +1328,8 @@
           <ul class="flow-list">
             <li><span class="flow-dot"></span>Live capture on any interface with BPF filter support</li>
             <li><span class="flow-dot"></span>Full L2–L7 decode: Ethernet, ARP, IPv4/v6, TCP, UDP, ICMP, TLS, HTTP, DNS, QUIC, HTTP/2, gRPC, WebSocket, SSH, SIP, NTP, BGP</li>
+            <li><span class="flow-dot"></span>Inline DLP: credentials, PII/PCI, private keys, custom identifiers</li>
+            <li><span class="flow-dot"></span>Inline IDPS: Suricata-style signatures, scan/brute/tunnel heuristics, JA3 blocklists</li>
             <li><span class="flow-dot"></span>JA3 TLS fingerprinting, ALPN extraction, cipher suite listing</li>
             <li><span class="flow-dot"></span>Tunnel inner-frame re-inspection: VXLAN, GRE, Geneve</li>
             <li><span class="flow-dot"></span>Risk scoring (0–100) and app category classification per packet</li>
@@ -1334,7 +1353,7 @@
             <li><span class="flow-dot flow-dot-blue"></span>REST API for observability pipeline integration</li>
             <li><span class="flow-dot flow-dot-blue"></span>PCAPNG metadata, comments, and interface blocks</li>
             <li><span class="flow-dot flow-dot-blue"></span>Plugin architecture for custom protocol dissectors</li>
-            <li><span class="flow-dot flow-dot-blue"></span>Alert rules engine with threshold-based triggers</li>
+            <li><span class="flow-dot flow-dot-blue"></span>Expanded DLP/IDPS policy packs and SIEM exporters</li>
           </ul>
         </div>
       </div>
@@ -1405,7 +1424,7 @@
         <div class="tag" style="background:rgba(234,88,12,0.18);border-color:rgba(234,88,12,0.3);color:#fb923c;">Roadmap</div>
         <h2 class="section-h" style="color:#fff;">Strong foundation. Clear path forward.</h2>
         <p class="section-sub" style="color:rgba(255,255,255,0.6);">
-          v0.5.0 delivers full L2–L7 DPI, JA3, tunnel re-inspection, risk scoring, TUI, and pcap support. Here's what comes next.
+          v0.6.0 delivers full L2–L7 DPI, DLP, IDPS, JA3, tunnel re-inspection, risk scoring, TUI, and pcap support. Here's what comes next.
         </p>
       </div>
       <div class="roadmap-grid">
@@ -1556,7 +1575,7 @@
           <div class="fb-mark">p</div>
           pktana
         </div>
-        <p>Linux-first packet analysis workspace.<br>Written in Rust. Current release: v0.5.0.</p>
+        <p>Linux-first packet analysis workspace.<br>Written in Rust. Current release: v0.6.0.</p>
       </div>
       <div class="footer-col">
         <h5>Product</h5>

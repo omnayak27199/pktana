@@ -8,10 +8,10 @@
 
 ```toml
 [dependencies]
-pktana-core = "0.5.0"
+pktana-core = "0.6.0"
 
 # For live packet capture:
-pktana-core = { version = "0.5.0", features = ["pcap"] }
+pktana-core = { version = "0.6.0", features = ["pcap"] }
 ```
 
 ---

@@ -64,17 +64,17 @@ case "$OS" in
     ubuntu22)
         IMAGE="ubuntu:22.04"
         INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
-        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.6.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.6.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     ubuntu24)
         IMAGE="ubuntu:24.04"
         INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
-        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.6.0}_amd64_${OS}.04.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.6.0}-${OS}.04-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     debian12)
         IMAGE="debian:12"
         INSTALL_DEPS="apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gcc libpcap-dev libssl-dev pkg-config make git curl dpkg-dev fakeroot ca-certificates build-essential"
-        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.5.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.5.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
+        BUILD_CMD="cargo build --release --features pcap,tui && cargo install cargo-deb --locked && cd crates/pktana-cli && cargo deb --no-build --no-strip --output ../../dist/pktana_${VERSION:-0.6.0}_amd64_${OS}.deb && cd ../.. && mkdir -p dist && tar -czf dist/pktana-${VERSION:-0.6.0}-${OS}-x86_64.tar.gz -C target/release pktana && ls -la dist/"
         ;;
     *)
         echo "Unsupported OS option: $OS"

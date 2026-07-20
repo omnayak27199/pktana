@@ -8,28 +8,26 @@
 
 [![CI](https://github.com/omnayak27199/pktana/actions/workflows/ci.yml/badge.svg)](https://github.com/omnayak27199/pktana/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.5.0)
+[![Version](https://img.shields.io/badge/version-0.6.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.6.0)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky%20%2F%20Ubuntu%20%2F%20Debian-lightgrey.svg)]()
 [![crates.io](https://img.shields.io/crates/v/pktana-cli.svg)](https://crates.io/crates/pktana-cli)
 [![Website](https://img.shields.io/badge/website-pktana.online-orange.svg)](https://pktana.online)
 
 🌐 **Website**: [pktana.online](https://pktana.online)
 📦 **crates.io**: [pktana-cli](https://crates.io/crates/pktana-cli) · [pktana-core](https://crates.io/crates/pktana-core)
-📥 **Downloads**: [GitHub Releases](https://github.com/omnayak27199/pktana/releases/tag/v0.5.0)
+📥 **Downloads**: [GitHub Releases](https://github.com/omnayak27199/pktana/releases/tag/v0.6.0)
 
 ---
 
-## What's new in v0.5.0
+## What's new in v0.6.0
 
-- 🪟 **Multi-window Web UI** — open many interfaces in parallel, each in its own Chrome-tab-style window, with its own capture state, packet table, flows, protocols, and hardware tabs.
-- ⏯ **Per-interface Pause / Resume** — pause the active interface's capture without affecting other windows; resume restarts only that one.
-- 🎯 **Host-vs-window tab separation** — the main activity bar keeps only host-scoped views (Server Info, PCAP Analyzer, Connections, Terminal); per-interface views live inside each window.
-- 🟧 **Native packages for every major distro** — RPM for RHEL/Rocky/Alma 7 & 9, `.deb` for Ubuntu 22.04 / 24.04 and Debian 12, plus signed binary tarballs, all built automatically by GitHub Actions.
-- 🌓 **Polished light/dark theme** — every button, header, and table now meets ≥ 3:1 contrast in both themes.
-- 🏷 **Handshake tag filters** — one-click filters for TCP SYN, TLS handshake, DNS query, DHCP DORA.
-- 🦀 **Round-font branding refresh** — `pktana` logotype in Nunito; landing-page download grid linking directly to GitHub Release artifacts.
+- 🛡 **DLP engine (Sophos-style)** — detect credentials, PAN/PCI, SSN, IBAN, private keys, cloud API keys, and bulk PII in HTTP/FTP/SMTP payloads; custom regex identifiers supported.
+- 🚨 **IDPS engine (Suricata-style)** — signature matching, DPI risk bridge, port-scan / SSH brute / DNS-tunnel / NTP-amp heuristics, JA3 blocklists, and custom Suricata rules.
+- 🎛 **Conditional security policy** — per-engine monitor / drop / redirect actions, interface-scoped policy rules, per-rule overrides, and clear-on-disable stats.
+- 🪟 **Web / CLI / TUI / MCP integration** — security config, alerts, flows, and per-interface stats available across every capture path.
+- 📊 **Per-interface security stats** — live alert counts and flow summaries that reset cleanly when an engine is disabled.
 
-See [v0.5.0_release_note.md](v0.5.0_release_note.md) and [CHANGELOG.md](CHANGELOG.md) for the full list.
+See [v0.6.0_release_note.md](v0.6.0_release_note.md) and [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ---
 
@@ -45,6 +43,8 @@ Modern infrastructure teams need deep network visibility without installing 5 se
 | QUIC / HTTP2 / gRPC detection | Wireshark plugins | built into `pktana inspect` |
 | Tunnel inner-frame decode (VXLAN/GRE) | custom scripts | built into `pktana inspect` |
 | Risk scoring & app classification | Palo Alto / Fortinet | built into `pktana inspect` |
+| Data loss prevention (DLP) | Sophos / Forcepoint | built-in DLP engine (Web / CLI / TUI) |
+| Intrusion detection / prevention | Suricata / Snort | built-in IDPS engine (signatures + heuristics) |
 | NIC stats & hardware offloads | `ethtool` | `pktana ethtool eth0` |
 | Active connections + GeoIP | `ss -tulnp` + separate tool | `pktana conn` |
 | Routing table | `ip route` | `pktana route` |
@@ -115,6 +115,7 @@ The web UI brings full Wireshark-style packet analysis to your browser, with a u
 - **Connections**: TCP/UDP socket list + GeoIP + PID, refresh on demand.
 - **PCAP Analyzer**: drop a file path or upload a `.pcap` and it opens in a new analysis window.
 - **Terminal**: in-browser xterm.js shell (when enabled).
+- **Security (DLP / IDPS)**: enable engines, set monitor/drop/redirect actions, review alerts & flows, manage custom identifiers and Suricata rules.
 - **Theme toggle**: polished light & dark themes with full contrast coverage.
 
 #### REST + SSE API
@@ -123,6 +124,30 @@ The web UI brings full Wireshark-style packet analysis to your browser, with a u
 - `POST /api/sessions/create` · `GET /api/sessions` · `POST /api/sessions/{id}/stop` · `DELETE /api/sessions/{id}`
 - `GET  /api/inspect?session=…&iface=…[&filter=…][&flow_analyze=true]` (Server-Sent Events)
 - `GET  /api/inspect?session=…&read=/path/to/file.pcap` (offline pcap stream)
+- `GET/POST /api/security/config` · `GET /api/security/alerts` · `GET /api/security/flows` · `GET /api/security/stats`
+
+---
+
+### DLP & IDPS Security Engines
+
+Inline security inspection runs on every capture path (live, pcap, Web, TUI, MCP):
+
+#### DLP (Data Loss Prevention)
+- Built-in identifiers for cleartext credentials, bearer tokens, session cookies, payment cards (PAN/PCI), SSN, IBAN, passport patterns, bulk email/phone, private keys, and cloud API keys
+- Protocol-aware scanners for HTTP, FTP, and SMTP
+- Custom Sophos-style regex identifiers with category and severity
+- Actions: **monitor**, **drop**, or **redirect** (with optional redirect target)
+
+#### IDPS (Intrusion Detection / Prevention)
+- Suricata-style signature catalog plus custom rule lines
+- Heuristics: port scan, SSH brute-force, DNS tunneling, NTP amplification, suspicious ports, Telnet, large ICMP
+- DPI risk bridge and JA3 fingerprint blocklists
+- Per-signature thresholds (count within time window) before alerting
+
+#### Policy & operations
+- Conditional policy rules (interface, engine, addresses, ports)
+- Per-interface / per-session alert and flow stats; clear-on-disable resets engine state
+- Configurable from Web UI, CLI, TUI, and MCP tools
 
 ---
 
@@ -201,21 +226,21 @@ curl -fsSL https://raw.githubusercontent.com/omnayak27199/pktana/main/install.sh
 
 ```bash
 sudo dnf install -y \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el9.x86_64.rpm
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el9.x86_64.rpm
 ```
 
 ### RHEL / CentOS 7
 
 ```bash
 sudo yum install -y \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.5.0-1.el7.x86_64.rpm
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el7.x86_64.rpm
 ```
 
 ### Ubuntu 22.04 / 24.04 · Debian 12
 
 ```bash
 curl -L -o pktana.deb \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.5.0_amd64_ubuntu24.04.deb
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu24.04.deb
 sudo apt install -y ./pktana.deb
 ```
 
@@ -224,7 +249,7 @@ sudo apt install -y ./pktana.deb
 ### Verify the RPM signature
 
 ```bash
-rpm --checksig pktana-0.5.0-1.el9.x86_64.rpm
+rpm --checksig pktana-0.6.0-1.el9.x86_64.rpm
 ```
 
 ### Build from source
@@ -343,7 +368,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed design notes.
 
 ```toml
 [dependencies]
-pktana-core = "0.5.0"
+pktana-core = "0.6.0"
 ```
 
 ```rust
