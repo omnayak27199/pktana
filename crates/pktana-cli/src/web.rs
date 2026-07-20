@@ -2381,8 +2381,10 @@ pub mod inner {
         env!("CARGO_MANIFEST_DIR"),
         "/wiki/05-web-ui-guide.md"
     ));
-    const WIKI_DPI: &str =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/wiki/06-dpi-engine.md"));
+    const WIKI_DPI: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/06-dpi-engine.md"
+    ));
     const WIKI_FLOW: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/wiki/07-flow-analyzer.md"
