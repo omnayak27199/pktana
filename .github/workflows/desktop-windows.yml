@@ -1,0 +1,78 @@
+name: Desktop Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+    paths:
+      - 'pktana-desktop/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/desktop-windows.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build pktana Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Npcap SDK
+        shell: pwsh
+        run: |
+          $sdk = "C:\Npc_SDK"
+          New-Item -ItemType Directory -Force -Path $sdk | Out-Null
+          $url = "https://npcap.com/dist/npcap-sdk-1.13.zip"
+          Invoke-WebRequest -Uri $url -OutFile npcap-sdk.zip
+          Expand-Archive -Path npcap-sdk.zip -DestinationPath $sdk -Force
+          # Layout can be nested; normalize Include/Lib
+          if (-not (Test-Path "$sdk\Include") -and (Test-Path "$sdk\npcap-sdk-1.13\Include")) {
+            Copy-Item -Recurse "$sdk\npcap-sdk-1.13\*" $sdk -Force
+          }
+          echo "NPCAP_SDK=$sdk" >> $env:GITHUB_ENV
+          echo "LIB=$sdk\Lib\x64;$env:LIB" >> $env:GITHUB_ENV
+          echo "INCLUDE=$sdk\Include;$env:INCLUDE" >> $env:GITHUB_ENV
+
+      - name: Build pktana.exe (pcap + tui)
+        shell: pwsh
+        run: |
+          cargo build --release --features pcap,tui -p pktana-cli
+          New-Item -ItemType Directory -Force -Path pktana-desktop\resources\bin | Out-Null
+          Copy-Item target\release\pktana.exe pktana-desktop\resources\bin\pktana.exe -Force
+          .\pktana-desktop\resources\bin\pktana.exe --version
+
+      - name: Package Windows installer
+        working-directory: pktana-desktop
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install
+          npm run dist:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: |
+            pktana-desktop/dist/*.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pktana-desktop/dist/*.exe

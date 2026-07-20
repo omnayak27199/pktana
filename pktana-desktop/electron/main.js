@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * pktana desktop — Wireshark-style shell for macOS.
+ * pktana desktop — Wireshark-style shell for macOS / Windows.
  *
- * Starts the real pktana web server (same web.rs UI + libpcap capture),
+ * Starts the real pktana web server (same web.rs UI + libpcap/Npcap capture),
  * then opens it in an Electron window.
  *
  * Binary resolution order:
- *   1. Bundled resources/bin/pktana (packaged .app / CI build)
+ *   1. Bundled resources/bin/pktana(.exe) (packaged app / CI build)
  *   2. PKTANA_BIN env override
  *   3. pktana on PATH
- *   4. Docker fallback via ../docker_mac.sh (Linux engine)
+ *   4. Docker fallback via ../docker_mac.sh (macOS/Linux only)
  */
 const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn, execFileSync } = require('child_process');
@@ -19,30 +19,43 @@ const path = require('path');
 
 const DEFAULT_PORT = Number(process.env.PKTANA_PORT || 18080);
 const HOST = '127.0.0.1';
+const isWin = process.platform === 'win32';
 
 let mainWindow = null;
 let backend = null;
 let backendMode = 'none'; // native | docker
 let shuttingDown = false;
 
-function resourcesBin() {
-  // Packaged: .../pktana.app/Contents/Resources/bin/pktana
-  // Dev:      pktana-desktop/resources/bin/pktana
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'bin', 'pktana');
+function resourcesBinCandidates() {
+  const dir = app.isPackaged
+    ? path.join(process.resourcesPath, 'bin')
+    : path.join(__dirname, '..', 'resources', 'bin');
+  if (isWin) {
+    return [path.join(dir, 'pktana.exe'), path.join(dir, 'pktana')];
   }
-  return path.join(__dirname, '..', 'resources', 'bin', 'pktana');
+  return [path.join(dir, 'pktana'), path.join(dir, 'pktana.exe')];
+}
+
+function resourcesBin() {
+  for (const p of resourcesBinCandidates()) {
+    if (fs.existsSync(p)) return p;
+  }
+  return resourcesBinCandidates()[0];
 }
 
 function findNativeBinary() {
   if (process.env.PKTANA_BIN && fs.existsSync(process.env.PKTANA_BIN)) {
     return process.env.PKTANA_BIN;
   }
-  const bundled = resourcesBin();
-  if (fs.existsSync(bundled)) return bundled;
+  for (const p of resourcesBinCandidates()) {
+    if (fs.existsSync(p)) return p;
+  }
   try {
-    const which = execFileSync('which', ['pktana'], { encoding: 'utf8' }).trim();
-    if (which) return which;
+    const cmd = isWin ? 'where' : 'which';
+    const which = execFileSync(cmd, ['pktana'], { encoding: 'utf8' })
+      .trim()
+      .split(/\r?\n/)[0];
+    if (which && fs.existsSync(which)) return which;
   } catch {
     /* not on PATH */
   }
@@ -50,7 +63,6 @@ function findNativeBinary() {
 }
 
 function repoRoot() {
-  // Dev: pktana-desktop/..  Packaged: not available
   return path.join(__dirname, '..', '..');
 }
 
@@ -107,6 +119,11 @@ function startNative(bin, port) {
 }
 
 function startDocker(port) {
+  if (isWin) {
+    throw new Error(
+      'No native pktana.exe found. Build with pktana-desktop\\scripts\\build-window.bat (needs Npcap SDK).'
+    );
+  }
   const script = path.join(repoRoot(), 'docker_mac.sh');
   if (!fs.existsSync(script)) {
     throw new Error('docker_mac.sh not found and no native pktana binary bundled');
@@ -194,17 +211,22 @@ function buildMenu() {
           click: () => shell.openExternal('https://pktana.online/docs.html'),
         },
         {
-          label: 'Capture permissions (macOS)',
+          label: 'Capture permissions',
           click: () =>
             dialog.showMessageBox({
               type: 'info',
-              title: 'macOS packet capture',
-              message:
-                'Live capture uses libpcap (same as Wireshark).\n\n' +
-                'If interfaces show no packets, install Wireshark once (for ChmodBPF) ' +
-                'or run with administrator privileges so /dev/bpf* is readable.\n\n' +
-                'Backend mode: ' +
-                backendMode,
+              title: 'Packet capture permissions',
+              message: isWin
+                ? 'Live capture on Windows uses Npcap (same as Wireshark).\n\n' +
+                  'Install Npcap from https://npcap.com/ (enable WinPcap API compatibility).\n' +
+                  'Run pktana as Administrator if interfaces show no packets.\n\n' +
+                  'Backend mode: ' +
+                  backendMode
+                : 'Live capture uses libpcap (same as Wireshark).\n\n' +
+                  'If interfaces show no packets, install Wireshark once (for ChmodBPF) ' +
+                  'or run with administrator privileges so /dev/bpf* is readable.\n\n' +
+                  'Backend mode: ' +
+                  backendMode,
             }),
         },
         {
@@ -245,9 +267,13 @@ async function createWindow() {
     dialog.showErrorBox(
       'pktana failed to start',
       `${err.message}\n\n` +
-        'Install Docker Desktop, or place a macOS pktana binary at:\n' +
-        resourcesBin() +
-        '\n\nBuild on a Mac: ./pktana-desktop/scripts/build-mac.sh'
+        (isWin
+          ? 'Place a Windows pktana.exe at:\n' +
+            resourcesBin() +
+            '\n\nBuild on Windows: pktana-desktop\\scripts\\build-window.bat'
+          : 'Install Docker Desktop, or place a macOS pktana binary at:\n' +
+            resourcesBin() +
+            '\n\nBuild on a Mac: ./pktana-desktop/scripts/build-mac.sh')
     );
     app.quit();
     return;

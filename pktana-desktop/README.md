@@ -1,46 +1,58 @@
-# pktana Desktop (macOS)
+# pktana Desktop (macOS & Windows)
 
-Wireshark-style **native macOS app** for pktana.
+Wireshark-style **desktop app** for pktana.
 
-The window hosts the real **`web.rs` Web UI**. Live capture uses **libpcap** (same stack Wireshark uses on Mac). DPI / DLP / IDPS run in-process.
+The window hosts the real **`web.rs` Web UI**. Live capture uses **libpcap** (macOS) or **Npcap** (Windows). DPI / DLP / IDPS run in-process.
 
-Linux-only host panels (ethtool, XDP/DPDK, `/proc` netns) show empty or N/A on macOS — that is expected.
+Linux-only host panels (ethtool, XDP/DPDK, `/proc` netns) show empty or N/A on desktop OS — that is expected.
 
-## Quick start (development on a Mac)
+## Quick start (development)
+
+### macOS
 
 ```bash
-# 1) Build the Rust backend
-cd /path/to/pktana
 brew install libpcap
 export PKG_CONFIG_PATH="$(brew --prefix libpcap)/lib/pkgconfig"
 cargo build --release --features pcap,tui -p pktana-cli
 mkdir -p pktana-desktop/resources/bin
 cp target/release/pktana pktana-desktop/resources/bin/pktana
+cd pktana-desktop && npm install && npm start
+```
 
-# 2) Run the desktop shell
+### Windows
+
+1. Install [Rust](https://rustup.rs/), [Node.js 20+](https://nodejs.org/), and [Npcap SDK](https://npcap.com/#download).
+2. Set `NPCAP_SDK` (e.g. `C:\Npc_SDK`).
+3. Build and run:
+
+```bat
+cargo build --release --features pcap,tui -p pktana-cli
+mkdir pktana-desktop\resources\bin
+copy target\release\pktana.exe pktana-desktop\resources\bin\pktana.exe
 cd pktana-desktop
 npm install
 npm start
 ```
 
-## Build installer (.dmg)
+## Build installers
 
-```bash
-./pktana-desktop/scripts/build-mac.sh
-# → pktana-desktop/dist/pktana-0.6.0-mac-*.dmg
-```
+| Platform | Command | Output |
+|---|---|---|
+| **macOS** | `./pktana-desktop/scripts/build-mac.sh` | `.dmg` + `.zip` in `dist/` |
+| **Windows** | `./pktana-desktop/scripts/build-window.sh` or `scripts\build-window.bat` | NSIS `.exe` + portable in `dist/` |
 
-Or download the `desktop-macos` artifact from GitHub Actions.
+Or download artifacts from GitHub Actions:
+
+- **Desktop macOS** → `desktop-macos`
+- **Desktop Windows** → `desktop-windows`
 
 ## Capture permissions
 
-macOS blocks raw capture unless BPF devices are readable:
+| OS | Requirement |
+|---|---|
+| macOS | Install Wireshark once (**ChmodBPF**), or run as admin |
+| Windows | Install [Npcap](https://npcap.com/) (WinPcap API compat), run as Administrator if needed |
 
-1. Install [Wireshark](https://www.wireshark.org/) once (installs **ChmodBPF**), **or**
-2. Run pktana as administrator when capturing.
+## Fallback (macOS / Linux only)
 
-Then open interfaces (`en0`, `en1`, …) from the Web UI and start capture — same flow as on Linux.
-
-## Fallback
-
-If no native binary is present, the app can start `./docker_mac.sh` (Linux engine in Docker). Prefer the native binary for real Mac interface capture.
+If no native binary is present, the app can start `./docker_mac.sh`. Prefer the native binary for real host interface capture.

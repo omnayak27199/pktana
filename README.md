@@ -223,7 +223,17 @@ Native **pktana.app** wraps the same `web.rs` UI and uses **libpcap** for live c
 open pktana-desktop/dist/*.dmg
 ```
 
-See [pktana-desktop/README.md](pktana-desktop/README.md). For a Linux engine in Docker instead: `./docker_mac.sh start`.
+### Windows desktop app
+
+Native **pktana.exe** installer (same Web UI + **Npcap** capture):
+
+```bat
+pktana-desktop\scripts\build-window.bat
+```
+
+Or Git Bash: `./pktana-desktop/scripts/build-window.sh`
+
+See [pktana-desktop/README.md](pktana-desktop/README.md). For a Linux engine in Docker on Mac: `./docker_mac.sh start`.
 
 ### macOS (full features via Docker)
 

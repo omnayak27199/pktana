@@ -22,3 +22,4 @@ pcaps/*
 pktana-desktop/node_modules/
 pktana-desktop/dist/
 pktana-desktop/resources/bin/pktana
+pktana-desktop/resources/bin/pktana.exe
