@@ -48,10 +48,21 @@ jobs:
       - name: Package .dmg
         working-directory: pktana-desktop
         env:
+          # Skip Developer ID lookup; afterPack.js applies ad-hoc signature.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npm install
           npm run dist:mac
+          # Ensure nested app bundles are ad-hoc signed in the output tree
+          find dist -name '*.app' -print0 | while IFS= read -r -d '' app; do
+            echo "Ad-hoc codesign $app"
+            codesign --force --deep --sign - "$app" || true
+            BIN="$app/Contents/Resources/bin/pktana"
+            if [ -x "$BIN" ]; then
+              codesign --force --sign - "$BIN" || true
+              codesign --force --deep --sign - "$app" || true
+            fi
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

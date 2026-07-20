@@ -32,8 +32,16 @@ cd "$DESKTOP"
 npm install
 npm run dist:mac
 
+# Extra pass: ad-hoc sign any .app left in dist (afterPack also signs).
+while IFS= read -r -d '' app; do
+  echo "Ad-hoc codesign: $app"
+  codesign --force --deep --sign - "$app" || true
+done < <(find "$DESKTOP/dist" -name '*.app' -print0 2>/dev/null || true)
+
 echo ""
 echo "Artifacts in $DESKTOP/dist/"
 ls -la "$DESKTOP/dist/" || true
 echo ""
-echo "Live capture tip: install Wireshark once for ChmodBPF, or run the app with admin rights."
+echo "If macOS says the app is damaged after download:"
+echo "  ./pktana-desktop/scripts/fix-macos-gatekeeper.sh /Applications/pktana.app"
+echo "Live capture tip: install Wireshark once for ChmodBPF, or run with admin rights."

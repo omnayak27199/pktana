@@ -16,6 +16,7 @@
     "appId": "online.pktana.desktop",
     "productName": "pktana",
     "copyright": "Copyright © 2026 Omprakash",
+    "afterPack": "scripts/afterPack.js",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -40,7 +41,9 @@
         "zip"
       ],
       "artifactName": "pktana-${version}-mac-${arch}.${ext}",
+      "identity": null,
       "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "extendInfo": {
         "NSAppleEventsUsageDescription": "pktana may request privileges to capture network traffic."
       }

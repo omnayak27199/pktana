@@ -46,6 +46,24 @@ Or download artifacts from GitHub Actions:
 - **Desktop macOS** → `desktop-macos`
 - **Desktop Windows** → `desktop-windows`
 
+## macOS: “app is damaged and can’t be opened”
+
+This is **Gatekeeper quarantine**, not a corrupt file. Apple blocks unsigned apps downloaded from the internet (GitHub Releases / Actions artifacts).
+
+**Fix (on the Mac):**
+
+```bash
+# After dragging pktana.app into Applications:
+xattr -cr /Applications/pktana.app
+
+# Or run the helper:
+./pktana-desktop/scripts/fix-macos-gatekeeper.sh /Applications/pktana.app
+```
+
+Then open **pktana** again (first time: Right-click → **Open** if macOS still warns).
+
+Fully removing the warning for all users requires an **Apple Developer ID** certificate + notarization. CI currently uses **ad-hoc** signing only.
+
 ## Capture permissions
 
 | OS | Requirement |
