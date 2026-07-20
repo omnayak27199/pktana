@@ -801,8 +801,19 @@ pub mod inner {
                     libc::close(slave);
                 }
                 libc::setenv(c"TERM".as_ptr(), c"xterm-256color".as_ptr(), 1);
-                let argv: [*const libc::c_char; 2] = [c"bash".as_ptr(), std::ptr::null()];
-                libc::execv(c"/bin/bash".as_ptr(), argv.as_ptr() as _);
+                // Prefer login shell: zsh on macOS, bash on Linux.
+                #[cfg(target_os = "macos")]
+                {
+                    let argv: [*const libc::c_char; 2] = [c"zsh".as_ptr(), std::ptr::null()];
+                    libc::execv(c"/bin/zsh".as_ptr(), argv.as_ptr() as _);
+                    let argv: [*const libc::c_char; 2] = [c"bash".as_ptr(), std::ptr::null()];
+                    libc::execv(c"/bin/bash".as_ptr(), argv.as_ptr() as _);
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let argv: [*const libc::c_char; 2] = [c"bash".as_ptr(), std::ptr::null()];
+                    libc::execv(c"/bin/bash".as_ptr(), argv.as_ptr() as _);
+                }
                 libc::_exit(1);
             }
         }
@@ -1039,11 +1050,11 @@ pub mod inner {
                         .first()
                         .map(|a| a.to_string())
                         .unwrap_or_default();
-                    // Check if interface is UP by reading /sys/class/net/{name}/operstate
+                    // Linux: /sys operstate. Elsewhere (macOS): treat non-loopback as up.
                     let operstate_path = format!("/sys/class/net/{}/operstate", iface.name);
                     let is_up = std::fs::read_to_string(&operstate_path)
                         .map(|s| matches!(s.trim(), "up" | "unknown" | "dormant"))
-                        .unwrap_or(false);
+                        .unwrap_or(!iface.loopback);
                     json.push_str(&format!(
                         r#"{{"name":"{}","description":"{}","address":"{}","is_up":{}}}"#,
                         iface.name, desc, addr, is_up

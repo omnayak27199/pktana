@@ -1,0 +1,42 @@
+# Runtime image: full Linux pktana (web UI + capture + DPI/DLP/IDPS).
+# Used by ./docker_mac.sh on macOS (Docker Desktop) or any Docker host.
+FROM ubuntu:24.04
+
+ARG PKTANA_VERSION=0.6.0
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libpcap0.8 \
+        iproute2 \
+        iputils-ping \
+        procps \
+        tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prefer the published Ubuntu 24.04 .deb; fall back to release binary tarball.
+RUN set -euo pipefail; \
+    BASE="https://github.com/omnayak27199/pktana/releases/download/v${PKTANA_VERSION}"; \
+    DEB="pktana_${PKTANA_VERSION}_amd64_ubuntu24.04.deb"; \
+    TGZ="pktana-${PKTANA_VERSION}-ubuntu24.04-x86_64.tar.gz"; \
+    if curl -fL --retry 3 -o /tmp/pktana.deb "${BASE}/${DEB}"; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends /tmp/pktana.deb \
+        && rm -f /tmp/pktana.deb \
+        && rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "DEB not found, trying tarball ${TGZ}..."; \
+        curl -fL --retry 3 -o /tmp/pktana.tgz "${BASE}/${TGZ}"; \
+        tar -xzf /tmp/pktana.tgz -C /usr/local/bin pktana; \
+        chmod +x /usr/local/bin/pktana; \
+        rm -f /tmp/pktana.tgz; \
+    fi; \
+    pktana --version || true
+
+ENV PKTANA_WEB_PORT=8080
+EXPOSE 8080
+
+# Foreground web UI (embedded web.rs). Bind all interfaces inside the container.
+CMD ["sh", "-c", "exec pktana web \"${PKTANA_WEB_PORT}\" -f"]

@@ -214,6 +214,28 @@ Inline security inspection runs on every capture path (live, pcap, Web, TUI, MCP
 
 ## Installation
 
+### macOS desktop app (Wireshark-style)
+
+Native **pktana.app** wraps the same `web.rs` UI and uses **libpcap** for live capture on Mac interfaces (`en0`, …):
+
+```bash
+./pktana-desktop/scripts/build-mac.sh   # on a Mac, or use GitHub Actions
+open pktana-desktop/dist/*.dmg
+```
+
+See [pktana-desktop/README.md](pktana-desktop/README.md). For a Linux engine in Docker instead: `./docker_mac.sh start`.
+
+### macOS (full features via Docker)
+
+Native macOS cannot provide Linux `/proc`, ethtool, or XDP. On a Mac, run **full Linux pktana** (same `web.rs` Web UI) inside Docker Desktop:
+
+```bash
+./docker_mac.sh start 8080
+open http://127.0.0.1:8080
+```
+
+See `Dockerfile.web` and `./docker_mac.sh help`. Capture is inside the container network; drop PCAP files into `./pcaps` for offline analysis.
+
 ### Automatic Install (Recommended)
 
 Detects your OS and installs the appropriate native package or builds from source:

@@ -1,0 +1,70 @@
+name: Desktop macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+    paths:
+      - 'pktana-desktop/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/desktop-macos.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: Build pktana .dmg
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libpcap
+        run: brew install libpcap
+
+      - name: Build pktana (pcap + tui)
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/opt/libpcap/lib/pkgconfig:/usr/local/opt/libpcap/lib/pkgconfig
+        run: cargo build --release --features pcap,tui -p pktana-cli
+
+      - name: Stage binary for Electron
+        run: |
+          mkdir -p pktana-desktop/resources/bin
+          cp target/release/pktana pktana-desktop/resources/bin/pktana
+          chmod +x pktana-desktop/resources/bin/pktana
+          pktana-desktop/resources/bin/pktana --version
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Package .dmg
+        working-directory: pktana-desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install
+          npm run dist:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: |
+            pktana-desktop/dist/*.dmg
+            pktana-desktop/dist/*.zip
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pktana-desktop/dist/*.dmg
+            pktana-desktop/dist/*.zip

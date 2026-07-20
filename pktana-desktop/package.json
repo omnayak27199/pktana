@@ -1,0 +1,55 @@
+{
+  "name": "pktana",
+  "version": "0.6.0",
+  "description": "pktana — Wireshark-style packet analyzer desktop app (Web UI + live capture)",
+  "author": "Omprakash <omnayak27199@gmail.com>",
+  "license": "Apache-2.0",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "online.pktana.desktop",
+    "productName": "pktana",
+    "copyright": "Copyright © 2026 Omprakash",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "preload/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin/",
+        "to": "bin",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "pktana-${version}-mac-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "pktana may request privileges to capture network traffic."
+      }
+    },
+    "dmg": {
+      "title": "pktana ${version}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  }
+}
