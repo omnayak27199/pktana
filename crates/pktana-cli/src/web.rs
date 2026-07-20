@@ -697,6 +697,7 @@ pub mod inner {
         w.flush()
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn ws_read_frame(stream: &mut std::net::TcpStream) -> Option<(u8, Vec<u8>)> {
         let mut hdr = [0u8; 2];
         stream.read_exact(&mut hdr).ok()?;
@@ -733,6 +734,7 @@ pub mod inner {
         Some((opcode, payload))
     }
 
+    #[cfg(unix)]
     fn pty_resize(master: libc::c_int, cols: u16, rows: u16) {
         let ws = libc::winsize {
             ws_row: rows,
@@ -746,6 +748,8 @@ pub mod inner {
         }
     }
 
+    /// Interactive terminal over WebSocket (Unix PTY). Not available on Windows.
+    #[cfg(unix)]
     fn handle_ws_terminal(stream: &mut std::net::TcpStream, request: &str) {
         if !ws_upgrade(stream, request) {
             return;
@@ -898,6 +902,18 @@ pub mod inner {
             libc::kill(pid, libc::SIGHUP);
             libc::close(master);
         }
+    }
+
+    /// Windows: no POSIX PTY — accept the WebSocket and explain.
+    #[cfg(not(unix))]
+    fn handle_ws_terminal(stream: &mut std::net::TcpStream, request: &str) {
+        if !ws_upgrade(stream, request) {
+            return;
+        }
+        let msg = b"\r\n[pktana] Interactive terminal is not available on Windows.\r\n\
+Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
+        let _ = ws_write_frame(stream, 1, msg);
+        let _ = ws_write_frame(stream, 8, &[]);
     }
 
     fn handle_client(stream: &mut std::net::TcpStream) {
@@ -1318,9 +1334,14 @@ pub mod inner {
                 let start = "GET /api/terminal?cmd=".len();
                 let end = request[start..].find(' ').unwrap_or(0) + start;
                 let cmd = decode_url(&request[start..end]);
+                #[cfg(unix)]
                 let output = std::process::Command::new("sh")
                     .arg("-c")
                     .arg(&cmd)
+                    .output();
+                #[cfg(not(unix))]
+                let output = std::process::Command::new("cmd")
+                    .args(["/C", &cmd])
                     .output();
                 let result = match output {
                     Ok(o) => {
