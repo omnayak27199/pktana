@@ -197,9 +197,10 @@ where
 
                 stats.packets_seen += 1;
                 stats.bytes_seen += packet.data.len();
-                #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
+                // tv_sec/tv_usec are i32 on Windows/macOS, i64 on Linux.
+                #[allow(clippy::unnecessary_cast)]
                 let cp = CapturePacket {
-                    timestamp_sec: packet.header.ts.tv_sec,
+                    timestamp_sec: packet.header.ts.tv_sec as i64,
                     timestamp_usec: packet.header.ts.tv_usec as i64,
                     data: Cow::Borrowed(packet.data),
                 };
@@ -260,9 +261,10 @@ fn capture_impl(
             Ok(packet) => {
                 stats.packets_seen += 1;
                 stats.bytes_seen += packet.data.len();
-                #[allow(clippy::unnecessary_cast)] // tv_usec is i32 on macOS, i64 on Linux
+                // tv_sec/tv_usec are i32 on Windows/macOS, i64 on Linux.
+                #[allow(clippy::unnecessary_cast)]
                 let pkt = CapturePacket {
-                    timestamp_sec: packet.header.ts.tv_sec,
+                    timestamp_sec: packet.header.ts.tv_sec as i64,
                     timestamp_usec: packet.header.ts.tv_usec as i64,
                     data: Cow::Owned(packet.data.to_vec()),
                 };
@@ -305,9 +307,10 @@ where
             Ok(pkt) => {
                 stats.bytes_seen += pkt.data.len();
                 stats.packets_seen += 1;
+                // tv_sec/tv_usec are i32 on Windows/macOS, i64 on Linux.
                 #[allow(clippy::unnecessary_cast)]
                 let cp = CapturePacket {
-                    timestamp_sec: pkt.header.ts.tv_sec,
+                    timestamp_sec: pkt.header.ts.tv_sec as i64,
                     timestamp_usec: pkt.header.ts.tv_usec as i64,
                     data: Cow::Borrowed(pkt.data),
                 };
