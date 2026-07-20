@@ -741,7 +741,8 @@ pub mod inner {
             ws_ypixel: 0,
         };
         unsafe {
-            libc::ioctl(master, libc::TIOCSWINSZ, &ws as *const _);
+            // macOS: ioctl request is c_ulong (u64); Linux often u32 — cast for both.
+            libc::ioctl(master, libc::TIOCSWINSZ as libc::c_ulong, &ws as *const _);
         }
     }
 
@@ -793,7 +794,7 @@ pub mod inner {
             unsafe {
                 libc::close(master);
                 libc::setsid();
-                libc::ioctl(slave, libc::TIOCSCTTY, 0i32);
+                libc::ioctl(slave, libc::TIOCSCTTY as libc::c_ulong, 0i32);
                 libc::dup2(slave, 0);
                 libc::dup2(slave, 1);
                 libc::dup2(slave, 2);
