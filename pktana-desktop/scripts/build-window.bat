@@ -36,6 +36,9 @@ if not exist "target\release\pktana.exe" (
 if not exist "pktana-desktop\resources\bin" mkdir "pktana-desktop\resources\bin"
 copy /Y "target\release\pktana.exe" "pktana-desktop\resources\bin\pktana.exe" >nul
 pktana-desktop\resources\bin\pktana.exe --version
+if errorlevel 1 (
+  echo Warning: could not run pktana.exe --version ^(Npcap runtime may be missing^). Continuing...
+)
 
 echo ==^> Packaging Electron Windows installer...
 cd pktana-desktop

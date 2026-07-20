@@ -50,9 +50,25 @@ jobs:
         shell: pwsh
         run: |
           cargo build --release --features pcap,tui -p pktana-cli
+          $exe = "target\release\pktana.exe"
+          if (-not (Test-Path $exe)) {
+            # Fallback if cargo used a target triple subdirectory
+            $found = Get-ChildItem -Path target -Recurse -Filter pktana.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\release\\pktana\.exe$' } |
+              Select-Object -First 1
+            if ($null -eq $found) {
+              Write-Error "pktana.exe not found after cargo build"
+              Get-ChildItem -Path target -Recurse -Filter '*.exe' | Select-Object -ExpandProperty FullName
+              exit 1
+            }
+            $exe = $found.FullName
+          }
           New-Item -ItemType Directory -Force -Path pktana-desktop\resources\bin | Out-Null
-          Copy-Item target\release\pktana.exe pktana-desktop\resources\bin\pktana.exe -Force
-          .\pktana-desktop\resources\bin\pktana.exe --version
+          Copy-Item $exe pktana-desktop\resources\bin\pktana.exe -Force
+          Get-Item pktana-desktop\resources\bin\pktana.exe | Format-List FullName, Length, LastWriteTime
+          # Do NOT run pktana.exe here: CI has the Npcap SDK for linking, but not the
+          # Npcap runtime (wpcap.dll). Executing would fail with exit code 1 even though
+          # the build succeeded. End users install Npcap separately.
 
       - name: Package Windows installer
         working-directory: pktana-desktop
