@@ -2363,18 +2363,48 @@ pub mod inner {
         }
     }
 
-    const WIKI_OVERVIEW: &str = include_str!("../../../wiki/01-overview.md");
-    const WIKI_INSTALLATION: &str = include_str!("../../../wiki/02-installation.md");
-    const WIKI_CLI_REF: &str = include_str!("../../../wiki/03-cli-reference.md");
-    const WIKI_TUI: &str = include_str!("../../../wiki/04-tui-guide.md");
-    const WIKI_WEBUI: &str = include_str!("../../../wiki/05-web-ui-guide.md");
-    const WIKI_DPI: &str = include_str!("../../../wiki/06-dpi-engine.md");
-    const WIKI_FLOW: &str = include_str!("../../../wiki/07-flow-analyzer.md");
-    const WIKI_API: &str = include_str!("../../../wiki/08-api-reference.md");
-    const WIKI_LIB: &str = include_str!("../../../wiki/09-library-api.md");
-    const WIKI_PROTO: &str = include_str!("../../../wiki/10-protocols.md");
-    const WIKI_ARCH: &str = include_str!("../../../wiki/11-architecture.md");
-    const WIKI_CONTRIB: &str = include_str!("../../../wiki/12-contributing.md");
+    // Wiki pages must live under this crate (`wiki/`) so `cargo publish` can
+    // package them. Sync from repo-root with: scripts/sync-cli-wiki.sh
+    const WIKI_OVERVIEW: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/wiki/01-overview.md"));
+    const WIKI_INSTALLATION: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/02-installation.md"
+    ));
+    const WIKI_CLI_REF: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/03-cli-reference.md"
+    ));
+    const WIKI_TUI: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/wiki/04-tui-guide.md"));
+    const WIKI_WEBUI: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/05-web-ui-guide.md"
+    ));
+    const WIKI_DPI: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/wiki/06-dpi-engine.md"));
+    const WIKI_FLOW: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/07-flow-analyzer.md"
+    ));
+    const WIKI_API: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/08-api-reference.md"
+    ));
+    const WIKI_LIB: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/09-library-api.md"
+    ));
+    const WIKI_PROTO: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/wiki/10-protocols.md"));
+    const WIKI_ARCH: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/11-architecture.md"
+    ));
+    const WIKI_CONTRIB: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/wiki/12-contributing.md"
+    ));
 
     const HTML_TEMPLATE: &str = r##"
 <!DOCTYPE html>
