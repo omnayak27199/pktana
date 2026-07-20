@@ -21,18 +21,15 @@ cd pktana-desktop && npm install && npm start
 
 ### Windows
 
-1. Install [Rust](https://rustup.rs/), [Node.js 20+](https://nodejs.org/), and [Npcap SDK](https://npcap.com/#download).
+1. Install [Rust](https://rustup.rs/), [Node.js 20+](https://nodejs.org/), [Npcap SDK](https://npcap.com/#download) (build), and [Npcap](https://npcap.com/) (runtime).
 2. Set `NPCAP_SDK` (e.g. `C:\Npc_SDK`).
 3. Build and run:
 
 ```bat
-cargo build --release --features pcap,tui -p pktana-cli
-mkdir pktana-desktop\resources\bin
-copy target\release\pktana.exe pktana-desktop\resources\bin\pktana.exe
-cd pktana-desktop
-npm install
-npm start
+pktana-desktop\scripts\build-window.bat
 ```
+
+If the app says it is missing `pktana.exe`, the installer was packaged without the capture engine (fixed in current `main` via `afterPack` copy). Rebuild/redownload after that fix, and install Npcap.
 
 ## Build installers
 

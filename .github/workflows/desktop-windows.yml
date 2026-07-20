@@ -76,8 +76,22 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
+          if (-not (Test-Path resources\bin\pktana.exe)) {
+            Write-Error "resources\bin\pktana.exe missing — build step must stage it before packaging"
+            exit 1
+          }
           npm install
           npm run dist:win
+          # Verify the unpacked app actually contains the engine
+          $found = Get-ChildItem -Path dist -Recurse -Filter pktana.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\resources\\bin\\pktana\.exe$' }
+          if (-not $found) {
+            Write-Error "Packaged app is missing resources\bin\pktana.exe (electron-builder may have skipped a gitignored file). afterPack should have copied it."
+            Get-ChildItem -Path dist -Recurse -Filter '*.exe' | Select-Object -ExpandProperty FullName
+            exit 1
+          }
+          Write-Host "Packaged engine OK:"
+          $found | Format-Table FullName, Length
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

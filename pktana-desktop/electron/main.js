@@ -27,13 +27,26 @@ let backendMode = 'none'; // native | docker
 let shuttingDown = false;
 
 function resourcesBinCandidates() {
-  const dir = app.isPackaged
-    ? path.join(process.resourcesPath, 'bin')
-    : path.join(__dirname, '..', 'resources', 'bin');
-  if (isWin) {
-    return [path.join(dir, 'pktana.exe'), path.join(dir, 'pktana')];
+  const names = isWin ? ['pktana.exe', 'pktana'] : ['pktana', 'pktana.exe'];
+  const dirs = [];
+
+  if (app.isPackaged) {
+    // Normal install / portable unpack
+    dirs.push(path.join(process.resourcesPath, 'bin'));
+    // Some portable layouts nest differently
+    dirs.push(path.join(path.dirname(process.execPath), 'resources', 'bin'));
+    dirs.push(path.join(path.dirname(process.execPath), 'bin'));
+  } else {
+    dirs.push(path.join(__dirname, '..', 'resources', 'bin'));
   }
-  return [path.join(dir, 'pktana'), path.join(dir, 'pktana.exe')];
+
+  const out = [];
+  for (const dir of dirs) {
+    for (const name of names) {
+      out.push(path.join(dir, name));
+    }
+  }
+  return out;
 }
 
 function resourcesBin() {
@@ -121,7 +134,11 @@ function startNative(bin, port) {
 function startDocker(port) {
   if (isWin) {
     throw new Error(
-      'No native pktana.exe found. Build with pktana-desktop\\scripts\\build-window.bat (needs Npcap SDK).'
+      'This Windows build is missing the capture engine (pktana.exe).\n\n' +
+        'Download a complete installer from GitHub Actions (desktop-windows),\n' +
+        'or rebuild with:\n' +
+        '  pktana-desktop\\scripts\\build-window.bat\n\n' +
+        'Also install Npcap from https://npcap.com/ for live capture.'
     );
   }
   const script = path.join(repoRoot(), 'docker_mac.sh');
@@ -268,9 +285,10 @@ async function createWindow() {
       'pktana failed to start',
       `${err.message}\n\n` +
         (isWin
-          ? 'Place a Windows pktana.exe at:\n' +
-            resourcesBin() +
-            '\n\nBuild on Windows: pktana-desktop\\scripts\\build-window.bat'
+          ? 'Looked for pktana.exe under:\n' +
+            resourcesBinCandidates().slice(0, 4).join('\n') +
+            '\n\nInstall Npcap: https://npcap.com/\n' +
+            'Rebuild: pktana-desktop\\scripts\\build-window.bat'
           : 'Install Docker Desktop, or place a macOS pktana binary at:\n' +
             resourcesBin() +
             '\n\nBuild on a Mac: ./pktana-desktop/scripts/build-mac.sh')
