@@ -1,100 +1,105 @@
 # Knowledge Check
 
-Mixed tasks and quizzes across OSI basics, protocols, security, DLP, and IDPS. Use this after you finish the Learn path — or jump in anytime to self-test.
+Final mixed practice across every layer, major protocols, security, DLP, and IDPS. Use links to jump back when you miss something — that is the point.
+
+> **Remember:** Wrong answers are a map of what to reopen. Click the term and reread the picture.
 
 ---
 
-## Warm-Up Diagram
+## Memory Map
 
 ```mermaid
 flowchart TB
-  L7[L7 Application] --> L4[L4 Transport TCP/UDP]
-  L4 --> L3[L3 Network IP]
-  L3 --> L2[L2 Data Link Ethernet/Wi-Fi]
-  L2 --> L1[L1 Physical]
+  L1[L1 Physical bits] --> L2[L2 MAC frames]
+  L2 --> L3[L3 IP routing]
+  L3 --> L4[L4 ports TCP/UDP]
+  L4 --> L7[L7 apps DNS HTTP TLS]
+  L7 --> Sec[Security DLP IDPS]
 ```
 
-Match each symptom to a layer before you capture:
-
-| Symptom | Likely layer to inspect first |
-|---------|-------------------------------|
-| No link light / CRC errors | L1 |
-| Wrong VLAN, ARP issues | L2 |
-| No route to host | L3 |
-| Connection refused / resets | L4 |
-| HTTP 500 / wrong Host header | L7 |
+Quick returns: [OSI](#osi-model) · [Protocols](#protocols-reference) · [Security](#network-security) · [DLP/IDPS](#dlp-idps)
 
 ---
 
-## Practical Tasks
+## Tasks
 
 ```task
-TITLE: End-to-end “why is the site slow?”
-LEVEL: intermediate
-STEPS:
-1. Confirm L1/L2: interface up, correct VLAN (`pktana nic list` / `nic stats`)
-2. Confirm L3: route exists (`pktana routes`)
-3. Confirm L4: SYN gets SYN+ACK (capture `tcp port 443`)
-4. Confirm app: TLS finishes; note RTT and retransmits in the capture
-GOAL: Write a short incident note naming the layer where the problem appeared
-```
-
-```task
-TITLE: Security triage mini-runbook
-LEVEL: intermediate
-STEPS:
-1. From Connections, list unexpected outbound ports
-2. From Flows, identify the top byte destination
-3. Decide: more like **IDPS** (attack/C2) or **DLP** (bulk sensitive upload)?
-4. Capture a short PCAP filtered to that 5-tuple for evidence
-GOAL: Choose the right investigation track and preserve evidence
-```
-
-```task
-TITLE: Protocol flash cards with pktana
+TITLE: Narrate one web click through the layers
 LEVEL: beginner
 STEPS:
-1. Capture 30 packets with no filter
-2. Label five packets: ARP, DNS, TCP, TLS, or Other
-3. For each, write the filter you would use next time
-GOAL: Build speed recognizing common protocols on the wire
+1. Pick opening https://example.com
+2. Write one sentence per layer L1→L4→L7 naming the protocol
+3. Click each protocol name in your notes to verify in Protocols Reference
+GOAL: Build a story you can reuse in interviews/troubleshooting
+HINT: DNS then TCP then TLS then HTTP is the usual sequence
+```
+
+```task
+TITLE: Bottom-up outage drill
+LEVEL: intermediate
+STEPS:
+1. Symptom: “app timeout”
+2. Check L1 link → L2 VLAN/MAC → L3 ping/route → L4 port/handshake → L7 DNS/TLS/HTTP
+3. Stop at the first failing layer and name the evidence
+GOAL: Practice the OSI troubleshooting habit
+```
+
+```task
+TITLE: Security fork
+LEVEL: intermediate
+STEPS:
+1. Case 1: exploit scan from Internet
+2. Case 2: bulk export of HR files to personal email
+3. Assign IDPS vs DLP lead + which pktana view helps
+GOAL: Separate attack detection from data-leak control
 ```
 
 ---
 
-## Quiz — Networking Basics
+## Quiz — Layers
 
 ```quiz
-QUESTION: Which OSI layer is primarily responsible for end-to-end reliable delivery and ports?
+QUESTION: Which layer moves raw bits as signals?
 OPTIONS:
-Physical
-Data Link
-Transport
 Application
-ANSWER: 2
-EXPLAIN: Layer 4 (Transport) provides ports and, for TCP, reliability and ordering.
+Physical
+Transport
+Data Link
+ANSWER: 1
+EXPLAIN: Layer 1 is Physical — energy on a medium.
 ```
 
 ```quiz
-QUESTION: A host can ping its gateway but cannot resolve names. What should you check first?
+QUESTION: MAC addresses are primarily used at:
 OPTIONS:
-DHCP Discover only
-DNS (UDP/TCP 53) path and resolver config
-STP root bridge priority
-Cable category only
-ANSWER: 1
-EXPLAIN: Name resolution failing while IP connectivity works points at DNS.
+Layer 2 Data Link
+Layer 4 Transport
+Layer 7 Application
+Layer 3 only for BGP
+ANSWER: 0
+EXPLAIN: Local delivery uses MAC at Layer 2.
 ```
 
 ```quiz
-QUESTION: EtherType 0x0806 identifies:
+QUESTION: IP routing is the job of:
 OPTIONS:
-IPv6
-ARP
-VLAN tag
-PPPoE
+STP
+Network Layer (L3)
+HTTP cookies
+SSID selection only
 ANSWER: 1
-EXPLAIN: 0x0806 is ARP; IPv4 is 0x0800; IPv6 is 0x86DD.
+EXPLAIN: Layer 3 routes packets between networks.
+```
+
+```quiz
+QUESTION: Ports belong to:
+OPTIONS:
+Transport Layer
+Physical Layer
+VLANs only
+Fiber colors
+ANSWER: 0
+EXPLAIN: TCP/UDP ports are Transport.
 ```
 
 ---
@@ -102,92 +107,120 @@ EXPLAIN: 0x0806 is ARP; IPv4 is 0x0800; IPv6 is 0x86DD.
 ## Quiz — Protocols
 
 ```quiz
-QUESTION: In a TCP handshake, the server’s second packet is typically:
+QUESTION: DNS is best described as:
+OPTIONS:
+IP to MAC on LAN
+Names to records/addresses
+Loop prevention
+Cable testing
+ANSWER: 1
+EXPLAIN: DNS is the Internet phonebook.
+```
+
+```quiz
+QUESTION: ARP is best described as:
+OPTIONS:
+Names to IP
+IP to MAC on the local link
+Encrypted HTTP
+AS path selection
+ANSWER: 1
+EXPLAIN: ARP resolves IP→MAC locally.
+```
+
+```quiz
+QUESTION: TCP handshake starts with:
 OPTIONS:
 FIN
-SYN only
-SYN+ACK
-RST only
-ANSWER: 2
-EXPLAIN: Client SYN → Server SYN+ACK → Client ACK.
-```
-
-```quiz
-QUESTION: Which protocol assigns IPv4 addresses on a LAN using DORA?
-OPTIONS:
-BGP
-DHCP
-OSPF
-NTP
+SYN
+DHCP Discover
+ICMP Redirect only
 ANSWER: 1
-EXPLAIN: DHCP uses Discover/Offer/Request/ACK.
+EXPLAIN: SYN begins a TCP connection.
 ```
 
 ```quiz
-QUESTION: WireGuard commonly uses which default UDP port?
+QUESTION: HTTPS is:
 OPTIONS:
-22
-443
-51820
-3389
+HTTP over TLS
+Telnet on 443
+ARP over TCP
+STP over UDP
+ANSWER: 0
+EXPLAIN: HTTPS = HTTP protected by TLS.
+```
+
+```quiz
+QUESTION: DHCP DORA order begins with:
+OPTIONS:
+ACK
+Offer
+Discover
+Request
 ANSWER: 2
-EXPLAIN: WireGuard’s common default is UDP 51820 (configurable).
+EXPLAIN: Discover → Offer → Request → ACK.
 ```
 
 ---
 
-## Quiz — Security, DLP & IDPS
+## Quiz — Security / DLP / IDPS
 
 ```quiz
-QUESTION: CIA triad “Integrity” means:
+QUESTION: CIA “Integrity” means:
 OPTIONS:
-Data is always public
-Data is not altered without detection
-Systems are never patched
-Only availability matters
+Data is public
+Data is not changed undetected
+Wi‑Fi is free
+Ports are random
 ANSWER: 1
 EXPLAIN: Integrity protects against undetected modification.
 ```
 
 ```quiz
-QUESTION: DLP is primarily concerned with:
+QUESTION: DLP focuses on:
 OPTIONS:
-Cable length limits
-Sensitive data leaving unauthorized paths
-Spanning-tree convergence time
-NTP stratum selection
-ANSWER: 1
-EXPLAIN: Data Loss Prevention focuses on exfiltration and mishandling of sensitive data.
-```
-
-```quiz
-QUESTION: A passive SPAN-port sensor that only alerts is best described as:
-OPTIONS:
-IPS
-IDS
-DHCP relay
-Load balancer
-ANSWER: 1
-EXPLAIN: IDS detects/alerts out-of-band; IPS sits inline and can block.
-```
-
-```quiz
-QUESTION: High outbound bytes to an unknown cloud IP with filenames like `customers_export.csv` in cleartext HTTP is closest to:
-OPTIONS:
-A DLP investigation
-A physical layer CRC problem
-An STP topology change only
-An NTP offset issue
+Sensitive data leaving wrong channels
+Only STP root elections
+Only copper length
+Only BGP communities
 ANSWER: 0
-EXPLAIN: Bulk sensitive-looking data to an unexpected destination is classic DLP territory (also review with IDPS for malware).
+EXPLAIN: Data Loss Prevention is about sensitive data control.
+```
+
+```quiz
+QUESTION: Inline drop of exploit traffic is:
+OPTIONS:
+IDS-only passive tap with no action
+IPS behavior
+DHCP reservation
+MAC flooding as a feature
+ANSWER: 1
+EXPLAIN: IPS can prevent inline; IDS mainly detects.
+```
+
+```quiz
+QUESTION: Best first capture filter for HTTPS troubleshooting handshake:
+OPTIONS:
+arp only
+tcp port 443
+stp
+udp port 67
+ANSWER: 1
+EXPLAIN: HTTPS commonly rides TCP/443 (TLS).
 ```
 
 ---
 
-## Score Yourself
+## Score Guide
 
-- **12–14 correct** — Strong; dig into Modern Networking and real captures next  
-- **8–11** — Solid; revisit weak quiz topics and redo one hands-on task  
-- **Under 8** — Re-read OSI layers, Protocols Reference, and DLP & IDPS, then retry  
+| Score (of 14 quizzes) | Next step |
+|-----------------------|-----------|
+| 12–14 | Capture live traffic and narrate flows aloud |
+| 8–11 | Revisit missed links in [Protocols Reference](#protocols-reference) |
+| ≤7 | Restart from [OSI Model](#osi-model) with the memory sentence |
 
-**Back to path:** [What Is a Network?](#what-is-networking) · [Network Security](#network-security) · [DLP & IDPS](#dlp-idps) · [Protocols Reference](#protocols-reference)
+---
+
+## Back to the Path
+
+[What Is a Network?](#what-is-networking) → [OSI](#osi-model) → [L1](#physical-layer) → [L2](#data-link-layer) → [L3](#network-layer) → [L4](#transport-layer) → [L7](#application-layer) → [Topologies](#topologies) → [Wireless](#wireless-networking) → [Security](#network-security) → [DLP/IDPS](#dlp-idps) → [Protocols](#protocols-reference) → [Modern](#modern-networking)

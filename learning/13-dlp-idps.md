@@ -1,181 +1,143 @@
 # DLP & IDPS
 
-Data Loss Prevention (**DLP**) and Intrusion Detection / Prevention Systems (**IDS / IPS**, often called **IDPS** together) protect different things: DLP guards *sensitive data*, while IDPS guards the *network and hosts* against attacks. In pktana’s security tooling you will see both ideas — pattern and policy checks on traffic, plus detection and blocking of suspicious behavior.
+Two different questions protect you:
+
+1. **Is this traffic an attack?** → [IDS](#ids) / [IPS](#ips) / **IDPS**  
+2. **Is sensitive data leaving the wrong way?** → **DLP**
+
+> **Remember:** **IDPS guards the castle. DLP guards the crown jewels.**
 
 ---
 
-## Why These Matter Together
+## Side‑by‑Side
 
 ```mermaid
 flowchart LR
-  User[User / App] --> Net[Network Path]
-  Net --> IDPS[IDPS — detect / block attacks]
-  Net --> DLP[DLP — detect / stop data leaks]
-  IDPS --> Safe[Allowed traffic]
-  DLP --> Safe
-  IDPS --> Alert[Alert / Drop]
-  DLP --> Quarantine[Block / Redact / Alert]
+  Traffic[Network / endpoint activity] --> IDPS[IDPS: hostile?]
+  Traffic --> DLP[DLP: sensitive + unauthorized?]
+  IDPS --> A1[Alert / Block]
+  DLP --> A2[Alert / Block / Encrypt / Quarantine]
 ```
 
-| Concern | DLP focus | IDPS focus |
-|---------|-----------|------------|
-| Goal | Stop exfiltration of secrets (PII, keys, PHI) | Stop or detect exploits, scans, malware C2 |
-| Typical signal | Content / channel / destination policy | Signatures, anomalies, known bad IPs |
-| Action | Allow, alert, block, encrypt, quarantine | Alert (IDS) or block inline (IPS) |
-| False positive risk | Business docs that look like secrets | Noisy scanners and lab traffic |
+| | DLP | IDPS |
+|---|-----|------|
+| Focus | Data content & channels | Attacks & misuse |
+| Examples | PAN, secrets, source code leaks | Exploits, scans, C2, malware |
+| Actions | Warn, block, redact, encrypt | Alert (IDS) or drop (IPS) |
+| Hard mode | Encrypted payloads | Encrypted / novel attacks |
 
 ---
 
-## DLP — Data Loss Prevention
+## DLP — Data Loss Prevention {#dlp}
 
-### What DLP Is
+**Job:** Find sensitive data and enforce “where it may go.”
 
-DLP systems discover, classify, and enforce rules on sensitive data **in use**, **in motion**, and **at rest**.
-
-- **In motion** — email, HTTP uploads, cloud sync, USB, IM
-- **In use** — copy/paste, print, screenshot on endpoints
-- **At rest** — file shares, databases, object storage
-
-### Common Sensitive Patterns
-
-- Credit card numbers (Luhn-checked), national IDs, health records
-- API keys, private keys (`BEGIN PRIVATE KEY`), passwords in cleartext
-- Customer lists and regulated fields (GDPR, HIPAA, PCI)
-
-### Network DLP Flow
+### States of data
+- **In motion** — email, web upload, chat, API  
+- **In use** — copy/paste, print  
+- **At rest** — disks, shares, buckets  
 
 ```mermaid
 sequenceDiagram
-  participant Client
-  participant Proxy as DLP / Proxy
-  participant Cloud as External Host
-  Client->>Proxy: Upload / email / API POST
-  Proxy->>Proxy: Classify content + match policy
-  alt Allowed
-    Proxy->>Cloud: Forward
-  else Violation
-    Proxy-->>Client: Block / quarantine + alert
+  participant User
+  participant DLP as DLP checkpoint
+  participant Cloud as External site
+  User->>DLP: Upload customers.csv via HTTP
+  DLP->>DLP: Classify: sensitive PII
+  alt Policy deny
+    DLP-->>User: Block + alert
+  else Policy allow
+    DLP->>Cloud: Forward
   end
 ```
 
-### DLP Policy Building Blocks
+**Network note:** Cleartext [HTTP](#protocols-reference/http)/[SMTP](#protocols-reference/smtp)/[FTP](#protocols-reference/ftp) is easy to inspect. [TLS](#protocols-reference/tls) hides payloads unless you use approved TLS inspection, endpoint DLP, or cloud app controls.
 
-1. **Identify** — what is sensitive? (regex, fingerprints, ML classifiers)
-2. **Channel** — where can it go? (corp email OK, personal webmail blocked)
-3. **Action** — alert only, block, encrypt, require justification
-4. **Exceptions** — legal, backup, approved SaaS with DLP connector
-
-> In packet analysis, cleartext protocols (HTTP, SMTP, FTP) make DLP matching easy; TLS encrypts payloads so you need TLS inspection, endpoint DLP, or metadata policies (destination, volume, time).
+Related protocols & ideas: [Firewall](#protocols-reference/firewall), [Network Security](#network-security).
 
 ---
 
-## IDPS — Intrusion Detection & Prevention
+## IDS — Intrusion Detection {#ids}
 
-### IDS vs IPS vs IDPS
-
-| Mode | Placement | Action |
-|------|-----------|--------|
-| **IDS** | Out-of-band (SPAN / tap) | Detect + alert only |
-| **IPS** | Inline on the path | Detect + drop / reset |
-| **IDPS** | Combined platform | Tunable detect and/or prevent |
+**Job:** Spot bad behavior and **alert** (usually passive tap/SPAN).
 
 ```mermaid
-flowchart TB
-  subgraph IDS["IDS (passive)"]
-    Tap[SPAN / Tap] --> Sensor[Signature + Anomaly Engine]
-    Sensor --> SIEM[SIEM / Alerts]
-  end
-  subgraph IPS["IPS (inline)"]
-    In[Traffic in] --> Engine[Inspect]
-    Engine -->|OK| Out[Traffic out]
-    Engine -->|Bad| Drop[Drop / RST]
-  end
+flowchart LR
+  Span[SPAN / Tap copy] --> Sensor[IDS engine]
+  Sensor --> SIEM[SIEM / Analyst]
+  Live[Live traffic] --> Net[Network continues]
 ```
 
-### Detection Methods
+---
 
-**Signature-based** — match known bad payloads (CVE exploit bytes, malware beacons). Fast and precise; blind to zero-days.
+## IPS — Intrusion Prevention {#ips}
 
-**Anomaly-based** — baseline “normal” then flag deviations (new ports, odd volumes, rare destinations). Catches unknowns; needs tuning.
+**Job:** Sit **inline** and **block** (drop/reset) when confident.
 
-**Reputation / threat intel** — block or score known malicious IPs, domains, JA3 hashes.
+```mermaid
+flowchart LR
+  In[Traffic in] --> IPS[IPS inspect]
+  IPS -->|clean| Out[Traffic out]
+  IPS -->|malicious| Drop[Drop / RST + alert]
+```
 
-**Protocol validation** — reject illegal TCP/HTTP/DNS that exploit parser bugs.
+---
 
-### Classic Attack → IDPS Response
+## IDPS Together {#idps}
+
+Many platforms combine detect + prevent with tunables (monitor → protect).
+
+### Detection styles
+| Style | Strength | Weakness |
+|-------|----------|----------|
+| Signatures | Known attacks | New/unknown attacks |
+| Anomalies | Weird behavior | Tuning / false positives |
+| Reputation | Known-bad IPs/domains | Fresh infrastructure |
+| Protocol checks | Malformed packets | Encrypted opaque blobs |
 
 ```mermaid
 sequenceDiagram
-  participant Attacker
+  participant Atk as Attacker
   participant IPS as Inline IPS
-  participant Target
-  Attacker->>IPS: Exploit / scan traffic
-  IPS->>IPS: Signature or anomaly hit
-  IPS-->>Attacker: Drop / TCP RST
-  Note over IPS,Target: Target never sees full attack
-  IPS->>SIEM: Alert + PCAP snippet
+  participant Vic as Victim
+  Atk->>IPS: Exploit payload
+  IPS->>IPS: Signature / anomaly hit
+  IPS-->>Atk: Drop
+  IPS->>SIEM: Alert + evidence
+  Note over Vic: Never fully hit
 ```
-
-### Where pktana Fits
-
-- **Capture / Flows** — evidence for IDPS alerts (who talked to whom, how much)
-- **Connections** — unexpected listeners or outbound sessions
-- **Security panels** — policies akin to lightweight DLP/IDPS style checks on observed traffic
-- Export PCAPs for deeper IDS engines (Suricata, Snort) when needed
 
 ---
 
-## Putting DLP + IDPS in an Architecture
+## How pktana Helps
 
-```mermaid
-flowchart TB
-  Internet([Internet]) --> Edge[Edge Firewall + IPS]
-  Edge --> Proxy[Web / Mail Proxy + DLP]
-  Proxy --> Core[Core Network]
-  Core --> Servers[Servers]
-  Core --> Users[User VLANs]
-  Servers --> Endpoint[Endpoint DLP / EDR]
-  Users --> Endpoint
-  Edge -.-> SIEM[SIEM]
-  Proxy -.-> SIEM
-  Endpoint -.-> SIEM
-```
-
-**Rule of thumb:** IDPS answers “Is this *hostile*?” DLP answers “Is this *sensitive* and leaving the wrong way?”
+- **Flows / top talkers** — volume anomalies (exfil or C2-ish patterns)  
+- **Connections** — odd listeners / outbound ports  
+- **PCAP** — evidence for IDS alerts or DLP investigations  
+- Pair with SIEM and dedicated engines (Suricata/Snort/etc.) when needed  
 
 ---
 
 ## Hands-On Tasks
 
 ```task
-TITLE: Simulate a DLP content hunt in a capture
-LEVEL: intermediate
-STEPS:
-1. Capture traffic that includes cleartext HTTP or SMTP if available in a lab
-2. Search payloads or exports for strings like `password=`, `AKIA`, or `BEGIN PRIVATE KEY`
-3. Note source/destination and whether the channel should be allowed
-GOAL: Practice the analyst workflow DLP engines automate
-HINT: Prefer a lab PCAP — never search production captures for real secrets without policy approval
-```
-
-```task
-TITLE: Distinguish IDS vs IPS placement
+TITLE: Pick DLP vs IDPS for a scenario
 LEVEL: beginner
 STEPS:
-1. Draw your lab network: gateway, switch, one server
-2. Mark where a SPAN port IDS would attach
-3. Mark where an inline IPS would sit
-GOAL: Explain one benefit and one risk of inline IPS vs passive IDS
+1. Scenario A: ransomware worm scanning the LAN
+2. Scenario B: employee uploads payroll.csv to personal webmail
+3. Write which system leads and what evidence you’d capture
+GOAL: Choose the right primary control for each case
 ```
 
 ```task
-TITLE: Use pktana flows as IDPS context
+TITLE: Evidence pack with pktana
 LEVEL: intermediate
 STEPS:
-1. Open Flow Capture in the pktana Web UI
-2. Sort or note top talkers by bytes
-3. Flag any destination that is unexpected for that host role
-GOAL: Show how volume and destination anomalies feed IDPS investigations
+1. Note a suspicious destination from Flows
+2. Filter a short capture to that 5-tuple
+3. Decide if next step is IPS block rule, DLP channel block, or both
+GOAL: Practice analyst workflow, not just tool clicks
 ```
 
 ---
@@ -183,56 +145,52 @@ GOAL: Show how volume and destination anomalies feed IDPS investigations
 ## Knowledge Check
 
 ```quiz
-QUESTION: What is the primary goal of DLP?
+QUESTION: DLP’s primary mission is to:
 OPTIONS:
-Accelerate TCP handshakes
-Prevent sensitive data from leaking via unauthorized channels
-Replace all firewalls
-Measure Wi-Fi signal strength
+Speed up ARP
+Prevent sensitive data from leaving via unauthorized channels
+Replace fiber optics
+Assign VLAN IDs
 ANSWER: 1
-EXPLAIN: DLP focuses on discovering and controlling sensitive data movement.
+EXPLAIN: DLP focuses on sensitive data handling and exfiltration paths.
 ```
 
 ```quiz
-QUESTION: An IPS differs from an IDS mainly because it can:
+QUESTION: An inline device that can drop exploit packets is acting as:
 OPTIONS:
-Only log to a file
-Sit offline with no traffic visibility
-Take inline action such as dropping malicious packets
-Resolve DNS names faster
-ANSWER: 2
-EXPLAIN: IPS is inline and can block; IDS is typically detect-and-alert.
+DNS stub only
+IPS
+DHCP relay only
+STP root bridge only
+ANSWER: 1
+EXPLAIN: IPS is inline prevention; IDS is typically detect/alert.
 ```
 
 ```quiz
-QUESTION: Encrypted TLS uploads make pure network DLP harder because:
+QUESTION: TLS makes pure network DLP harder because:
 OPTIONS:
-Ports cannot be numbered
-Payloads are not readable without inspection or endpoint controls
-Switches stop forwarding frames
-ARP no longer works
+Ports disappear
+Payloads are encrypted without inspection or endpoint controls
+MAC addresses become IPv6
+Switches stop learning
 ANSWER: 1
-EXPLAIN: Without TLS inspection or endpoint/cloud DLP, ciphertext hides content.
+EXPLAIN: Ciphertext hides content from network DLP unless other controls exist.
 ```
 
 ```quiz
-QUESTION: Signature-based IDPS is strongest against:
+QUESTION: Signature-based IDPS is best against:
 OPTIONS:
-Brand-new zero-day exploits with no known pattern
-Attacks matching known exploit or malware patterns
-Only physical cable cuts
-DHCP Discover floods exclusively
+Only brand-new zero-days with no pattern
+Attacks matching known exploit/malware patterns
+Cable cuts
+DHCP Discover exclusively
 ANSWER: 1
-EXPLAIN: Signatures match known patterns; novel attacks need anomaly or threat-intel approaches too.
+EXPLAIN: Signatures match known patterns; unknowns need other methods too.
 ```
 
 ---
 
-## Summary
+## Next
 
-- **DLP** protects sensitive data across channels; policies classify and enforce
-- **IDS** detects; **IPS** prevents; **IDPS** platforms often do both
-- Defense in depth pairs firewalls, IDPS, DLP, segmentation, and monitoring
-- Packet tools like **pktana** supply the evidence layer: flows, PCAPs, and connections
-
-**Next:** [Knowledge Check](#knowledge-check) — mixed quiz across networking and security, or [Protocols Reference](#protocols-reference)
+Prove yourself: [Knowledge Check](#knowledge-check).  
+Refresh any term in [Protocols Reference](#protocols-reference).

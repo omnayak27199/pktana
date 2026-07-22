@@ -182,8 +182,33 @@
     .md blockquote { border-left: 4px solid var(--primary); padding: 10px 18px; margin: 14px 0; background: rgba(234,88,12,0.05); border-radius: 0 10px 10px 0; color: var(--muted); font-style: italic; }
     .md hr { border: none; border-top: 1px solid var(--line); margin: 28px 0; }
     .md a { color: var(--primary-dark); text-decoration: underline; font-weight: 600; }
+    .md a.doc-link { text-decoration-thickness: 2px; text-underline-offset: 2px; }
+    .md a.doc-link:hover { color: var(--primary); }
     .md strong { color: var(--dark); font-weight: 700; }
     .md em { font-style: italic; }
+    .md .remember {
+      border-left: 4px solid #0ea5e9;
+      background: linear-gradient(90deg, rgba(14,165,233,0.08), rgba(255,255,255,0.7));
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 12px 12px 0;
+      color: var(--dark);
+      font-style: normal;
+      line-height: 1.65;
+    }
+    .md .remember strong { color: #0369a1; }
+    .md h2 .anchor, .md h3 .anchor {
+      margin-left: 6px; opacity: 0; font-weight: 600; color: var(--muted); text-decoration: none;
+    }
+    .md h2:hover .anchor, .md h3:hover .anchor { opacity: 0.7; }
+    .md .proto-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+      margin: 14px 0;
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+    }
 
     /* ── Mermaid diagrams ────────────────────────────────────── */
     .md .mermaid {
@@ -434,11 +459,12 @@
       });
     });
 
-    function loadPage(id) {
+    function loadPage(id, anchor) {
       var page = PAGES[id];
       if (!page) return;
 
-      history.replaceState(null, '', '#' + id);
+      var hash = id + (anchor ? '/' + anchor : '');
+      history.replaceState(null, '', '#' + hash);
 
       sidebar.querySelectorAll('.docs-nav-item').forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-page') === id);
@@ -448,7 +474,9 @@
         '<div class="state-box"><div class="spinner"></div><p>Loading ' + page.title + '…</p></div>';
       document.getElementById('docsMain').scrollTop = 0;
 
-      if (cache[id]) { renderPage(id, cache[id]); return; }
+      function done(md) { renderPage(id, md, anchor); }
+
+      if (cache[id]) { done(cache[id]); return; }
 
       fetch('./learning/' + page.file)
         .then(function (r) {
@@ -457,7 +485,7 @@
         })
         .then(function (md) {
           cache[id] = md;
-          renderPage(id, md);
+          done(md);
         })
         .catch(function (err) {
           content.innerHTML =
@@ -467,7 +495,19 @@
         });
     }
 
-    function renderPage(id, md) {
+    function scrollToAnchor(anchor) {
+      if (!anchor) return;
+      var el = document.getElementById(anchor);
+      if (!el) return;
+      setTimeout(function () {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.style.outline = '2px solid rgba(234,88,12,0.45)';
+        el.style.outlineOffset = '4px';
+        setTimeout(function () { el.style.outline = ''; el.style.outlineOffset = ''; }, 1600);
+      }, 80);
+    }
+
+    function renderPage(id, md, anchor) {
       var page = PAGES[id];
       var html = '<div class="breadcrumb">'
                + '<span>pktana</span><span class="sep">›</span>'
@@ -478,11 +518,31 @@
                + '<div class="md">' + markdownToHtml(md) + '</div>';
       content.innerHTML = html;
       wireQuizzes(content);
+      wireDocLinks(content);
       if (window.mermaid) {
         try {
           window.mermaid.run({ nodes: content.querySelectorAll('.mermaid') });
         } catch (e) { /* ignore render errors for partial diagrams */ }
       }
+      scrollToAnchor(anchor);
+    }
+
+    function wireDocLinks(root) {
+      root.querySelectorAll('a.doc-link').forEach(function (a) {
+        a.addEventListener('click', function (e) {
+          e.preventDefault();
+          var href = (a.getAttribute('href') || '').replace(/^#/, '');
+          if (!href) return;
+          var slash = href.indexOf('/');
+          var pageId = slash === -1 ? href : href.slice(0, slash);
+          var anch = slash === -1 ? '' : href.slice(slash + 1);
+          if (PAGES[pageId]) {
+            loadPage(pageId, anch || undefined);
+            return;
+          }
+          scrollToAnchor(pageId);
+        });
+      });
     }
 
     function parseKeyedBlock(text) {
@@ -588,11 +648,33 @@
       s = s.replace(/`([^`]+)`/g,         '<code>$1</code>');
       s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, text, href) {
         if (href.charAt(0) === '#') {
-          return '<a href="' + href + '">' + text + '</a>';
+          return '<a class="doc-link" href="' + href + '">' + text + '</a>';
         }
         return '<a href="' + href + '" target="_blank" rel="noopener">' + text + '</a>';
       });
       return s;
+    }
+
+    function slugify(text) {
+      return String(text).toLowerCase()
+        .replace(/\{#[^}]+\}\s*$/, '')
+        .replace(/&[a-z]+;/g, ' ')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    }
+
+    function headingHtml(level, raw) {
+      var idMatch = raw.match(/\s*\{#([a-z0-9\-]+)\}\s*$/i);
+      var title = raw;
+      var id = '';
+      if (idMatch) {
+        id = idMatch[1];
+        title = raw.slice(0, idMatch.index).trim();
+      } else {
+        id = slugify(raw);
+      }
+      var tag = 'h' + level;
+      return '<' + tag + ' id="' + id + '">' + inline(title) + '</' + tag + '>';
     }
 
     function markdownToHtml(md) {
@@ -640,12 +722,17 @@
         }
         if (inCode) { codeBuf.push(line); continue; }
 
-        if (line.startsWith('#### ')) { flushList(); flushTable(); out += '<h4>' + inline(line.slice(5)) + '</h4>'; continue; }
-        if (line.startsWith('### '))  { flushList(); flushTable(); out += '<h3>' + inline(line.slice(4)) + '</h3>'; continue; }
-        if (line.startsWith('## '))   { flushList(); flushTable(); leadPending = false; out += '<h2>' + inline(line.slice(3)) + '</h2>'; continue; }
-        if (line.startsWith('# '))    { flushList(); flushTable(); out += '<h1>' + inline(line.slice(2)) + '</h1>'; if (firstH1) { firstH1 = false; leadPending = true; } continue; }
+        if (line.startsWith('#### ')) { flushList(); flushTable(); out += headingHtml(4, line.slice(5)); continue; }
+        if (line.startsWith('### '))  { flushList(); flushTable(); out += headingHtml(3, line.slice(4)); continue; }
+        if (line.startsWith('## '))   { flushList(); flushTable(); leadPending = false; out += headingHtml(2, line.slice(3)); continue; }
+        if (line.startsWith('# '))    { flushList(); flushTable(); out += headingHtml(1, line.slice(2)); if (firstH1) { firstH1 = false; leadPending = true; } continue; }
 
         if (/^---+$/.test(line.trim())) { flushList(); flushTable(); out += '<hr>'; continue; }
+        if (line.startsWith('> **Remember:**') || line.startsWith('> **remember:**')) {
+          flushList(); flushTable();
+          out += '<blockquote class="remember">' + inline(line.replace(/^>\s*/, '')) + '</blockquote>';
+          continue;
+        }
         if (line.startsWith('> '))    { flushList(); flushTable(); out += '<blockquote>' + inline(line.slice(2)) + '</blockquote>'; continue; }
 
         if (line.trim().startsWith('|') && line.includes('|')) {
@@ -712,15 +799,23 @@
     }
 
     /* ── URL hash routing ────────────────────────────────────── */
+    function parseHash() {
+      var hash = location.hash.replace(/^#/, '');
+      if (!hash) return { page: 'what-is-networking', anchor: '' };
+      var slash = hash.indexOf('/');
+      if (slash === -1) return { page: hash, anchor: '' };
+      return { page: hash.slice(0, slash), anchor: hash.slice(slash + 1) };
+    }
+
     function routeFromHash() {
-      var hash = location.hash.replace('#', '');
-      if (hash && PAGES[hash]) loadPage(hash);
+      var info = parseHash();
+      if (PAGES[info.page]) loadPage(info.page, info.anchor || undefined);
       else loadPage('what-is-networking');
     }
 
     window.addEventListener('hashchange', function () {
-      var hash = location.hash.replace('#', '');
-      if (hash && PAGES[hash]) loadPage(hash);
+      var info = parseHash();
+      if (PAGES[info.page]) loadPage(info.page, info.anchor || undefined);
     });
 
     routeFromHash();

@@ -1,383 +1,508 @@
 # Protocols Reference
 
-A quick-reference guide to the most important networking protocols, organized by OSI layer. Use this as a cheat sheet while capturing and analyzing packets with pktana.
+This is the **dictionary** of networking. Every important name has a short, memorable explanation, a flow diagram, and links back to its OSI layer.
+
+> **Remember:** Click any protocol name in other lessons — they jump here. Learn the **job**, **port/number**, and **one picture**.
+
+**How to use:** skim the TOC → open one protocol → take the mini quiz at the end.
 
 ---
 
-## Layer 2 — Data Link
+## Quick Jump
 
-| Protocol | EtherType | Purpose | pktana filter |
-|---------|-----------|---------|---------------|
-| Ethernet II | — | Standard LAN framing | — |
-| IEEE 802.1Q | 0x8100 | VLAN tagging | `vlan` |
-| ARP | 0x0806 | IP → MAC address resolution | `arp` |
-| RARP | 0x8035 | MAC → IP (legacy, replaced by DHCP) | `rarp` |
-| PPPoE | 0x8863/8864 | PPP over Ethernet (DSL) | `pppoe` |
-| LLDP | 0x88CC | Link Layer Discovery Protocol | `ether proto 0x88cc` |
-| Spanning Tree (BPDU) | 0x0026 | STP loop prevention | — |
+**L2:** [Ethernet](#ethernet) · [VLAN](#vlan) · [ARP](#arp) · [STP](#stp)  
+**L3:** [IPv4](#ipv4) · [IPv6](#ipv6) · [ICMP](#icmp) · [OSPF](#ospf) · [BGP](#bgp) · [IPsec](#ipsec) · [GRE](#gre)  
+**L4:** [TCP](#tcp) · [UDP](#udp)  
+**Apps:** [DNS](#dns) · [DHCP](#dhcp) · [HTTP](#http) · [HTTPS](#https) · [TLS](#tls) · [SSH](#ssh) · [FTP](#ftp) · [SMTP](#smtp) · [NTP](#ntp) · [SNMP](#snmp) · [SMB](#smb) · [RDP](#rdp) · [WireGuard](#wireguard) · [QUIC](#quic)  
+**Security ideas:** [Firewall](#firewall) · [VPN](#vpn) · [Telnet](#telnet)
+
+Layer lessons: [L1](#physical-layer) [L2](#data-link-layer) [L3](#network-layer) [L4](#transport-layer) [L7](#application-layer)
 
 ---
 
-## Layer 3 — Network
+## Ethernet {#ethernet}
 
-| Protocol | IP Proto | Purpose | Default Port | pktana filter |
-|---------|---------|---------|-------------|---------------|
-| IPv4 | — | Internet Protocol v4 | — | `ip` |
-| IPv6 | — | Internet Protocol v6 | — | `ip6` |
-| ICMP | 1 | Control messages, ping, traceroute | — | `icmp` |
-| ICMPv6 | 58 | IPv6 control + neighbor discovery | — | `icmp6` |
-| OSPF | 89 | Link-state routing (IGP) | — | `proto ospf` |
-| EIGRP | 88 | Cisco hybrid routing | — | `proto 88` |
-| GRE | 47 | Generic tunnel encapsulation | — | `proto gre` |
-| ESP | 50 | IPsec encryption payload | — | `proto esp` |
-| AH | 51 | IPsec authentication header | — | `proto ah` |
-
----
-
-## Layer 4 — Transport
-
-| Protocol | IP Proto | Characteristics | pktana filter |
-|---------|---------|----------------|---------------|
-| TCP | 6 | Reliable, ordered, connection-oriented | `tcp` |
-| UDP | 17 | Unreliable, connectionless, fast | `udp` |
-| SCTP | 132 | Multi-stream, reliable (telecom) | `sctp` |
-| DCCP | 33 | Congestion-controlled unreliable | — |
-
----
-
-## Well-Known Ports
-
-### Infrastructure Protocols
-
-| Protocol | Port | Transport | Purpose |
-|---------|------|-----------|---------|
-| FTP-Data | 20 | TCP | File transfer (data channel) |
-| FTP-Control | 21 | TCP | File transfer (commands) |
-| SSH | 22 | TCP | Secure shell, SFTP, tunneling |
-| Telnet | 23 | TCP | Remote terminal (unencrypted — avoid) |
-| SMTP | 25 | TCP | Mail relay between servers |
-| DNS | 53 | UDP/TCP | Name resolution |
-| DHCP Server | 67 | UDP | IP address assignment |
-| DHCP Client | 68 | UDP | DHCP client receive |
-| TFTP | 69 | UDP | Trivial file transfer (firmware upgrades) |
-| HTTP | 80 | TCP | Web traffic (unencrypted) |
-| POP3 | 110 | TCP | Mail retrieval (downloads and deletes) |
-| NTP | 123 | UDP | Time synchronization |
-| NetBIOS | 137–139 | UDP/TCP | Windows name resolution (legacy) |
-| IMAP | 143 | TCP | Mail access (leaves on server) |
-| SNMP | 161/162 | UDP | Network device management/traps |
-| LDAP | 389 | TCP | Directory services |
-| HTTPS | 443 | TCP | Encrypted web traffic |
-| SMB/CIFS | 445 | TCP | Windows file sharing |
-| SMTP/TLS | 587 | TCP | Mail submission (authenticated) |
-| LDAPS | 636 | TCP | LDAP over TLS |
-| IMAP/TLS | 993 | TCP | IMAP over TLS |
-| POP3/TLS | 995 | TCP | POP3 over TLS |
-| OpenVPN | 1194 | UDP/TCP | VPN |
-| MySQL | 3306 | TCP | MySQL database |
-| RDP | 3389 | TCP | Windows Remote Desktop |
-| PostgreSQL | 5432 | TCP | PostgreSQL database |
-| Redis | 6379 | TCP | Redis in-memory data store |
-| WireGuard | 51820 | UDP | Modern VPN |
-
-### Monitoring / Logging
-
-| Protocol | Port | Transport | Purpose |
-|---------|------|-----------|---------|
-| Syslog | 514 | UDP | Log collection |
-| Syslog/TLS | 6514 | TCP | Encrypted log collection |
-| Elasticsearch | 9200 | TCP | Search/log database |
-| Kafka | 9092 | TCP | Message streaming |
-| Prometheus | 9090 | TCP | Metrics collection |
-| Grafana | 3000 | TCP | Metrics visualization |
-
----
-
-## Application Protocols — Deep Reference
-
-### DNS Record Types (Quick Reference)
-
-| Type | Value | Example |
-|------|-------|---------|
-| A | IPv4 address | `example.com → 93.184.216.34` |
-| AAAA | IPv6 address | `example.com → 2606:2800::1` |
-| CNAME | Canonical name | `www.example.com → example.com` |
-| MX | Mail exchanger | priority + hostname |
-| TXT | Text record | SPF, DKIM, DMARC, verification |
-| NS | Nameserver | delegates zone authority |
-| PTR | Reverse lookup | `34.216.184.93.in-addr.arpa → example.com` |
-| SOA | Start of Authority | zone serial, refresh, TTL |
-| SRV | Service location | `_http._tcp.example.com 10 1 80 www.example.com` |
-| CAA | Cert Authority Auth | restrict which CAs can issue certs |
-
-### ICMP Type/Code Reference
-
-| Type | Code | Meaning |
-|------|------|---------|
-| 0 | 0 | Echo Reply (ping reply) |
-| 3 | 0 | Destination Network Unreachable |
-| 3 | 1 | Destination Host Unreachable |
-| 3 | 3 | Destination Port Unreachable |
-| 3 | 4 | Fragmentation Needed (PMTUD) |
-| 5 | 0 | Redirect: Network |
-| 8 | 0 | Echo Request (ping) |
-| 11 | 0 | TTL Exceeded (traceroute response) |
-| 12 | 0 | Parameter Problem |
-
-### TCP Flags Cheat Sheet
-
-| Flag | Hex | Meaning |
-|------|-----|---------|
-| FIN | 0x01 | Finish — graceful close |
-| SYN | 0x02 | Synchronize — connection start |
-| RST | 0x04 | Reset — immediate abort |
-| PSH | 0x08 | Push — deliver to app immediately |
-| ACK | 0x10 | Acknowledge |
-| URG | 0x20 | Urgent pointer valid |
-| ECE | 0x40 | ECN-Echo |
-| CWR | 0x80 | Congestion Window Reduced |
-
-Common combinations:
-- `SYN` — first packet of handshake
-- `SYN+ACK` — server response
-- `ACK` — data acknowledgment
-- `FIN+ACK` — graceful close with ack
-- `RST+ACK` — reset response
-
----
-
-## IP Protocol Numbers
-
-| Number | Protocol | Notes |
-|--------|---------|-------|
-| 1 | ICMP | Internet Control Message Protocol |
-| 2 | IGMP | Multicast group management |
-| 6 | TCP | Transmission Control Protocol |
-| 17 | UDP | User Datagram Protocol |
-| 41 | IPv6 encapsulation | IPv6-in-IPv4 tunnel |
-| 47 | GRE | Generic Routing Encapsulation |
-| 50 | ESP | IPsec Encrypted Payload |
-| 51 | AH | IPsec Authentication Header |
-| 58 | ICMPv6 | IPv6 control messages |
-| 89 | OSPF | Open Shortest Path First |
-| 132 | SCTP | Stream Control Transmission Protocol |
-
----
-
-## BPF / pcap Filter Syntax
-
-Used by pktana and tcpdump/Wireshark. Filters are BPF (Berkeley Packet Filter) expressions.
-
-### Basic Filters
-
-```
-# By protocol
-tcp           # all TCP traffic
-udp           # all UDP traffic
-icmp          # all ICMP
-arp           # all ARP
-
-# By host
-host 192.168.1.1          # src or dst is this IP
-src host 10.0.0.1         # source IP
-dst host 8.8.8.8          # destination IP
-
-# By network
-net 192.168.0.0/24        # src or dst in this subnet
-src net 10.0.0.0/8
-
-# By port
-port 80                   # src or dst port 80
-src port 12345
-dst port 443
-portrange 8000-8999       # port range
-
-# By MAC (Layer 2)
-ether host aa:bb:cc:dd:ee:ff
-ether broadcast
-
-# By packet size
-less 128                  # packets ≤ 128 bytes
-greater 1400              # packets > 1400 bytes
-
-# Ethernet type
-ether proto 0x0800        # IPv4
-ether proto 0x86DD        # IPv6
-```
-
-### Compound Filters
-
-```
-# Combine with and/or/not
-tcp and port 443
-tcp and (port 80 or port 443)
-not port 22
-host 10.0.0.1 and not port 22
-
-# Specific TCP flags
-tcp[tcpflags] & tcp-syn != 0              # has SYN flag
-tcp[tcpflags] == tcp-syn                  # only SYN (start of handshake)
-tcp[tcpflags] == (tcp-syn|tcp-ack)        # SYN+ACK
-
-# ICMP type
-icmp[icmptype] == icmp-echo               # ping requests only
-icmp[icmptype] == icmp-echoreply          # ping replies
-
-# Match HTTP GET
-tcp[((tcp[12:1] & 0xf0) >> 2):4] == 0x47455420  # "GET "
-```
-
----
-
-## pktana Quick Reference
-
-```bash
-pktana capture --interface eth0 --count 100
-pktana capture --interface eth0 --filter "tcp port 443" --count 50
-pktana connections          # active TCP/UDP connections
-pktana routes               # routing table
-pktana nic list             # network interfaces
-pktana nic stats eth0       # detailed NIC statistics
-pktana dp m1                # dataplane (XDP) status
-pktana flow --interface eth0 # flow capture and analysis
-pktana web --port 8080      # launch Web UI
-pktana mcp --port 3456      # launch MCP server for AI agents
-```
-
----
-
-## Protocol Flows (How Conversations Look)
-
-### DNS resolution then HTTPS
-
-```mermaid
-sequenceDiagram
-  participant Client
-  participant Resolver as DNS Resolver
-  participant Auth as Authoritative DNS
-  participant Web as Web Server :443
-  Client->>Resolver: UDP/53 A? www.example.com
-  Resolver->>Auth: Query (if not cached)
-  Auth-->>Resolver: A = 93.184.216.34
-  Resolver-->>Client: Answer + TTL
-  Client->>Web: TCP SYN :443
-  Web-->>Client: SYN+ACK
-  Client->>Web: ACK
-  Client->>Web: TLS ClientHello
-  Web-->>Client: ServerHello + Certificate
-  Note over Client,Web: Encrypted HTTP/2 or HTTP/1.1
-```
-
-### DHCP lease (DORA)
-
-```mermaid
-sequenceDiagram
-  participant Host
-  participant Server as DHCP Server
-  Host->>Server: Discover (broadcast)
-  Server-->>Host: Offer (IP + options)
-  Host->>Server: Request (want that IP)
-  Server-->>Host: ACK (lease granted)
-```
-
-### TCP three-way handshake
+**Layer:** [2 Data Link](#data-link-layer)  
+**Job:** Frame bits for a LAN using MAC addresses.  
+**Memory:** Ethernet = **local street delivery**.
 
 ```mermaid
 flowchart LR
-  A[Client SYN] --> B[Server SYN+ACK]
-  B --> C[Client ACK]
-  C --> D[Established — data can flow]
+  Dst[Dst MAC] --> Src[Src MAC] --> Type[EtherType] --> Data[Payload] --> FCS[FCS]
 ```
 
-### ARP request / reply
+| EtherType | Payload |
+|-----------|---------|
+| 0x0800 | [IPv4](#ipv4) |
+| 0x86DD | [IPv6](#ipv6) |
+| 0x0806 | [ARP](#arp) |
+| 0x8100 | [VLAN](#vlan) tag |
+
+**pktana:** capture on an interface; you’ll see Ethernet headers on almost every frame.
+
+---
+
+## VLAN {#vlan}
+
+**Layer:** [2](#data-link-layer)  
+**Job:** Split one physical LAN into multiple logical LANs (broadcast domains).  
+**Memory:** VLANs = **colored lanes** on the same highway.
+
+```mermaid
+flowchart TB
+  V10[VLAN10 Users] --> SW[Switch]
+  V20[VLAN20 Servers] --> SW
+  SW --> R[Router for inter-VLAN routing]
+```
+
+Tagged frames use 802.1Q (EtherType 0x8100).
+
+---
+
+## ARP {#arp}
+
+**Layer:** [2](#data-link-layer) (helps [3](#network-layer))  
+**Job:** Map **IP → MAC** on the local link.  
+**Memory:** ARP = **“Who lives at this IP on my street?”**
 
 ```mermaid
 sequenceDiagram
   participant A as Host A
   participant B as Host B
-  A->>B: Who has 10.0.0.5? Tell 10.0.0.2 (broadcast)
-  B-->>A: 10.0.0.5 is at aa:bb:cc:dd:ee:ff (unicast)
+  A->>B: Who has 10.0.0.5? Tell 10.0.0.2
+  B-->>A: 10.0.0.5 is at aa:bb:...
+```
+
+**Risk:** ARP spoofing → MitM ([Security](#network-security)).  
+**Filter idea:** `arp`
+
+---
+
+## STP {#stp}
+
+**Layer:** [2](#data-link-layer)  
+**Job:** Prevent switching loops by blocking redundant links until needed.  
+**Memory:** STP = **loop brakes** for switches.
+
+```mermaid
+flowchart LR
+  S1[Switch1] --- S2[Switch2]
+  S2 --- S3[Switch3]
+  S3 --- S1
+  Note1[Without STP: broadcast storm]
 ```
 
 ---
 
-## Protocol Explainers (What to Look For in Captures)
+## IPv4 {#ipv4}
 
-**DNS** — Usually UDP/53; large answers or zone transfers use TCP/53. Look for NXDOMAIN floods, unusual query names (DGA malware), or DNS over unexpected ports.
+**Layer:** [3 Network](#network-layer)  
+**Job:** Address hosts and route packets across networks (32‑bit addresses).  
+**Memory:** IPv4 = **global house number** (with subnets as neighborhoods).
 
-**HTTP vs HTTPS** — Cleartext HTTP shows methods and Host headers; HTTPS shows TLS handshake then encrypted application data. Filter: `tcp port 80` vs `tcp port 443`.
+```mermaid
+flowchart LR
+  Src[Src IP] --> Dst[Dst IP] --> TTL[TTL] --> Proto[Protocol TCP/UDP/ICMP...]
+```
 
-**SSH** — TCP/22. Banner exchange is visible; session content is encrypted. Unexpected SSH to the internet from servers can mean lateral movement or reverse shells.
-
-**ICMP** — Not “just ping.” Type 3/11 appear in traceroute and path MTU discovery. Excessive echo requests may be reconnaissance or covert channels.
-
-**TLS** — Handshake reveals SNI (often), cipher suites, and cert chain before encryption. JA3/JA4 fingerprints help classify clients.
+Private ranges you’ll see constantly: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.  
+**Filter:** `ip`
 
 ---
 
-## Hands-On Tasks
+## IPv6 {#ipv6}
 
-```task
-TITLE: Capture a DNS lookup
-LEVEL: beginner
-STEPS:
-1. Run `pktana capture --interface eth0 --filter "udp port 53" --count 20`
-2. Trigger a lookup (`ping example.com` or open a browser)
-3. Identify query name and response address in the packets
-GOAL: Match DNS query/response pairs and note the 5-tuple
+**Layer:** [3](#network-layer)  
+**Job:** Same mission as IPv4 with 128‑bit addresses and cleaner neighbor discovery.  
+**Memory:** IPv6 = **more addresses than grains of sand** + modern neighbor features.
+
+Uses [ICMPv6](#icmp) heavily for Neighbor Discovery (replaces much of ARP’s role).  
+**Filter:** `ip6`
+
+---
+
+## ICMP {#icmp}
+
+**Layer:** [3](#network-layer)  
+**Job:** Network utility & error messages (ping, unreachable, time exceeded).  
+**Memory:** ICMP = **network status texts**.
+
+```mermaid
+sequenceDiagram
+  participant You
+  participant Target
+  You->>Target: Echo Request
+  Target-->>You: Echo Reply
 ```
 
-```task
-TITLE: Find the TCP handshake
-LEVEL: intermediate
-STEPS:
-1. Capture `tcp port 443` for a few dozen packets
-2. Locate SYN, then SYN+ACK, then ACK
-3. Note sequence/ack numbers advancing
-GOAL: Point to the three packets that open the session before TLS starts
+| Type | Meaning |
+|------|---------|
+| 8 / 0 | Echo request / reply (ping) |
+| 3 | Destination unreachable |
+| 11 | Time exceeded (traceroute hops) |
+
+**Filter:** `icmp` / `icmp6`
+
+---
+
+## OSPF {#ospf}
+
+**Layer:** [3](#network-layer) routing  
+**Job:** Interior routers share link-state maps and compute shortest paths.  
+**Memory:** OSPF = **campus GPS updates between routers**.
+
+```mermaid
+flowchart LR
+  R1 <-->|LSAs| R2 <-->|LSAs| R3
 ```
+
+---
+
+## BGP {#bgp}
+
+**Layer:** [3](#network-layer) routing (Internet scale)  
+**Job:** Exchange reachability between organizations (ASes).  
+**Memory:** BGP = **postal service between countries/ISPs**.
+
+```mermaid
+flowchart LR
+  AS1[AS 64500 ISP] -- BGP --> AS2[AS 64501 Enterprise]
+```
+
+---
+
+## GRE {#gre}
+
+**Layer:** [3](#network-layer) tunneling  
+**Job:** Encapsulate packets inside IP (simple tunnel).  
+**Memory:** GRE = **bubble wrap** for packets (no encryption by itself).
+
+Often paired with [IPsec](#ipsec) for security.
+
+---
+
+## IPsec {#ipsec}
+
+**Layer:** [3](#network-layer) security  
+**Job:** Authenticate/encrypt IP payloads (VPN building block).  
+**Memory:** IPsec = **armor around IP packets**.
+
+Uses ESP/AH. Related: [VPN](#vpn).
+
+---
+
+## TCP {#tcp}
+
+**Layer:** [4 Transport](#transport-layer)  
+**Job:** Reliable, ordered byte stream between apps (ports).  
+**Memory:** TCP = **tracked courier with receipts**.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: SYN
+  S-->>C: SYN+ACK
+  C->>S: ACK
+  C->>S: Data + ACKs
+```
+
+**Common ports:** 80, 443, 22, 25, 3389…  
+**Filter:** `tcp`, `tcp port 443`
+
+---
+
+## UDP {#udp}
+
+**Layer:** [4](#transport-layer)  
+**Job:** Fast datagrams; no built-in reliability.  
+**Memory:** UDP = **postcard** — cheap, may be lost.
+
+Great for [DNS](#dns), [DHCP](#dhcp), [NTP](#ntp), media, gaming.  
+**Filter:** `udp`
+
+---
+
+## DNS {#dns}
+
+**Layer:** App ([7](#application-layer)) over [UDP](#udp)/[TCP](#tcp) 53  
+**Job:** Resolve names ↔ records (A/AAAA/MX/TXT…).  
+**Memory:** DNS = **phonebook of the Internet**.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant R as Resolver
+  participant A as Auth DNS
+  C->>R: A? www.example.com
+  R->>A: Query
+  A-->>R: 93.184.216.34
+  R-->>C: Answer
+```
+
+**Filter:** `udp port 53` or `port 53`
+
+---
+
+## DHCP {#dhcp}
+
+**Layer:** App over [UDP](#udp) 67/68  
+**Job:** Automatically assign IP, mask, gateway, DNS.  
+**Memory:** DHCP = **“welcome kit” for new devices** (DORA).
+
+```mermaid
+sequenceDiagram
+  participant H as Host
+  participant S as DHCP Server
+  H->>S: Discover
+  S-->>H: Offer
+  H->>S: Request
+  S-->>H: ACK
+```
+
+---
+
+## HTTP {#http}
+
+**Layer:** App ([7](#application-layer))  
+**Job:** Request/response protocol for web resources.  
+**Memory:** HTTP = **asking a library for a book** (`GET /path`).
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant S as Server
+  B->>S: GET /index.html
+  S-->>B: 200 OK + body
+```
+
+Default port 80 (cleartext). Prefer [HTTPS](#https).
+
+---
+
+## HTTPS {#https}
+
+**Job:** [HTTP](#http) inside [TLS](#tls) (usually [TCP](#tcp) 443).  
+**Memory:** HTTPS = **HTTP in a locked tunnel**.
+
+```mermaid
+flowchart LR
+  HTTP[HTTP messages] --> TLS[TLS encryption] --> TCP[TCP 443]
+```
+
+---
+
+## TLS {#tls}
+
+**Layer:** Presentation/App security  
+**Job:** Encrypt & authenticate a session before app data.  
+**Memory:** TLS = **private booth + ID check** for the server (certificate).
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant S as Server
+  C->>S: ClientHello
+  S-->>C: ServerHello + Certificate
+  C->>S: Key exchange finished
+  Note over C,S: Application data encrypted
+```
+
+Used by [HTTPS](#https), mail, VPN variants, etc.
+
+---
+
+## SSH {#ssh}
+
+**Port:** [TCP](#tcp) 22  
+**Job:** Encrypted remote shell, file copy (SCP/SFTP), tunnels.  
+**Memory:** SSH = **secure admin door**.
+
+Avoid [Telnet](#telnet) for management.
+
+---
+
+## Telnet {#telnet}
+
+**Port:** TCP 23  
+**Job:** Remote terminal — **cleartext** (legacy).  
+**Memory:** Telnet = **postcards of your passwords**. Use [SSH](#ssh).
+
+---
+
+## FTP {#ftp}
+
+**Ports:** TCP 21 (control), 20/data or passive high ports  
+**Job:** File transfer (often cleartext). Prefer SFTP ([SSH](#ssh)) or HTTPS uploads.
+
+---
+
+## SMTP {#smtp}
+
+**Port:** TCP 25/587  
+**Job:** Send mail between servers / submission.  
+**Memory:** SMTP = **sending letters**; IMAP/POP = reading mailbox.
+
+---
+
+## NTP {#ntp}
+
+**Port:** [UDP](#udp) 123  
+**Job:** Synchronize clocks.  
+**Memory:** Bad time → broken TLS/logs/Kerberos. NTP keeps reality aligned.
+
+---
+
+## SNMP {#snmp}
+
+**Ports:** UDP 161/162  
+**Job:** Monitor/manage network devices.  
+**Memory:** SNMP = **device health check API**. Use SNMPv3.
+
+---
+
+## LDAP {#ldap}
+
+**Ports:** TCP 389 / 636 (LDAPS)  
+**Job:** Directory lookups (users, groups). Often behind login systems.
+
+---
+
+## SMB {#smb}
+
+**Port:** TCP 445  
+**Job:** Windows file/printer sharing and related services.  
+**Memory:** SMB = **network drives**.
+
+---
+
+## RDP {#rdp}
+
+**Port:** TCP 3389  
+**Job:** Windows remote desktop. Expose carefully; prefer VPN + MFA.
+
+---
+
+## WireGuard {#wireguard}
+
+**Port:** UDP 51820 (common default)  
+**Job:** Modern, simple [VPN](#vpn) tunnel.  
+**Memory:** WireGuard = **small fast encrypted pipe**.
+
+```mermaid
+flowchart LR
+  Laptop -->|UDP 51820 encrypted| WG[WG gateway] --> LAN[Private LAN]
+```
+
+---
+
+## QUIC {#quic}
+
+**Job:** Modern transport over [UDP](#udp), used heavily by HTTP/3.  
+**Memory:** QUIC = **TCP+TLS lessons rebuilt on UDP** for fewer round trips.
+
+---
+
+## Firewall {#firewall}
+
+**Job:** Enforce allow/deny policy on traffic (stateless or stateful).  
+**Memory:** Firewall = **bouncer with a guest list**.
+
+```mermaid
+flowchart LR
+  In[Traffic] --> Policy{Match rule?}
+  Policy -->|Allow| Out[Forward]
+  Policy -->|Deny| Drop[Drop/Reject]
+```
+
+See [Network Security](#network-security).
+
+---
+
+## VPN {#vpn}
+
+**Job:** Private encrypted path over an untrusted network.  
+**Memory:** VPN = **secret tunnel through a public city**.
+
+Technologies: [IPsec](#protocols-reference/ipsec), [WireGuard](#protocols-reference/wireguard), OpenVPN-style SSL VPNs, commercial SSL VPNs.
+
+---
+
+## Port Cheat Sheet
+
+| Port | Proto | Service |
+|------|-------|---------|
+| 22 | TCP | [SSH](#ssh) |
+| 53 | UDP/TCP | [DNS](#dns) |
+| 67/68 | UDP | [DHCP](#dhcp) |
+| 80 | TCP | [HTTP](#http) |
+| 123 | UDP | [NTP](#ntp) |
+| 443 | TCP | [HTTPS](#https) |
+| 445 | TCP | [SMB](#smb) |
+| 3389 | TCP | [RDP](#rdp) |
+| 51820 | UDP | [WireGuard](#wireguard) |
 
 ---
 
 ## Knowledge Check
 
 ```quiz
-QUESTION: Which port is typically used for HTTPS?
+QUESTION: Which protocol resolves names to IP addresses?
 OPTIONS:
-22
-53
-80
-443
-ANSWER: 3
-EXPLAIN: HTTPS uses TCP 443; HTTP is 80, SSH is 22, DNS is usually 53.
-```
-
-```quiz
-QUESTION: DHCP’s DORA sequence starts with which message?
-OPTIONS:
-Request
-Offer
-Discover
-ACK
-ANSWER: 2
-EXPLAIN: Discover → Offer → Request → ACK (DORA).
-```
-
-```quiz
-QUESTION: ARP resolves which mapping?
-OPTIONS:
-Domain name → IP
-IP → MAC on the local link
-MAC → AS number
-Port → process name
+ARP
+DNS
+STP
+FTP
 ANSWER: 1
-EXPLAIN: ARP answers “who has this IP?” with a MAC address on the LAN.
+EXPLAIN: DNS is the Internet phonebook for names/records.
+```
+
+```quiz
+QUESTION: Which protocol resolves IP to MAC on a LAN?
+OPTIONS:
+DNS
+ARP
+BGP
+TLS
+ANSWER: 1
+EXPLAIN: ARP maps IP→MAC locally.
+```
+
+```quiz
+QUESTION: HTTPS is:
+OPTIONS:
+HTTP over TLS
+ARP over Wi‑Fi only
+BGP community strings
+SMTP without ports
+ANSWER: 0
+EXPLAIN: HTTPS packages HTTP inside TLS.
+```
+
+```quiz
+QUESTION: TCP’s first packet in a new connection is typically:
+OPTIONS:
+FIN
+SYN
+RST only
+DHCP Offer
+ANSWER: 1
+EXPLAIN: Clients start with SYN.
+```
+
+```quiz
+QUESTION: WireGuard is primarily a:
+OPTIONS:
+Layer 2 loop-prevention protocol
+VPN tunnel protocol
+MAC learning algorithm
+Cable category
+ANSWER: 1
+EXPLAIN: WireGuard creates encrypted VPN tunnels (commonly UDP 51820).
 ```
 
 ---
 
-## Summary
+## Next
 
-This reference covers the most commonly encountered protocols and their parameters. When you see an unfamiliar protocol number, EtherType, or port in pktana, come back here to identify it.
-
-**Next:** [Modern Networking](#modern-networking) — SDN, cloud networking, containers, and what comes next. For security tooling depth, see [DLP & IDPS](#dlp-idps).
+[Modern Networking](#modern-networking) · [DLP & IDPS](#dlp-idps) · [Final Knowledge Check](#knowledge-check)
