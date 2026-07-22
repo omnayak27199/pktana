@@ -2956,6 +2956,67 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
         .state-time-wait    { background:rgba(245,158,11,0.14); color:var(--warning); }
         .state-close-wait   { background:rgba(168,85,247,0.14); color:#a855f7; }
         .state-other        { background:rgba(68,88,112,0.12); color:var(--text-muted); }
+
+        /* ── UI polish pass — alignment & density ── */
+        .grid-3 > .card,
+        .feature-grid > .feature-panel,
+        .sec-stats > .sec-stat,
+        .policy-grid > .card {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .kv-item { align-items: baseline; gap: 10px; }
+        .kv-item strong { text-overflow: ellipsis; }
+        body.light-theme .kv-item { border-bottom-color: var(--border); }
+        body.light-theme .detail-row { border-bottom-color: var(--border); }
+        .panel-toolbar { align-items: center; gap: 8px; row-gap: 6px; }
+        .panel-toolbar > * { flex-shrink: 0; }
+        .window-tabs { align-items: stretch; min-height: 40px; flex-wrap: wrap; row-gap: 0; }
+        .win-tab { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .settings-table th, .ws-table th, .sessions-table th { white-space: nowrap; }
+        .table-actions { justify-content: flex-start; }
+        .table-wrap, .sessions-table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .empty-state { text-align: center; min-height: 120px; }
+        .sec-sub-panel.active { display: flex; flex-direction: column; gap: 12px; }
+        .policy-grid .form-row,
+        #security .form-row,
+        .sec-sub-panel .form-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .policy-grid .form-row label,
+        #security .form-row label,
+        .sec-sub-panel .form-row label {
+            min-width: 110px;
+            flex-shrink: 0;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .policy-grid .form-row input,
+        .policy-grid .form-row select,
+        #security .form-row input,
+        #security .form-row select,
+        .sec-sub-panel .form-row input,
+        .sec-sub-panel .form-row select {
+            flex: 1;
+            min-width: 140px;
+        }
+        .statusbar { align-items: center; gap: 12px; flex-wrap: wrap; }
+        .statusbar > * { min-width: 0; }
+        .iface-card { display: flex; flex-direction: column; gap: 2px; }
+        .card > .card-title + * { margin-top: 0; }
+        .feature-panel { min-width: 0; }
+        #server-info .grid-3,
+        #hardware .grid-3 { align-items: stretch; }
     </style>
     <script>
         // Define critical functions early so onclick handlers work

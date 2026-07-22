@@ -185,6 +185,79 @@
     .md strong { color: var(--dark); font-weight: 700; }
     .md em { font-style: italic; }
 
+    /* ── Mermaid diagrams ────────────────────────────────────── */
+    .md .mermaid {
+      background: #0f172a;
+      border-radius: 12px;
+      padding: 18px 12px;
+      margin: 18px 0;
+      overflow-x: auto;
+      border: 1px solid rgba(255,255,255,0.06);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+      text-align: center;
+    }
+
+    /* ── Tasks ───────────────────────────────────────────────── */
+    .learn-task {
+      border: 1px solid rgba(234,88,12,0.22);
+      background: linear-gradient(135deg, rgba(234,88,12,0.06), rgba(255,255,255,0.9));
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin: 18px 0;
+      box-shadow: var(--shadow-sm);
+    }
+    .learn-task-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+    .learn-task-badge {
+      font-size: 10px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase;
+      color: white; background: var(--primary); padding: 4px 8px; border-radius: 6px;
+    }
+    .learn-task-level {
+      font-size: 11px; font-weight: 700; color: var(--primary-dark);
+      background: rgba(234,88,12,0.12); padding: 3px 8px; border-radius: 999px;
+    }
+    .learn-task h4 { margin: 0; font-size: 1rem; color: var(--dark); text-transform: none; letter-spacing: -0.02em; }
+    .learn-task ol { margin: 8px 0 12px 20px; }
+    .learn-task .task-goal, .learn-task .task-hint {
+      font-size: 0.92rem; margin: 8px 0 0; padding: 10px 12px; border-radius: 10px;
+    }
+    .learn-task .task-goal { background: rgba(16,185,129,0.08); border-left: 3px solid #10b981; color: var(--dark); }
+    .learn-task .task-hint { background: rgba(56,189,248,0.08); border-left: 3px solid #38bdf8; color: var(--muted); }
+
+    /* ── Quizzes ─────────────────────────────────────────────── */
+    .learn-quiz {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 14px;
+      padding: 18px 20px;
+      margin: 16px 0;
+      box-shadow: var(--shadow-sm);
+    }
+    .learn-quiz-q { font-weight: 700; color: var(--dark); margin-bottom: 12px; line-height: 1.5; }
+    .learn-quiz-opt {
+      display: flex; align-items: flex-start; gap: 10px;
+      width: 100%; text-align: left; padding: 10px 12px; margin: 6px 0;
+      border-radius: 10px; border: 1px solid var(--line);
+      background: #fff; cursor: pointer; font: inherit; font-weight: 600; color: var(--text);
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .learn-quiz-opt:hover:not(:disabled) { border-color: rgba(234,88,12,0.45); background: rgba(234,88,12,0.04); }
+    .learn-quiz-opt:disabled { cursor: default; }
+    .learn-quiz-opt .opt-key {
+      flex-shrink: 0; width: 22px; height: 22px; border-radius: 6px;
+      display: grid; place-items: center; font-size: 11px; font-weight: 800;
+      background: rgba(15,23,42,0.06); color: var(--dark);
+    }
+    .learn-quiz-opt.correct { border-color: #10b981; background: rgba(16,185,129,0.1); }
+    .learn-quiz-opt.wrong { border-color: #ef4444; background: rgba(239,68,68,0.08); }
+    .learn-quiz-explain {
+      display: none; margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+      background: rgba(15,23,42,0.04); border-left: 3px solid var(--primary); font-size: 0.92rem; line-height: 1.6;
+    }
+    .learn-quiz-explain.show { display: block; }
+    .learn-quiz-result { font-size: 12px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; margin-top: 8px; }
+    .learn-quiz-result.ok { color: #059669; }
+    .learn-quiz-result.bad { color: #dc2626; }
+
     /* ── Loading / empty states ──────────────────────────────── */
     .state-box { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 40px; text-align: center; color: var(--muted); gap: 14px; }
     .state-box svg { opacity: 0.25; }
@@ -290,6 +363,9 @@
       <button class="docs-nav-item" data-page="network-security">
         <span class="nav-icon">🔐</span> Network Security
       </button>
+      <button class="docs-nav-item" data-page="dlp-idps">
+        <span class="nav-icon">🛡️</span> DLP &amp; IDPS
+      </button>
 
       <div class="sidebar-section-label" style="margin-top:12px;">Reference</div>
       <button class="docs-nav-item" data-page="protocols-reference">
@@ -297,6 +373,9 @@
       </button>
       <button class="docs-nav-item" data-page="modern-networking">
         <span class="nav-icon">🚀</span> Modern Networking
+      </button>
+      <button class="docs-nav-item" data-page="knowledge-check">
+        <span class="nav-icon">✅</span> Knowledge Check
       </button>
     </nav>
 
@@ -325,8 +404,10 @@
       'topologies':          { file: '08-topologies.md',          title: 'Network Topologies',     section: 'Infrastructure' },
       'wireless-networking': { file: '09-wireless-networking.md', title: 'Wireless Networking',    section: 'Infrastructure' },
       'network-security':    { file: '10-network-security.md',    title: 'Network Security',       section: 'Infrastructure' },
+      'dlp-idps':            { file: '13-dlp-idps.md',            title: 'DLP & IDPS',             section: 'Infrastructure' },
       'protocols-reference': { file: '11-protocols-reference.md', title: 'Protocols Reference',    section: 'Reference' },
       'modern-networking':   { file: '12-modern-networking.md',   title: 'Modern Networking',      section: 'Reference' },
+      'knowledge-check':     { file: '14-knowledge-check.md',     title: 'Knowledge Check',        section: 'Reference' },
     };
 
     var cache = {};
@@ -396,6 +477,103 @@
                + '</div>'
                + '<div class="md">' + markdownToHtml(md) + '</div>';
       content.innerHTML = html;
+      wireQuizzes(content);
+      if (window.mermaid) {
+        try {
+          window.mermaid.run({ nodes: content.querySelectorAll('.mermaid') });
+        } catch (e) { /* ignore render errors for partial diagrams */ }
+      }
+    }
+
+    function parseKeyedBlock(text) {
+      var map = {}, key = null, buf = [];
+      function flush() {
+        if (!key) return;
+        map[key] = buf.join('\n').replace(/^\n+|\n+$/g, '');
+        key = null; buf = [];
+      }
+      text.split('\n').forEach(function (line) {
+        var m = line.match(/^([A-Z_]+):\s*(.*)$/);
+        if (m) {
+          flush();
+          key = m[1];
+          buf = m[2] ? [m[2]] : [];
+        } else if (key) {
+          buf.push(line);
+        }
+      });
+      flush();
+      return map;
+    }
+
+    function renderTaskBlock(raw) {
+      var m = parseKeyedBlock(raw);
+      var title = m.TITLE || 'Hands-on task';
+      var level = m.LEVEL || 'practice';
+      var steps = (m.STEPS || '').split('\n').map(function (s) { return s.replace(/^\d+\.\s*/, '').trim(); }).filter(Boolean);
+      var html = '<div class="learn-task"><div class="learn-task-head">'
+        + '<span class="learn-task-badge">Task</span>'
+        + '<span class="learn-task-level">' + esc(level) + '</span>'
+        + '<h4>' + inline(title) + '</h4></div>';
+      if (steps.length) {
+        html += '<ol>' + steps.map(function (s) { return '<li>' + inline(s) + '</li>'; }).join('') + '</ol>';
+      }
+      if (m.GOAL) html += '<p class="task-goal"><strong>Goal:</strong> ' + inline(m.GOAL) + '</p>';
+      if (m.HINT) html += '<p class="task-hint"><strong>Hint:</strong> ' + inline(m.HINT) + '</p>';
+      return html + '</div>';
+    }
+
+    var quizSeq = 0;
+    function renderQuizBlock(raw) {
+      var m = parseKeyedBlock(raw);
+      var q = m.QUESTION || 'Question';
+      var opts = (m.OPTIONS || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      var answer = parseInt(m.ANSWER, 10);
+      if (isNaN(answer)) answer = 0;
+      var explain = m.EXPLAIN || '';
+      var id = 'quiz-' + (++quizSeq);
+      var letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      var html = '<div class="learn-quiz" data-answer="' + answer + '" id="' + id + '">'
+        + '<div class="learn-quiz-q">' + inline(q) + '</div>';
+      opts.forEach(function (opt, idx) {
+        html += '<button type="button" class="learn-quiz-opt" data-idx="' + idx + '">'
+          + '<span class="opt-key">' + letters[idx] + '</span><span>' + inline(opt) + '</span></button>';
+      });
+      html += '<div class="learn-quiz-result" hidden></div>';
+      if (explain) html += '<div class="learn-quiz-explain">' + inline(explain) + '</div>';
+      return html + '</div>';
+    }
+
+    function wireQuizzes(root) {
+      root.querySelectorAll('.learn-quiz').forEach(function (box) {
+        var answer = parseInt(box.getAttribute('data-answer'), 10);
+        var result = box.querySelector('.learn-quiz-result');
+        var explain = box.querySelector('.learn-quiz-explain');
+        box.querySelectorAll('.learn-quiz-opt').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (box.getAttribute('data-done') === '1') return;
+            box.setAttribute('data-done', '1');
+            var idx = parseInt(btn.getAttribute('data-idx'), 10);
+            box.querySelectorAll('.learn-quiz-opt').forEach(function (b) {
+              b.disabled = true;
+              var i = parseInt(b.getAttribute('data-idx'), 10);
+              if (i === answer) b.classList.add('correct');
+              else if (i === idx) b.classList.add('wrong');
+            });
+            if (result) {
+              result.hidden = false;
+              if (idx === answer) {
+                result.textContent = 'Correct';
+                result.className = 'learn-quiz-result ok';
+              } else {
+                result.textContent = 'Not quite — see the explanation';
+                result.className = 'learn-quiz-result bad';
+              }
+            }
+            if (explain) explain.classList.add('show');
+          });
+        });
+      });
     }
 
     function esc(s) {
@@ -408,13 +586,18 @@
       s = s.replace(/\*\*(.*?)\*\*/g,     '<strong>$1</strong>');
       s = s.replace(/\*(.*?)\*/g,         '<em>$1</em>');
       s = s.replace(/`([^`]+)`/g,         '<code>$1</code>');
-      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (_, text, href) {
+        if (href.charAt(0) === '#') {
+          return '<a href="' + href + '">' + text + '</a>';
+        }
+        return '<a href="' + href + '" target="_blank" rel="noopener">' + text + '</a>';
+      });
       return s;
     }
 
     function markdownToHtml(md) {
       var lines = md.split('\n'), out = '', i = 0;
-      var inCode = false, codeBuf = [];
+      var inCode = false, codeBuf = [], codeLang = '';
       var inTable = false, tableHead = true;
       var listBuf = [], listOrd = false;
       var firstH1 = true, leadPending = false;
@@ -433,8 +616,26 @@
         var line = lines[i]; i++;
 
         if (line.startsWith('```')) {
-          if (!inCode) { flushList(); flushTable(); inCode = true; codeBuf = []; }
-          else { inCode = false; out += '<pre><code>' + codeBuf.map(esc).join('\n') + '</code></pre>'; codeBuf = []; }
+          if (!inCode) {
+            flushList(); flushTable();
+            inCode = true;
+            codeLang = line.slice(3).trim().toLowerCase();
+            codeBuf = [];
+          } else {
+            inCode = false;
+            var body = codeBuf.join('\n');
+            if (codeLang === 'mermaid') {
+              out += '<div class="mermaid">' + body + '</div>';
+            } else if (codeLang === 'quiz') {
+              out += renderQuizBlock(body);
+            } else if (codeLang === 'task') {
+              out += renderTaskBlock(body);
+            } else {
+              out += '<pre><code>' + codeBuf.map(esc).join('\n') + '</code></pre>';
+            }
+            codeBuf = [];
+            codeLang = '';
+          }
           continue;
         }
         if (inCode) { codeBuf.push(line); continue; }
@@ -523,6 +724,21 @@
     });
 
     routeFromHash();
+  </script>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      securityLevel: 'loose',
+      flowchart: { curve: 'basis' },
+      sequence: { actorMargin: 18 }
+    });
+    window.mermaid = mermaid;
+    var nodes = document.querySelectorAll('#docsContent .mermaid');
+    if (nodes.length) {
+      try { await mermaid.run({ nodes: nodes }); } catch (e) {}
+    }
   </script>
 </body>
 </html>

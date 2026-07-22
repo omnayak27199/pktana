@@ -203,13 +203,108 @@ In the pktana Web UI, the **Flow Capture** tab shows top talkers — useful for 
 
 ---
 
+## Defense-in-Depth Flow
+
+How controls stack from edge to data:
+
+```mermaid
+flowchart TB
+  Internet([Internet / Untrusted]) --> EdgeFW[Edge Firewall]
+  EdgeFW --> IDS[IDS / IDPS Sensor]
+  IDS --> DMZ[DMZ / Public Services]
+  IDS --> CoreFW[Internal Firewall]
+  CoreFW --> Seg[Segmented VLANs]
+  Seg --> Host[Host + EDR]
+  Host --> DLP[DLP / Data Controls]
+  DLP --> Data[(Sensitive Data)]
+```
+
+**ARP poisoning MitM — what happens on the wire:**
+
+```mermaid
+sequenceDiagram
+  participant Victim
+  participant Attacker
+  participant Gateway
+  Note over Attacker: Spoofs ARP replies
+  Attacker->>Victim: ARP: Gateway IP is MY MAC
+  Attacker->>Gateway: ARP: Victim IP is MY MAC
+  Victim->>Attacker: Frames meant for gateway
+  Attacker->>Gateway: Forwards (optionally modified)
+  Gateway->>Attacker: Replies for victim
+  Attacker->>Victim: Forwards replies
+```
+
+---
+
+## Hands-On Tasks
+
+```task
+TITLE: Spot ARP anomalies with pktana
+LEVEL: beginner
+STEPS:
+1. Start a short capture: `pktana capture --interface eth0 --filter "arp" --count 40`
+2. Note how many unique MAC addresses claim the same gateway IP
+3. In the Web UI, open Connections and compare local MACs vs expected gateway MAC
+GOAL: Explain why duplicate IP→MAC mappings are a red flag for MitM
+HINT: On a healthy LAN, one IP should map to one MAC (except brief ARP races)
+```
+
+```task
+TITLE: Map CIA to real controls
+LEVEL: beginner
+STEPS:
+1. Pick one service you run (SSH, HTTPS site, or file share)
+2. List one control for Confidentiality, one for Integrity, one for Availability
+3. Write which pktana view would help verify each control (Flows, Connections, Capture)
+GOAL: Connect abstract CIA goals to concrete network evidence
+```
+
+---
+
+## Knowledge Check
+
+```quiz
+QUESTION: Which attack places the adversary between two parties to read or alter traffic?
+OPTIONS:
+Denial of Service
+Man-in-the-Middle
+Port scan
+DHCP starvation
+ANSWER: 1
+EXPLAIN: MitM sits on the path (often via ARP/DNS tricks) so traffic can be intercepted or modified.
+```
+
+```quiz
+QUESTION: What does a stateful firewall track that a pure packet filter does not?
+OPTIONS:
+Only destination port numbers
+Connection / session state
+Wi-Fi channel numbers
+Cable category ratings
+ANSWER: 1
+EXPLAIN: Stateful firewalls remember established flows and allow related return traffic.
+```
+
+```quiz
+QUESTION: In Zero Trust, access is granted primarily because the client is on the corporate LAN.
+OPTIONS:
+True
+False
+ANSWER: 1
+EXPLAIN: Zero Trust verifies every request; network location alone is not enough.
+```
+
+---
+
 ## Summary
 
 - The **CIA Triad** (Confidentiality, Integrity, Availability) guides all security decisions
 - Common attacks: eavesdropping, ARP poisoning, DNS spoofing, SYN flood, DDoS
-- **Firewalls** filter traffic; **IDS/IPS** detect and block intrusions
+- **Firewalls** filter traffic; **IDS/IPS / IDPS** detect and block intrusions
+- **DLP** focuses on preventing sensitive data from leaving approved paths
 - **VPNs** (IPsec, WireGuard, SSL) encrypt traffic over untrusted networks
 - **Zero Trust** replaces implicit network trust with continuous verification
 - Monitoring tools (NetFlow, PCAP, SIEM) are essential for detection and forensics
 
-**Next:** [Protocols Reference](11-protocols-reference.md) — quick-reference for all major protocols
+**Next:** [DLP & IDPS](#dlp-idps) — data loss prevention and intrusion detection/prevention, then [Protocols Reference](#protocols-reference)

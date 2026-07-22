@@ -288,6 +288,31 @@ A structured approach to diagnosing network issues is to move through the OSI la
 | 9 | At server | Server de-encapsulates each layer: Ethernet → IP → TCP → TLS → HTTP |
 | 10 | Server responds | Same process in reverse — HTTP 200 response travels back to your browser |
 
+```mermaid
+flowchart TB
+  App[L7 Application data] --> Pres[L6 Presentation / TLS]
+  Pres --> Sess[L5 Session]
+  Sess --> Trans[L4 TCP/UDP + ports]
+  Trans --> Net[L3 IP + routing]
+  Net --> Link[L2 Frame + MAC]
+  Link --> Phys[L1 Bits on the wire]
+```
+
+---
+
+## Knowledge Check
+
+```quiz
+QUESTION: Encapsulation adds headers mainly when data moves:
+OPTIONS:
+Up the stack toward the application
+Down the stack toward the physical medium
+Only inside DNS answers
+Only on wireless networks
+ANSWER: 1
+EXPLAIN: Each lower layer wraps the PDU from above (headers, and sometimes trailers).
+```
+
 ---
 
 ## Summary
@@ -299,4 +324,4 @@ A structured approach to diagnosing network issues is to move through the OSI la
 - Devices operate at specific layers: hub=L1, switch=L2, router=L3, firewall=L3–L7
 - **Peer-to-peer** communication means each layer "talks" logically to the same layer on the remote host
 
-**Next:** [Layer 1 — Physical](03-physical-layer.md) — cables, signals, and how bits travel
+**Next:** [Layer 1 — Physical](#physical-layer) — cables, signals, and how bits travel

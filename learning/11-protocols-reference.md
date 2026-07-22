@@ -246,8 +246,138 @@ pktana mcp --port 3456      # launch MCP server for AI agents
 
 ---
 
+## Protocol Flows (How Conversations Look)
+
+### DNS resolution then HTTPS
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Resolver as DNS Resolver
+  participant Auth as Authoritative DNS
+  participant Web as Web Server :443
+  Client->>Resolver: UDP/53 A? www.example.com
+  Resolver->>Auth: Query (if not cached)
+  Auth-->>Resolver: A = 93.184.216.34
+  Resolver-->>Client: Answer + TTL
+  Client->>Web: TCP SYN :443
+  Web-->>Client: SYN+ACK
+  Client->>Web: ACK
+  Client->>Web: TLS ClientHello
+  Web-->>Client: ServerHello + Certificate
+  Note over Client,Web: Encrypted HTTP/2 or HTTP/1.1
+```
+
+### DHCP lease (DORA)
+
+```mermaid
+sequenceDiagram
+  participant Host
+  participant Server as DHCP Server
+  Host->>Server: Discover (broadcast)
+  Server-->>Host: Offer (IP + options)
+  Host->>Server: Request (want that IP)
+  Server-->>Host: ACK (lease granted)
+```
+
+### TCP three-way handshake
+
+```mermaid
+flowchart LR
+  A[Client SYN] --> B[Server SYN+ACK]
+  B --> C[Client ACK]
+  C --> D[Established — data can flow]
+```
+
+### ARP request / reply
+
+```mermaid
+sequenceDiagram
+  participant A as Host A
+  participant B as Host B
+  A->>B: Who has 10.0.0.5? Tell 10.0.0.2 (broadcast)
+  B-->>A: 10.0.0.5 is at aa:bb:cc:dd:ee:ff (unicast)
+```
+
+---
+
+## Protocol Explainers (What to Look For in Captures)
+
+**DNS** — Usually UDP/53; large answers or zone transfers use TCP/53. Look for NXDOMAIN floods, unusual query names (DGA malware), or DNS over unexpected ports.
+
+**HTTP vs HTTPS** — Cleartext HTTP shows methods and Host headers; HTTPS shows TLS handshake then encrypted application data. Filter: `tcp port 80` vs `tcp port 443`.
+
+**SSH** — TCP/22. Banner exchange is visible; session content is encrypted. Unexpected SSH to the internet from servers can mean lateral movement or reverse shells.
+
+**ICMP** — Not “just ping.” Type 3/11 appear in traceroute and path MTU discovery. Excessive echo requests may be reconnaissance or covert channels.
+
+**TLS** — Handshake reveals SNI (often), cipher suites, and cert chain before encryption. JA3/JA4 fingerprints help classify clients.
+
+---
+
+## Hands-On Tasks
+
+```task
+TITLE: Capture a DNS lookup
+LEVEL: beginner
+STEPS:
+1. Run `pktana capture --interface eth0 --filter "udp port 53" --count 20`
+2. Trigger a lookup (`ping example.com` or open a browser)
+3. Identify query name and response address in the packets
+GOAL: Match DNS query/response pairs and note the 5-tuple
+```
+
+```task
+TITLE: Find the TCP handshake
+LEVEL: intermediate
+STEPS:
+1. Capture `tcp port 443` for a few dozen packets
+2. Locate SYN, then SYN+ACK, then ACK
+3. Note sequence/ack numbers advancing
+GOAL: Point to the three packets that open the session before TLS starts
+```
+
+---
+
+## Knowledge Check
+
+```quiz
+QUESTION: Which port is typically used for HTTPS?
+OPTIONS:
+22
+53
+80
+443
+ANSWER: 3
+EXPLAIN: HTTPS uses TCP 443; HTTP is 80, SSH is 22, DNS is usually 53.
+```
+
+```quiz
+QUESTION: DHCP’s DORA sequence starts with which message?
+OPTIONS:
+Request
+Offer
+Discover
+ACK
+ANSWER: 2
+EXPLAIN: Discover → Offer → Request → ACK (DORA).
+```
+
+```quiz
+QUESTION: ARP resolves which mapping?
+OPTIONS:
+Domain name → IP
+IP → MAC on the local link
+MAC → AS number
+Port → process name
+ANSWER: 1
+EXPLAIN: ARP answers “who has this IP?” with a MAC address on the LAN.
+```
+
+---
+
 ## Summary
 
 This reference covers the most commonly encountered protocols and their parameters. When you see an unfamiliar protocol number, EtherType, or port in pktana, come back here to identify it.
 
-**Next:** [Modern Networking](12-modern-networking.md) — SDN, cloud networking, containers, and what comes next
+**Next:** [Modern Networking](#modern-networking) — SDN, cloud networking, containers, and what comes next. For security tooling depth, see [DLP & IDPS](#dlp-idps).
