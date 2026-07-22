@@ -1,37 +1,64 @@
 # Knowledge Check
 
-Final mixed practice across every layer, major protocols, security, DLP, and IDPS. Use links to jump back when you miss something — that is the point.
+Final mixed practice across every layer, major protocols, topologies, wireless, security, modern fabrics, DLP, and IDPS. Wrong answers are a map — click the term and reread.
 
-> **Remember:** Wrong answers are a map of what to reopen. Click the term and reread the picture.
+> **Remember:** Treat this like a **final exam**. Narrate answers out loud; every miss should open a hub link.
 
 ---
 
-## Memory Map
+## How to Use This Exam {#how-to-use}
+
+1. Attempt quizzes **before** reopening chapters.
+2. Score with the guide at the end.
+3. Click links for every miss; retry weak sections later.
 
 ```mermaid
 flowchart TB
-  L1[L1 Physical bits] --> L2[L2 MAC frames]
-  L2 --> L3[L3 IP routing]
-  L3 --> L4[L4 ports TCP/UDP]
-  L4 --> L7[L7 apps DNS HTTP TLS]
-  L7 --> Sec[Security DLP IDPS]
+  Attempt[Attempt quizzes and tasks] --> Score[Score honestly]
+  Score --> Links[Open linked chapters]
+  Links --> Retry[Retry weak areas]
 ```
-
-Quick returns: [OSI](#osi-model) · [Protocols](#protocols-reference) · [Security](#network-security) · [DLP/IDPS](#dlp-idps)
 
 ---
 
-## Tasks
+## Memory Map — Whole Hub {#memory-map}
+
+```mermaid
+flowchart TB
+  Intro[What Is Networking] --> OSI[OSI Model]
+  OSI --> L1[Physical]
+  L1 --> L2[Data Link]
+  L2 --> L3[Network]
+  L3 --> L4[Transport]
+  L4 --> L7[Application]
+  L7 --> Topo[Topologies]
+  Topo --> Wifi[Wireless]
+  Wifi --> Sec[Security]
+  Sec --> DLP[DLP and IDPS]
+  L7 --> Proto[Protocols Reference]
+  Sec --> Modern[Modern Networking]
+  DLP --> Here[Knowledge Check]
+  Modern --> Here
+```
+
+**Every chapter:** [What Is Networking](#what-is-networking) · [OSI](#osi-model) · [Physical](#physical-layer) · [Data Link](#data-link-layer) · [Network](#network-layer) · [Transport](#transport-layer) · [Application](#application-layer) · [Topologies](#topologies) · [Wireless](#wireless-networking) · [Security](#network-security) · [Protocols](#protocols-reference) · [Modern](#modern-networking) · [DLP/IDPS](#dlp-idps)
+
+**Protocol shortcuts:** [Ethernet](#protocols-reference/ethernet) · [VLAN](#protocols-reference/vlan) · [ARP](#protocols-reference/arp) · [IPv4](#protocols-reference/ipv4) · [TCP](#protocols-reference/tcp) · [UDP](#protocols-reference/udp) · [DNS](#protocols-reference/dns) · [DHCP](#protocols-reference/dhcp) · [HTTP](#protocols-reference/http) · [TLS](#protocols-reference/tls) · [HTTPS](#protocols-reference/https) · [IPsec](#protocols-reference/ipsec) · [WireGuard](#protocols-reference/wireguard) · [Firewall](#protocols-reference/firewall) · [VPN](#protocols-reference/vpn)
+
+---
+
+## Multi-Step Tasks {#tasks}
 
 ```task
 TITLE: Narrate one web click through the layers
 LEVEL: beginner
 STEPS:
-1. Pick opening https://example.com
-2. Write one sentence per layer L1→L4→L7 naming the protocol
-3. Click each protocol name in your notes to verify in Protocols Reference
-GOAL: Build a story you can reuse in interviews/troubleshooting
-HINT: DNS then TCP then TLS then HTTP is the usual sequence
+1. Open https://example.com in your mind
+2. Write one sentence each: DNS → IP → TCP → TLS → HTTP
+3. Add one L2 note (Ethernet or Wi-Fi) and one CIA/TLS security note
+4. Verify each protocol name in Protocols Reference
+GOAL: Build a reusable interview story
+HINT: Application Layer + Protocols Reference
 ```
 
 ```task
@@ -39,34 +66,57 @@ TITLE: Bottom-up outage drill
 LEVEL: intermediate
 STEPS:
 1. Symptom: “app timeout”
-2. Check L1 link → L2 VLAN/MAC → L3 ping/route → L4 port/handshake → L7 DNS/TLS/HTTP
-3. Stop at the first failing layer and name the evidence
-GOAL: Practice the OSI troubleshooting habit
+2. Check L1 link → L2 VLAN/MAC → L3 ping/route → L4 handshake → L7 DNS/TLS/HTTP
+3. Stop at the first failing layer; name the evidence
+4. Say whether pktana PCAP or Connections helps more
+GOAL: Practice OSI troubleshooting habit
 ```
 
 ```task
-TITLE: Security fork
+TITLE: Topology blast-radius review
 LEVEL: intermediate
 STEPS:
-1. Case 1: exploit scan from Internet
-2. Case 2: bulk export of HR files to personal email
+1. Sketch star access + dual distribution + dual core
+2. Mark SPOFs if access has only one uplink
+3. Explain how VLANs change logical topology on the same sketch
+GOAL: Connect Topologies to VLAN/routing reality
+HINT: Topologies + Data Link
+```
+
+```task
+TITLE: Coffee-shop risk brief
+LEVEL: beginner
+STEPS:
+1. List open Wi-Fi risks (sniff / MitM / rogue AP)
+2. List mitigations (HTTPS, VPN, avoid Telnet/FTP)
+3. Note one RF issue a wired SPAN behind an AP cannot prove
+GOAL: Blend Wireless + Security judgment
+```
+
+```task
+TITLE: Security fork — attack vs data loss
+LEVEL: intermediate
+STEPS:
+1. Case 1: exploit scan from Internet toward DMZ
+2. Case 2: HR exports payroll.csv to personal webmail
 3. Assign IDPS vs DLP lead + which pktana view helps
-GOAL: Separate attack detection from data-leak control
+4. Name the primary CIA letter hit in each case
+GOAL: Separate intrusion detection from data-leak control
 ```
 
 ---
 
-## Quiz — Layers
+## Quiz — Layers & Fundamentals {#quiz-layers}
 
 ```quiz
-QUESTION: Which layer moves raw bits as signals?
+QUESTION: Which layer moves raw bits as signals on a medium?
 OPTIONS:
 Application
 Physical
 Transport
 Data Link
 ANSWER: 1
-EXPLAIN: Layer 1 is Physical — energy on a medium.
+EXPLAIN: Layer 1 Physical moves energy/bits on cable or radio.
 ```
 
 ```quiz
@@ -92,135 +142,425 @@ EXPLAIN: Layer 3 routes packets between networks.
 ```
 
 ```quiz
-QUESTION: Ports belong to:
+QUESTION: Ports belong primarily to:
 OPTIONS:
 Transport Layer
 Physical Layer
 VLANs only
 Fiber colors
 ANSWER: 0
-EXPLAIN: TCP/UDP ports are Transport.
+EXPLAIN: TCP/UDP ports select applications on a host.
+```
+
+```quiz
+QUESTION: Encapsulation means:
+OPTIONS:
+Stripping all headers immediately at the sender
+Adding layer headers as data moves toward the wire
+Only Wi-Fi roaming
+Only firewall logging
+ANSWER: 1
+EXPLAIN: Each lower layer wraps the payload from above.
 ```
 
 ---
 
-## Quiz — Protocols
+## Quiz — Core Protocols {#quiz-protocols}
 
 ```quiz
-QUESTION: DNS is best described as:
+QUESTION: ARP’s classic LAN job is to:
 OPTIONS:
-IP to MAC on LAN
-Names to records/addresses
-Loop prevention
-Cable testing
+Encrypt HTTP
+Map IP address to MAC address on the local link
+Assign BGP ASNs
+Replace DNS permanently
 ANSWER: 1
-EXPLAIN: DNS is the Internet phonebook.
+EXPLAIN: ARP resolves next-hop MAC for an IP on the LAN.
 ```
 
 ```quiz
-QUESTION: ARP is best described as:
+QUESTION: DNS’s main everyday job is to:
 OPTIONS:
-Names to IP
-IP to MAC on the local link
-Encrypted HTTP
-AS path selection
+Assign MAC addresses
+Map names to IP addresses (and related records)
+Terminate optical light
+Run STP
 ANSWER: 1
-EXPLAIN: ARP resolves IP→MAC locally.
+EXPLAIN: DNS resolves names to addresses and more record types.
 ```
 
 ```quiz
-QUESTION: TCP handshake starts with:
+QUESTION: DHCP commonly provides:
 OPTIONS:
-FIN
-SYN
-DHCP Discover
-ICMP Redirect only
+Only TLS certificates
+Host IP configuration (address, mask, gateway, DNS…)
+Spanning Tree priorities
+WireGuard keys only
 ANSWER: 1
-EXPLAIN: SYN begins a TCP connection.
+EXPLAIN: DHCP autoconfigures host network parameters.
 ```
 
 ```quiz
-QUESTION: HTTPS is:
+QUESTION: TCP is preferred over UDP when you need:
 OPTIONS:
-HTTP over TLS
-Telnet on 443
-ARP over TCP
-STP over UDP
+Guaranteed absolute zero latency always
+Reliable ordered byte streams with retransmission
+To avoid ports
+To replace Ethernet
+ANSWER: 1
+EXPLAIN: TCP provides reliability and ordering for streams.
+```
+
+```quiz
+QUESTION: HTTPS is best described as:
+OPTIONS:
+HTTP only on UDP 53
+HTTP over TLS (commonly TCP 443)
+Raw Ethernet with no IP
+FTP renamed
+ANSWER: 1
+EXPLAIN: HTTPS wraps HTTP inside TLS, usually on port 443.
+```
+
+---
+
+## Quiz — Topologies {#quiz-topologies}
+
+```quiz
+QUESTION: In a star topology, the most critical SPOF is usually the:
+OPTIONS:
+End-user wallpaper
+Central switch / hub
+DNS TXT record
+Client emoji
+ANSWER: 1
+EXPLAIN: Star edges depend on the center device.
+```
+
+```quiz
+QUESTION: VLANs mainly change:
+OPTIONS:
+Cable copper category only
+Logical Layer 2 segmentation
+Optical wavelength of the sun
+TCP handshake order
+ANSWER: 1
+EXPLAIN: VLANs alter logical topology / broadcast domains.
+```
+
+```quiz
+QUESTION: A full mesh is chosen when you need:
+OPTIONS:
+Lowest cabling cost always
+Maximum alternate paths / resilience
+To avoid IP addresses
+Only wireless SSIDs
+ANSWER: 1
+EXPLAIN: Mesh adds redundant paths at higher cost/complexity.
+```
+
+```quiz
+QUESTION: Core–distribution–access is:
+OPTIONS:
+A bus-only home lab requirement
+Enterprise hierarchical design
+A TLS cipher suite
+A DHCP message type
+ANSWER: 1
+EXPLAIN: Campuses commonly use hierarchical tiers.
+```
+
+---
+
+## Quiz — Wireless {#quiz-wireless}
+
+```quiz
+QUESTION: Non-overlapping 2.4 GHz channels commonly used are:
+OPTIONS:
+2, 3, 4
+1, 6, 11
+All channels equally non-overlapping always
+Only channel 14 worldwide
+ANSWER: 1
+EXPLAIN: 1/6/11 are the classic non-overlapping set in many regions.
+```
+
+```quiz
+QUESTION: An SSID is:
+OPTIONS:
+A routing protocol
+The wireless network name
+A fiber color code
+A NetFlow template
+ANSWER: 1
+EXPLAIN: SSID is the human-readable WLAN name.
+```
+
+```quiz
+QUESTION: Compared to Ethernet, Wi-Fi typically has:
+OPTIONS:
+A dedicated private cable per client always
+Shared RF with contention and variable SNR
+Identical RF physics to fiber
+No authentication options
+ANSWER: 1
+EXPLAIN: Radio is shared and environment-sensitive.
+```
+
+```quiz
+QUESTION: Open coffee-shop Wi-Fi increases risk of:
+OPTIONS:
+Mandatory IPsec everywhere
+Local sniffing / easier MitM without strong link encryption
+Removal of DNS
+Automatic mesh failure
+ANSWER: 1
+EXPLAIN: Weak/no Wi-Fi encryption enlarges local attack surface.
+```
+
+---
+
+## Quiz — Security {#quiz-security}
+
+```quiz
+QUESTION: Confidentiality means:
+OPTIONS:
+Systems never reboot
+Only authorized parties can read the information
+Cables must be red
+VLANs are illegal
+ANSWER: 1
+EXPLAIN: Confidentiality is secrecy for authorized eyes only.
+```
+
+```quiz
+QUESTION: A volumetric DDoS primarily impacts:
+OPTIONS:
+Availability
+Cable jacket branding
+SSID emoji choice
+STP root name aesthetics
 ANSWER: 0
-EXPLAIN: HTTPS = HTTP protected by TLS.
+EXPLAIN: Floods aim to deny service reachability.
 ```
 
 ```quiz
-QUESTION: DHCP DORA order begins with:
+QUESTION: ARP spoofing often enables:
 OPTIONS:
-ACK
-Offer
-Discover
-Request
-ANSWER: 2
-EXPLAIN: Discover → Offer → Request → ACK.
+Faster DNS
+Man-in-the-Middle on a LAN
+Mandatory SMTP
+Deletion of TCP
+ANSWER: 1
+EXPLAIN: Spoofed ARP can steal the gateway role.
+```
+
+```quiz
+QUESTION: TLS primarily provides:
+OPTIONS:
+Physical rack security
+Encrypted authenticated application sessions
+Replacement of IP routing
+Bus topology enforcement
+ANSWER: 1
+EXPLAIN: TLS protects app sessions cryptographically.
+```
+
+```quiz
+QUESTION: Network segmentation mainly helps by:
+OPTIONS:
+Making every host public
+Limiting blast radius and lateral movement
+Removing the need for monitoring
+Forbidding firewalls
+ANSWER: 1
+EXPLAIN: Zones constrain attacker movement and exposure.
 ```
 
 ---
 
-## Quiz — Security / DLP / IDPS
+## Quiz — Modern Networking {#quiz-modern}
 
 ```quiz
-QUESTION: CIA “Integrity” means:
+QUESTION: SDN data plane primarily:
 OPTIONS:
-Data is public
-Data is not changed undetected
-Wi‑Fi is free
-Ports are random
+Only writes tickets
+Forwards packets per programmed rules
+Deletes DNS
+Paints diagrams
 ANSWER: 1
-EXPLAIN: Integrity protects against undetected modification.
+EXPLAIN: Data plane forwards; control plane decides.
 ```
 
 ```quiz
-QUESTION: DLP focuses on:
+QUESTION: A cloud NAT Gateway commonly lets:
 OPTIONS:
-Sensitive data leaving wrong channels
-Only STP root elections
-Only copper length
-Only BGP communities
+Private subnets initiate outbound Internet without full inbound exposure
+All encryption vanish
+VLANs disappear
+BGP become illegal
 ANSWER: 0
-EXPLAIN: Data Loss Prevention is about sensitive data control.
+EXPLAIN: NAT supports outbound from private address space.
 ```
 
 ```quiz
-QUESTION: Inline drop of exploit traffic is:
+QUESTION: CNI in Kubernetes is about:
 OPTIONS:
-IDS-only passive tap with no action
-IPS behavior
-DHCP reservation
-MAC flooding as a feature
-ANSWER: 1
-EXPLAIN: IPS can prevent inline; IDS mainly detects.
+Container network attachment and connectivity
+Compulsory Telnet
+Physical bus coax
+Removing underlays always
+ANSWER: 0
+EXPLAIN: CNI plugins implement cluster networking.
 ```
 
 ```quiz
-QUESTION: Best first capture filter for HTTPS troubleshooting handshake:
+QUESTION: An overlay network typically:
 OPTIONS:
-arp only
-tcp port 443
-stp
-udp port 67
+Replaces packets with smoke signals
+Encapsulates virtual traffic across an underlay
+Removes all IP inside pods forever
+Forbids security groups
 ANSWER: 1
-EXPLAIN: HTTPS commonly rides TCP/443 (TLS).
+EXPLAIN: Overlays ride on underlay IP fabrics.
 ```
 
 ---
 
-## Score Guide
+## Quiz — DLP & IDPS {#quiz-dlp-idps}
 
-| Score (of 14 quizzes) | Next step |
-|-----------------------|-----------|
-| 12–14 | Capture live traffic and narrate flows aloud |
-| 8–11 | Revisit missed links in [Protocols Reference](#protocols-reference) |
-| ≤7 | Restart from [OSI Model](#osi-model) with the memory sentence |
+```quiz
+QUESTION: DLP’s primary mission is to:
+OPTIONS:
+Accelerate ARP
+Stop sensitive data leaving via unauthorized channels
+Replace fiber
+Assign VLAN IDs
+ANSWER: 1
+EXPLAIN: DLP focuses on data exfiltration and mishandling.
+```
+
+```quiz
+QUESTION: An inline blocker of exploit traffic is acting as:
+OPTIONS:
+IDS only by definition always
+IPS
+DHCP relay
+STP root only
+ANSWER: 1
+EXPLAIN: IPS prevents inline; IDS typically alerts.
+```
+
+```quiz
+QUESTION: TLS challenges network DLP because:
+OPTIONS:
+Ports vanish
+Payloads are encrypted without inspection/endpoint/API help
+MACs become IPv6
+Switches stop learning
+ANSWER: 1
+EXPLAIN: Ciphertext hides content from pure network DLP.
+```
+
+```quiz
+QUESTION: Signature IDPS is strongest against:
+OPTIONS:
+Only unknown zero-days
+Known exploit/malware patterns
+Cable cuts
+DHCP only
+ANSWER: 1
+EXPLAIN: Signatures match known patterns.
+```
+
+```quiz
+QUESTION: IDPS vs DLP differ because:
+OPTIONS:
+They are always identical
+IDPS focuses on attacks; DLP on sensitive data paths
+Neither uses alerts
+Both abolish encryption
+ANSWER: 1
+EXPLAIN: Different primary questions and controls.
+```
 
 ---
 
-## Back to the Path
+## Mixed Challenge Round {#quiz-mixed}
 
-[What Is a Network?](#what-is-networking) → [OSI](#osi-model) → [L1](#physical-layer) → [L2](#data-link-layer) → [L3](#network-layer) → [L4](#transport-layer) → [L7](#application-layer) → [Topologies](#topologies) → [Wireless](#wireless-networking) → [Security](#network-security) → [DLP/IDPS](#dlp-idps) → [Protocols](#protocols-reference) → [Modern](#modern-networking)
+```quiz
+QUESTION: User on Wi-Fi cannot resolve names but ping to 8.8.8.8 works. First suspect:
+OPTIONS:
+Physical cable category exclusively
+DNS problem (or portal/DNS policy)
+STP root ID math only
+Absence of Ethernet FCS forever
+ANSWER: 1
+EXPLAIN: IP works; name resolution path is broken.
+```
+
+```quiz
+QUESTION: Two PCs share a switch, same IP subnet config, cannot ARP each other. Likely:
+OPTIONS:
+Different VLANs / L2 isolation
+The sunspot cycle alone
+Mandatory WireGuard
+Disabled physics
+ANSWER: 0
+EXPLAIN: Logical L2 separation can isolate same-subnet attempts.
+```
+
+```quiz
+QUESTION: Browser shows certificate warning on bank site on open Wi-Fi. Security concern:
+OPTIONS:
+Possibly MitM / captive portal / untrusted cert — stop and verify
+Ignore always and send passwords
+Disable all TLS forever
+Replace TCP with STP
+ANSWER: 0
+EXPLAIN: Certificate failures are a trust warning — especially on hostile networks.
+```
+
+```quiz
+QUESTION: Sudden 40 GB night flow from HR PC to rare IP. Best dual track:
+OPTIONS:
+Ignore it
+Investigate DLP exfil possibility + IDPS/malware C2 possibility with evidence
+Delete CIA definitions
+Only repaint the rack
+ANSWER: 1
+EXPLAIN: Volume anomalies can be leak or malware — gather evidence either way.
+```
+
+---
+
+## Score Guide {#score-guide}
+
+Count every quiz in this chapter. **90%+** hub-ready · **75–89%** redo weak sections · **60–74%** rebuild from OSI + one infra chapter/day · **below 60%** restart [What Is Networking](#what-is-networking) → [OSI](#osi-model) → L1–L4.
+
+| Missed theme | Reopen |
+|--------------|--------|
+| Layers / encapsulation | [OSI](#osi-model), L1–L4 |
+| ARP/DNS/DHCP/TCP/TLS | [Protocols Reference](#protocols-reference) |
+| Star/mesh/VLAN | [Topologies](#topologies), [Data Link](#data-link-layer) |
+| SSID/WPA/RF | [Wireless](#wireless-networking) |
+| CIA/MitM/firewall/VPN | [Network Security](#network-security) |
+| VPC/CNI/overlay | [Modern Networking](#modern-networking) |
+| DLP vs IPS | [DLP & IDPS](#dlp-idps) |
+
+```mermaid
+flowchart LR
+  Miss[Missed theme] --> Chapter[Linked chapter] --> Retake[Retake section]
+```
+
+---
+
+## What “Done” Looks Like
+
+Without notes: web fetch (DNS/TCP/TLS/HTTP); MAC vs IP vs port; VLANs vs cables; open Wi‑Fi risk; CIA examples; IDS vs IPS vs DLP; why cloud still needs IP/DNS/TLS debugging.
+
+---
+
+## Hub Path (start → finish)
+
+[What Is a Network?](#what-is-networking) → [OSI](#osi-model) → [Physical](#physical-layer) → [Data Link](#data-link-layer) → [Network](#network-layer) → [Transport](#transport-layer) → [Application](#application-layer) → [Topologies](#topologies) → [Wireless](#wireless-networking) → [Security](#network-security) → [DLP/IDPS](#dlp-idps) → [Protocols](#protocols-reference) → [Modern](#modern-networking) → **You are here.**

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Learn Networking — pktana</title>
+  <title>Networking Learning Hub — pktana</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -154,7 +154,27 @@
     .docs-main::-webkit-scrollbar-track { background: transparent; }
     .docs-main::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.35); border-radius: 6px; }
 
-    .docs-content { max-width: 860px; width: 100%; margin: 0 auto; padding: 40px 48px 80px; flex: 1; }
+    .docs-content { max-width: 920px; width: 100%; margin: 0 auto; padding: 40px 48px 80px; flex: 1; }
+    .hub-banner {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      margin: 0 0 22px; padding: 12px 14px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(234,88,12,0.10), rgba(14,165,233,0.08));
+      border: 1px solid rgba(234,88,12,0.18);
+      font-size: 0.88rem; font-weight: 600; color: var(--dark);
+    }
+    .hub-banner span { color: var(--muted); font-weight: 500; }
+    .on-this-page {
+      margin: 0 0 28px; padding: 14px 16px; border-radius: 12px;
+      background: #fff; border: 1px solid var(--line); box-shadow: var(--shadow-sm);
+    }
+    .on-this-page strong {
+      display: block; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 8px;
+    }
+    .on-this-page ol { margin: 0 0 0 18px; padding: 0; }
+    .on-this-page li { margin: 4px 0; font-size: 0.9rem; }
+    .on-this-page a { text-decoration: none; font-weight: 600; color: var(--primary-dark); }
+    .on-this-page a:hover { text-decoration: underline; }
 
     /* ── Breadcrumb ──────────────────────────────────────────── */
     .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: var(--muted); margin-bottom: 24px; font-weight: 600; }
@@ -326,7 +346,7 @@
       <span>pktana</span>
     </a>
 
-    <span class="topbar-title">/ <span>Learn Networking</span></span>
+    <span class="topbar-title">/ <span>Networking Learning Hub</span></span>
 
     <div class="search-wrap">
       <input type="text" class="search-input" id="searchInput" placeholder="Search topics…" autocomplete="off" />
@@ -361,7 +381,7 @@
         <span class="nav-icon">📐</span> The OSI Model
       </button>
 
-      <div class="sidebar-section-label" style="margin-top:12px;">OSI Layers</div>
+      <div class="sidebar-section-label" style="margin-top:12px;">OSI Layers (deep)</div>
       <button class="docs-nav-item" data-page="physical-layer">
         <span class="nav-icon">🔌</span> Layer 1 — Physical
       </button>
@@ -375,10 +395,10 @@
         <span class="nav-icon">🚚</span> Layer 4 — Transport
       </button>
       <button class="docs-nav-item" data-page="application-layer">
-        <span class="nav-icon">💻</span> Layer 7 — Application
+        <span class="nav-icon">💻</span> Layers 5–7 — Application
       </button>
 
-      <div class="sidebar-section-label" style="margin-top:12px;">Infrastructure</div>
+      <div class="sidebar-section-label" style="margin-top:12px;">Infrastructure &amp; Security</div>
       <button class="docs-nav-item" data-page="topologies">
         <span class="nav-icon">🏗️</span> Network Topologies
       </button>
@@ -392,15 +412,15 @@
         <span class="nav-icon">🛡️</span> DLP &amp; IDPS
       </button>
 
-      <div class="sidebar-section-label" style="margin-top:12px;">Reference</div>
+      <div class="sidebar-section-label" style="margin-top:12px;">Encyclopedia &amp; Mastery</div>
       <button class="docs-nav-item" data-page="protocols-reference">
-        <span class="nav-icon">📋</span> Protocols Reference
+        <span class="nav-icon">📚</span> Protocols Encyclopedia
       </button>
       <button class="docs-nav-item" data-page="modern-networking">
         <span class="nav-icon">🚀</span> Modern Networking
       </button>
       <button class="docs-nav-item" data-page="knowledge-check">
-        <span class="nav-icon">✅</span> Knowledge Check
+        <span class="nav-icon">✅</span> Final Knowledge Check
       </button>
     </nav>
 
@@ -411,7 +431,7 @@
             <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
           </svg>
           <p>Select a topic from the sidebar</p>
-          <small>Learn networking from the ground up — Layer 1 to modern cloud</small>
+          <small>pktana Learn Hub — detailed networking from Layer 1 to DLP/IDPS, with diagrams, protocols, and quizzes</small>
         </div>
       </div>
     </main>
@@ -425,14 +445,14 @@
       'data-link-layer':     { file: '04-data-link-layer.md',     title: 'Layer 2 — Data Link',    section: 'OSI Layers' },
       'network-layer':       { file: '05-network-layer.md',       title: 'Layer 3 — Network',      section: 'OSI Layers' },
       'transport-layer':     { file: '06-transport-layer.md',     title: 'Layer 4 — Transport',    section: 'OSI Layers' },
-      'application-layer':   { file: '07-application-layer.md',   title: 'Layer 7 — Application',  section: 'OSI Layers' },
-      'topologies':          { file: '08-topologies.md',          title: 'Network Topologies',     section: 'Infrastructure' },
-      'wireless-networking': { file: '09-wireless-networking.md', title: 'Wireless Networking',    section: 'Infrastructure' },
-      'network-security':    { file: '10-network-security.md',    title: 'Network Security',       section: 'Infrastructure' },
-      'dlp-idps':            { file: '13-dlp-idps.md',            title: 'DLP & IDPS',             section: 'Infrastructure' },
-      'protocols-reference': { file: '11-protocols-reference.md', title: 'Protocols Reference',    section: 'Reference' },
-      'modern-networking':   { file: '12-modern-networking.md',   title: 'Modern Networking',      section: 'Reference' },
-      'knowledge-check':     { file: '14-knowledge-check.md',     title: 'Knowledge Check',        section: 'Reference' },
+      'application-layer':   { file: '07-application-layer.md',   title: 'Layers 5–7 — Application', section: 'OSI Layers' },
+      'topologies':          { file: '08-topologies.md',          title: 'Network Topologies',     section: 'Infrastructure & Security' },
+      'wireless-networking': { file: '09-wireless-networking.md', title: 'Wireless Networking',    section: 'Infrastructure & Security' },
+      'network-security':    { file: '10-network-security.md',    title: 'Network Security',       section: 'Infrastructure & Security' },
+      'dlp-idps':            { file: '13-dlp-idps.md',            title: 'DLP & IDPS',             section: 'Infrastructure & Security' },
+      'protocols-reference': { file: '11-protocols-reference.md', title: 'Protocols Encyclopedia',   section: 'Encyclopedia & Mastery' },
+      'modern-networking':   { file: '12-modern-networking.md',   title: 'Modern Networking',      section: 'Encyclopedia & Mastery' },
+      'knowledge-check':     { file: '14-knowledge-check.md',     title: 'Final Knowledge Check',   section: 'Encyclopedia & Mastery' },
     };
 
     var cache = {};
@@ -509,13 +529,17 @@
 
     function renderPage(id, md, anchor) {
       var page = PAGES[id];
+      var body = markdownToHtml(md);
+      var toc = buildToc(body);
       var html = '<div class="breadcrumb">'
                + '<span>pktana</span><span class="sep">›</span>'
-               + '<span>Learn Networking</span><span class="sep">›</span>'
+               + '<span>Learn Hub</span><span class="sep">›</span>'
                + '<span>' + esc(page.section) + '</span><span class="sep">›</span>'
                + '<span class="current">' + esc(page.title) + '</span>'
                + '</div>'
-               + '<div class="md">' + markdownToHtml(md) + '</div>';
+               + '<div class="hub-banner">Networking Learning Hub <span>— detailed lessons, protocol encyclopedia, flow diagrams, and knowledge checks</span></div>'
+               + toc
+               + '<div class="md">' + body + '</div>';
       content.innerHTML = html;
       wireQuizzes(content);
       wireDocLinks(content);
@@ -527,6 +551,18 @@
       scrollToAnchor(anchor);
     }
 
+    function buildToc(html) {
+      var div = document.createElement('div');
+      div.innerHTML = html;
+      var heads = div.querySelectorAll('h2[id]');
+      if (heads.length < 3) return '';
+      var items = [];
+      heads.forEach(function (h) {
+        items.push('<li><a class="doc-link" href="#' + h.id + '">' + h.textContent + '</a></li>');
+      });
+      return '<nav class="on-this-page"><strong>On this page</strong><ol>' + items.join('') + '</ol></nav>';
+    }
+
     function wireDocLinks(root) {
       root.querySelectorAll('a.doc-link').forEach(function (a) {
         a.addEventListener('click', function (e) {
@@ -534,8 +570,22 @@
           var href = (a.getAttribute('href') || '').replace(/^#/, '');
           if (!href) return;
           var slash = href.indexOf('/');
-          var pageId = slash === -1 ? href : href.slice(0, slash);
-          var anch = slash === -1 ? '' : href.slice(slash + 1);
+          if (slash === -1) {
+            // Prefer an in-page heading if present (encyclopedia section ids
+            // can share names with hub pages, e.g. transport-layer).
+            if (document.getElementById(href)) {
+              scrollToAnchor(href);
+              return;
+            }
+            if (PAGES[href]) {
+              loadPage(href);
+              return;
+            }
+            scrollToAnchor(href);
+            return;
+          }
+          var pageId = href.slice(0, slash);
+          var anch = href.slice(slash + 1);
           if (PAGES[pageId]) {
             loadPage(pageId, anch || undefined);
             return;
