@@ -2699,10 +2699,24 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
 
         /* ── kv-lists (hardware overrides below) ── */
         #hardware .hw-scroll { flex:1; min-height:0; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:10px; }
-        #hardware .hw-top-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; align-items:start; }
-        #hardware .hw-ethtool-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0 24px; margin-top:4px; }
+        #hardware .hw-top-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; align-items:stretch; }
+        #hardware .hw-top-grid > .card {
+            height:100%;
+            min-height:0;
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+        }
+        #hardware .hw-top-grid > .card .kv-list {
+            flex:1;
+            min-height:0;
+            overflow-y:auto;
+        }
+        #hardware .hw-ethtool-card { min-height:140px; display:flex; flex-direction:column; }
+        #hardware .hw-ethtool-card .hw-ethtool-grid { flex:1; min-height:0; }
+        #hardware .hw-ethtool-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 24px; margin-top:4px; align-content:start; }
         #hardware .card { padding:10px 13px; }
-        #hardware .card-title { font-size:10px; padding-bottom:6px; margin-bottom:8px; }
+        #hardware .card-title { font-size:10px; padding-bottom:6px; margin-bottom:8px; flex-shrink:0; }
         #hardware .kv-list { gap:0; font-size:12px; }
         #hardware .kv-item { padding:3px 0; }
         #hardware .kv-item strong { font-size:11px; min-width:110px; }
@@ -2710,7 +2724,7 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
         #hardware .hw-section { margin:8px 0 3px; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); font-weight:700; border-top:1px solid var(--border); padding-top:5px; }
         #hardware .hw-section:first-child { border-top:none; margin-top:0; padding-top:0; }
         #hardware .hw-feat { font-size:11px; line-height:1.7; color:var(--text-muted); word-break:break-word; padding:1px 0; font-family:'Consolas','Courier New',monospace; }
-        @media (max-width:900px) { #hardware .hw-top-grid { grid-template-columns:1fr 1fr; } #hardware .hw-ethtool-grid { grid-template-columns:1fr 1fr; } }
+        @media (max-width:900px) { #hardware .hw-top-grid { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } #hardware .hw-ethtool-grid { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
         @media (max-width:600px) { #hardware .hw-top-grid { grid-template-columns:1fr; } #hardware .hw-ethtool-grid { grid-template-columns:1fr; } }
 
         /* ── Settings table ── */
@@ -3139,7 +3153,7 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
                 const sessions = await res.json();
                 const list = document.getElementById('sessionsList');
                 const badge = document.getElementById('sessionCountBadge');
-                const activeCount = (sessions || []).filter(s => s.status === 'Active').length;
+                const activeCount = (sessions || []).filter(s => String(s.status || '').toLowerCase() === 'active').length;
                 if (badge) {
                     badge.textContent = `${(sessions || []).length} session${sessions.length !== 1 ? 's' : ''}${activeCount ? ` · ${activeCount} live` : ''}`;
                     badge.classList.toggle('live', activeCount > 0);
@@ -3156,12 +3170,16 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
                 const fmtBytes = (b) => { if (b < 1024) return b + ' B'; if (b < 1048576) return (b/1024).toFixed(1) + ' KB'; return (b/1048576).toFixed(1) + ' MB'; };
                 let html = '<table class="settings-table"><thead><tr><th>Session ID</th><th>Interface</th><th>Status</th><th>Packets</th><th>Bytes</th><th>Actions</th></tr></thead><tbody>';
                 sessions.forEach(s => {
-                    const isActive = s.status === 'Active';
+                    const st = String(s.status || '').toLowerCase();
+                    const isActive = st === 'active';
+                    const isPaused = st === 'paused';
                     const statusBadge = isActive
                         ? '<span class="badge badge-success">Active</span>'
+                        : isPaused
+                        ? '<span class="badge badge-warning">Paused</span>'
                         : '<span class="badge badge-danger">Stopped</span>';
                     const viewBtn = `<button class="primary-btn" style="padding:4px 12px;font-size:11px;" onclick="viewSession('${s.id}', '${s.interface}')">View</button>`;
-                    const stopBtn = isActive ? `<button class="btn" style="padding:4px 12px;font-size:11px;" onclick="stopSession('${s.id}')">Stop</button>` : '';
+                    const stopBtn = isActive || isPaused ? `<button class="btn" style="padding:4px 12px;font-size:11px;" onclick="stopSession('${s.id}')">Stop</button>` : '';
                     const deleteBtn = `<button class="btn" style="padding:4px 12px;font-size:11px;background:rgba(220,38,38,0.15);color:#fca5a5;border-color:rgba(220,38,38,0.3);" onclick="deleteSession('${s.id}')">Delete</button>`;
                     html += `<tr>
                         <td><span class="session-id">${s.id}</span></td>
@@ -4740,7 +4758,7 @@ Use capture, PCAP analysis, DPI, DLP, and IDPS from the Web UI instead.\r\n";
                     <div class="card"><div class="card-title">XDP Dispatchers <span id="hwDispCount" style="font-weight:normal;color:var(--text-muted);"></span></div><div class="kv-list" id="hwDispatchers" style="max-height:180px;overflow:auto;">—</div></div>
                     <div class="card"><div class="card-title">Network Namespace</div><div class="kv-list" id="hwNetNs">—</div></div>
                 </div>
-                <div class="card">
+                <div class="card hw-ethtool-card">
                     <div class="card-title">Ethtool Report</div>
                     <div id="ethtoolDetail" class="hw-ethtool-grid">Select an interface above.</div>
                 </div>
