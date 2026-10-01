@@ -137,6 +137,27 @@ pub fn scan_builtin(payload: &str) -> Vec<IdentifierMatch> {
             "Google OAuth/service account token detected",
         ));
     }
+    if looks_like_openai_key(payload) {
+        out.push(id_match(
+            "dlp_ai_api_key",
+            "credentials",
+            "OpenAI API key detected in payload",
+        ));
+    }
+    if looks_like_anthropic_key(payload) {
+        out.push(id_match(
+            "dlp_ai_api_key",
+            "credentials",
+            "Anthropic API key detected in payload",
+        ));
+    }
+    if looks_like_huggingface_token(payload) {
+        out.push(id_match(
+            "dlp_ai_api_key",
+            "credentials",
+            "HuggingFace token detected in payload",
+        ));
+    }
     out
 }
 
@@ -381,4 +402,22 @@ fn looks_like_google_token(s: &str) -> bool {
     regex_match(s, r"\bya29\.[A-Za-z0-9_\-]{60,}\b")
         || regex_match(s, r#""type"\s*:\s*"service_account""#)
         || s.contains("AIza") // Google API keys
+}
+
+fn looks_like_openai_key(s: &str) -> bool {
+    // New project key format: sk-proj-<base62, 40+ chars>
+    if regex_match(s, r"\bsk-proj-[A-Za-z0-9_\-]{40,}\b") {
+        return true;
+    }
+    // Legacy format: sk-<48 alphanumeric chars>
+    regex_match(s, r"\bsk-[A-Za-z0-9]{48}\b")
+}
+
+fn looks_like_anthropic_key(s: &str) -> bool {
+    regex_match(s, r"\bsk-ant-api03-[A-Za-z0-9_\-]{40,}\b")
+}
+
+fn looks_like_huggingface_token(s: &str) -> bool {
+    // HuggingFace user access tokens: hf_<37 alphanumeric>
+    regex_match(s, r"\bhf_[A-Za-z0-9]{30,}\b")
 }

@@ -22,7 +22,7 @@ use pktana_core::{
     list_connections, list_network_namespaces, list_nics, list_routes, list_xdp_dispatchers,
     routes_for_iface, sample_packets, scan_bpf_fs, stp_state_label, summarize_ebpf_host,
     CaptureConfig, CaptureError, IssueSeverity, LinuxCaptureEngine, NicInfo, ParseError,
-    ParsedPacket,
+    ParsedPacket, TcpSessionTable, TcpState,
 };
 
 // ─── error type ─────────────────────────────────────────────────────────────
@@ -132,6 +132,9 @@ fn run() -> Result<(), CliError> {
 
         // ── pcap file analysis ────────────────────────────────────────────────
         "pcap" | "pkt" => run_pcap_file(&args[2..]),
+
+        // ── TCP session reassembly and state tracking ─────────────────────────
+        "sessions" | "session" | "sess" => run_sessions(&args[2..]),
 
         // ── offline decode ────────────────────────────────────────────────────
         "demo" => run_demo(),
@@ -1031,6 +1034,166 @@ fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
             );
         }
     }
+    Ok(())
+}
+
+// ─── TCP session reassembly & state tracking ──────────────────────────────────
+
+fn run_sessions(args: &[String]) -> Result<(), CliError> {
+    let path =
+        match args.first() {
+            Some(p) => p.as_str(),
+            None => return Err(CliError::Usage(
+                "usage: pktana sessions <FILE.pcap>\n       pktana sessions <INTERFACE> [count]"
+                    .into(),
+            )),
+        };
+
+    let is_file = is_pcap_path(path);
+
+    println!(
+        "TCP Session Tracker  |  source: {}",
+        if is_file { path } else { "live capture" }
+    );
+    println!();
+
+    let mut table = TcpSessionTable::new(2000);
+
+    if is_file {
+        let _stats = LinuxCaptureEngine::read_pcap_file(path, |pkt| {
+            let timestamp_us = pkt.timestamp_sec as u64 * 1_000_000 + pkt.timestamp_usec as u64;
+            let dp = inspect(&pkt.data);
+            table.process(&dp, timestamp_us);
+            true // continue
+        })?;
+    } else {
+        // Live capture
+        let count: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(500);
+
+        let cfg = CaptureConfig {
+            interface: path.to_string(),
+            max_packets: count,
+            promiscuous: true,
+            snapshot_len: 65535,
+            filter: Some("tcp".to_string()),
+            pcap_export: None,
+        };
+        let (pkts, _stats) = LinuxCaptureEngine::capture(&cfg)?;
+        for pkt in &pkts {
+            let timestamp_us = pkt.timestamp_sec as u64 * 1_000_000 + pkt.timestamp_usec as u64;
+            let dp = inspect(&pkt.data);
+            table.process(&dp, timestamp_us);
+        }
+    }
+
+    // ── Print session table ───────────────────────────────────────────────────
+    let sep = "─".repeat(120);
+    println!(
+        "\x1b[1;36m{:<48}  {:<12}  {:>8}  {:>8}  {:>7}  {:>6}  {:>6}  {:>8}\x1b[0m",
+        "Session (client <-> server)",
+        "State",
+        "C→S bytes",
+        "S→C bytes",
+        "Packets",
+        "Retx",
+        "OOO",
+        "RTT"
+    );
+    println!("\x1b[1;36m{sep}\x1b[0m");
+
+    let mut all: Vec<_> = table.all_sessions().collect();
+    // Sort: established first, then by bytes descending
+    all.sort_by(|a, b| {
+        let a_pri = if matches!(a.state, TcpState::Established) {
+            0
+        } else {
+            1
+        };
+        let b_pri = if matches!(b.state, TcpState::Established) {
+            0
+        } else {
+            1
+        };
+        a_pri
+            .cmp(&b_pri)
+            .then(b.total_bytes().cmp(&a.total_bytes()))
+    });
+
+    for sess in &all {
+        let state_color = match sess.state {
+            TcpState::Established => "\x1b[32m",
+            TcpState::Reset => "\x1b[1;31m",
+            TcpState::TimeWait | TcpState::Closed => "\x1b[90m",
+            TcpState::SynSent | TcpState::SynReceived => "\x1b[33m",
+            TcpState::MidStream => "\x1b[36m",
+            _ => "\x1b[90m",
+        };
+
+        let rtt_str = match sess.handshake_rtt_us {
+            Some(rtt) if rtt >= 1_000_000 => format!("{:.1}s", rtt as f64 / 1_000_000.0),
+            Some(rtt) if rtt >= 1_000 => format!("{:.2}ms", rtt as f64 / 1_000.0),
+            Some(rtt) => format!("{rtt}µs"),
+            None => "—".to_string(),
+        };
+
+        let session_str = format!(
+            "{}:{} <-> {}:{}",
+            sess.client_ip, sess.client_port, sess.server_ip, sess.server_port
+        );
+
+        println!(
+            "{:<48}  {state_color}{:<12}\x1b[0m  {:>9}  {:>9}  {:>7}  {:>6}  {:>6}  {:>8}",
+            session_str,
+            sess.state.to_string(),
+            format_bytes(sess.client_to_server.bytes_reassembled),
+            format_bytes(sess.server_to_client.bytes_reassembled),
+            sess.packets_seen,
+            sess.total_retransmits(),
+            sess.total_ooo(),
+            rtt_str,
+        );
+    }
+
+    // ── Summary ───────────────────────────────────────────────────────────────
+    let summary = table.summary();
+    println!();
+    println!("\x1b[1mSummary\x1b[0m");
+    println!("  Total sessions  : {}", summary.total_seen);
+    println!(
+        "  Active          : {}  (ESTABLISHED: {}  Handshake: {})",
+        summary.active, summary.state_established, summary.state_handshake
+    );
+    println!(
+        "  Completed       : {}  (Closed: {}  Reset: {})",
+        summary.completed, summary.state_closed, summary.state_reset
+    );
+    println!("  Total packets   : {}", summary.total_packets);
+    println!(
+        "  Total data      : {}  (c→s: {}  s→c: {})",
+        format_bytes(summary.total_bytes),
+        format_bytes(
+            table
+                .all_sessions()
+                .map(|s| s.client_to_server.bytes_reassembled)
+                .sum()
+        ),
+        format_bytes(
+            table
+                .all_sessions()
+                .map(|s| s.server_to_client.bytes_reassembled)
+                .sum()
+        ),
+    );
+    println!("  Retransmits     : {}", summary.total_retransmits);
+    println!("  Out-of-order    : {}", summary.total_ooo);
+    println!("  Stream gaps     : {}", summary.total_gaps);
+    if let Some(avg_rtt) = summary.avg_rtt_ms() {
+        println!(
+            "  Avg RTT         : {avg_rtt:.3}ms  ({} samples)",
+            summary.rtt_samples
+        );
+    }
+
     Ok(())
 }
 

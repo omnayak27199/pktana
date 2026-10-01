@@ -1,10 +1,12 @@
 // Copyright 2026 Omprakash (omnayak27199@gmail.com)
 // SPDX-License-Identifier: Apache-2.0
 
+mod ai;
 mod ftp;
 mod http;
 mod smtp;
 
+pub use ai::scan_ai_traffic;
 pub use ftp::scan_ftp;
 pub use http::scan_http;
 pub use smtp::scan_smtp;
@@ -28,6 +30,13 @@ pub fn protocol_alerts(
             "Telnet cleartext remote access",
             "Legacy insecure remote shell — data visible on wire",
         )),
+        _ => {}
+    }
+    // AI/LLM traffic detection: TLS (via SNI in app_detail) and cleartext HTTP/HTTP2
+    match app_proto {
+        Some("TLS/SSL") | Some("HTTP") | Some("HTTP/2") | Some("gRPC") | Some("QUIC/HTTP3") => {
+            alerts.extend(scan_ai_traffic(ctx, payload));
+        }
         _ => {}
     }
     alerts

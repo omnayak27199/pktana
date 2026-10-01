@@ -1,0 +1,70 @@
+{
+  "name": "pktana-packet-tracer",
+  "version": "0.2.0",
+  "description": "Cisco Packet Tracer-style network learning lab for Windows and macOS",
+  "author": "Omprakash <omnayak27199@gmail.com>",
+  "license": "Apache-2.0",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "build": {
+    "appId": "online.pktana.packet-tracer",
+    "productName": "pktana Packet Tracer",
+    "copyright": "Copyright © 2026 Omprakash",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "index.html",
+      "VERSION",
+      "css/**/*",
+      "js/**/*",
+      "electron/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "pktana-packet-tracer-${version}-mac.${ext}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "pktana-packet-tracer-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "pktana Packet Tracer"
+    },
+    "dmg": {
+      "title": "pktana Packet Tracer ${version}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  }
+}

@@ -19,6 +19,7 @@ pub mod path_diag;
 pub mod process;
 pub mod routes;
 pub mod security;
+pub mod tcp_session;
 
 pub use assurance::{
     capture_host_snapshots, capture_snapshot, check_drift, default_baseline_dir, diff_snapshots,
@@ -69,4 +70,8 @@ pub use security::{
     security_stats, set_security_config, AlertSeverity, DlpCustomIdentifier,
     InterfaceSecurityStats, PacketSecurityResult, SecurityAction, SecurityAlert, SecurityConfig,
     SecurityEngine, SecurityFlow, SecurityPolicyRule, SecurityRuleDef, SecurityStats,
+};
+pub use tcp_session::{
+    TcpSession, TcpSessionEvent, TcpSessionKey, TcpSessionSummary, TcpSessionTable, TcpState,
+    TcpStreamBuffer,
 };

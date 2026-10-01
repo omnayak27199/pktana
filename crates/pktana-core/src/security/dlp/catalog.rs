@@ -168,6 +168,36 @@ pub fn dlp_rule_catalog() -> Vec<SecurityRuleDef> {
             "critical",
             "credentials",
         ),
+        rule(
+            "dlp_ai_api_key",
+            "AI provider API key in network traffic",
+            "critical",
+            "credentials",
+        ),
+        rule(
+            "dlp_shadow_ai",
+            "Unauthorized/unmonitored AI service usage",
+            "medium",
+            "shadow_ai",
+        ),
+        rule(
+            "dlp_ai_endpoint",
+            "AI API endpoint call in cleartext traffic",
+            "high",
+            "shadow_ai",
+        ),
+        rule(
+            "dlp_ai_stream",
+            "AI streaming (SSE) response detected",
+            "low",
+            "shadow_ai",
+        ),
+        rule(
+            "dlp_ai_model",
+            "AI model name in cleartext request payload",
+            "low",
+            "shadow_ai",
+        ),
     ]
 }
 
