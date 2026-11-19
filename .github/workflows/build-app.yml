@@ -1,0 +1,184 @@
+name: Build Packet Tracer App
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (default: reads packet-tracer/VERSION)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+# ── Build jobs run in parallel ──────────────────────────────────────────────
+
+jobs:
+  build-windows:
+    name: Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packet-tracer/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packet-tracer
+        run: npm ci
+
+      - name: Build Windows installer
+        working-directory: packet-tracer
+        env:
+          WIN_CSC_LINK: ''
+          WIN_CSC_KEY_PASSWORD: ''
+        run: npm run dist:win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-installer
+          path: packet-tracer/dist/pktana-packet-tracer-setup.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS (.dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packet-tracer/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packet-tracer
+        run: npm ci
+
+      - name: Build macOS DMG
+        working-directory: packet-tracer
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-dmg
+          path: packet-tracer/dist/pktana-packet-tracer.dmg
+          if-no-files-found: error
+
+  build-linux:
+    name: Linux (.rpm + .AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packet-tracer/package-lock.json
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y rpm fakeroot libarchive-tools
+
+      - name: Install dependencies
+        working-directory: packet-tracer
+        run: npm ci
+
+      - name: Build Linux packages
+        working-directory: packet-tracer
+        run: npm run dist:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            packet-tracer/dist/*.rpm
+            packet-tracer/dist/*.AppImage
+          if-no-files-found: error
+
+# ── Release job: runs after all three builds succeed ────────────────────────
+
+  release:
+    name: Create Release & Update Website
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with push access)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(cat packet-tracer/VERSION)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Show artifact tree
+        run: find release-artifacts/ -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pt-v${{ steps.ver.outputs.version }}
+          name: pktana Packet Tracer v${{ steps.ver.outputs.version }}
+          body: |
+            ## pktana Packet Tracer v${{ steps.ver.outputs.version }}
+
+            Cross-platform network learning lab — drag-and-drop topology builder,
+            IOS-style router CLI, ping simulation, and step-by-step OSI layer walkthroughs.
+
+            | Platform | File | Notes |
+            |---|---|---|
+            | Windows 10 / 11 | `pktana-packet-tracer-setup.exe` | NSIS installer |
+            | macOS (Apple Silicon + Intel) | `pktana-packet-tracer.dmg` | Unsigned — right-click → Open on first launch |
+            | Linux portable | `pktana-packet-tracer.AppImage` | `chmod +x` then run |
+            | Linux RPM | `pktana-packet-tracer.rpm` | RHEL / Rocky / Alma / Fedora |
+
+            > **macOS / Windows note:** these builds are unsigned.
+            > macOS: right-click the app → Open to bypass Gatekeeper.
+            > Windows: click "More info → Run anyway" if SmartScreen appears.
+          files: release-artifacts/**/*
+          fail_on_unmatched_files: false
+          make_latest: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Packet Tracer version in website
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Update every <span class="pt-ver">X.Y.Z</span> in index.html
+          sed -i "s|class=\"pt-ver\">[^<]*</span>|class=\"pt-ver\">${VERSION}</span>|g" index.html
+          echo "Set pt-ver → ${VERSION}"
+
+      - name: Commit and push updated index.html
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet index.html; then
+            echo "index.html unchanged — nothing to commit"
+          else
+            git add index.html
+            git commit -m "chore: update Packet Tracer download version → pt-v${{ steps.ver.outputs.version }}"
+            git pull --rebase origin main
+            git push origin main
+          fi
