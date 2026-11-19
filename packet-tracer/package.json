@@ -4,6 +4,7 @@
   "description": "Cisco Packet Tracer-style network learning lab for Windows, macOS, and Linux",
   "author": "Omprakash <omnayak27199@gmail.com>",
   "license": "Apache-2.0",
+  "homepage": "https://pktana.online",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
