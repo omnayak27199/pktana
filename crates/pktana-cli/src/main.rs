@@ -571,17 +571,29 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
 
     // Check for flow analysis flag and --format
     let flow_analyze = args.iter().any(|a| a == "--flow-analyze" || a == "-a");
-    let format_arg = args.windows(2)
+    let format_arg = args
+        .windows(2)
         .find(|w| w[0] == "--format")
         .map(|w| w[1].to_lowercase());
     let args: Vec<String> = {
         let mut skip = false;
-        args.iter().filter(|a| {
-            if skip { skip = false; return false; }
-            if **a == "--flow-analyze" || **a == "-a" { return false; }
-            if **a == "--format" { skip = true; return false; }
-            true
-        }).cloned().collect()
+        args.iter()
+            .filter(|a| {
+                if skip {
+                    skip = false;
+                    return false;
+                }
+                if **a == "--flow-analyze" || **a == "-a" {
+                    return false;
+                }
+                if **a == "--format" {
+                    skip = true;
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect()
     };
     if let Some(ref fmt) = format_arg {
         if fmt == "json" || fmt == "csv" {
@@ -931,17 +943,20 @@ fn run_record(args: &[String]) -> Result<(), CliError> {
 // ─── pcap file analysis ────────────────────────────────────────────────────────
 
 fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
-    let path =
-        match args.first() {
-            Some(p) => p.as_str(),
-            None => return Err(CliError::Usage(
-                "usage: pktana pcap <FILE.pcap> [--format json|csv]\n       (also: pktana <FILE.pcap>)"
-                    .into(),
-            )),
-        };
+    let path = match args.first() {
+        Some(p) => p.as_str(),
+        None => return Err(CliError::Usage(
+            "usage: pktana pcap <FILE.pcap> [--format json|csv]\n       (also: pktana <FILE.pcap>)"
+                .into(),
+        )),
+    };
 
     // Handle --format flag: delegate to export_pcap
-    if let Some(fmt) = args.windows(2).find(|w| w[0] == "--format").map(|w| w[1].to_lowercase()) {
+    if let Some(fmt) = args
+        .windows(2)
+        .find(|w| w[0] == "--format")
+        .map(|w| w[1].to_lowercase())
+    {
         if fmt == "json" || fmt == "csv" {
             return export_pcap(path, &fmt, &[]);
         }
@@ -2287,9 +2302,7 @@ fn print_usage() {
     println!("{C}EXPORT / STRUCTURED OUTPUT{R}");
     println!("  {G}pktana export{R} {Y}<IFACE> --format json{R}   Live capture → NDJSON stream");
     println!("  {G}pktana export{R} {Y}<FILE.pcap> --format csv{R} Pcap file → CSV");
-    println!(
-        "  {G}pktana capture{R} {Y}... --format json{R}      Capture with structured output"
-    );
+    println!("  {G}pktana capture{R} {Y}... --format json{R}      Capture with structured output");
     println!("  {G}pktana pcap{R} {Y}... --format csv{R}          Pcap analysis as CSV");
     println!();
 
@@ -4771,10 +4784,13 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
 //  usage: pktana diagnose [IFACE] [--json]
 
 fn run_diagnose(args: &[String]) -> Result<(), CliError> {
-    use pktana_core::{get_ethtool_report, get_nic_info, list_routes, list_connections};
+    use pktana_core::{get_ethtool_report, get_nic_info, list_connections, list_routes};
 
     let json_out = args.iter().any(|a| a == "--json" || a == "-j");
-    let iface_filter: Option<&str> = args.iter().find(|a| !a.starts_with('-')).map(|s| s.as_str());
+    let iface_filter: Option<&str> = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .map(|s| s.as_str());
 
     // ── collect interfaces to check ───────────────────────────────────────────
     let all_nics = list_nics()
@@ -4792,13 +4808,19 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
     // ── global context ────────────────────────────────────────────────────────
     let routes = list_routes();
     let connections = list_connections();
-    let established = connections.iter().filter(|c| c.state == "ESTABLISHED").count();
-    let listeners   = connections.iter().filter(|c| c.state == "LISTEN").count();
-    let default_via = routes.iter().find(|r| r.is_default)
-        .map(|r| {
-            let gw = if r.gateway.is_empty() { "?" } else { &r.gateway };
-            format!("{gw} ({})", r.interface)
-        });
+    let established = connections
+        .iter()
+        .filter(|c| c.state == "ESTABLISHED")
+        .count();
+    let listeners = connections.iter().filter(|c| c.state == "LISTEN").count();
+    let default_via = routes.iter().find(|r| r.is_default).map(|r| {
+        let gw = if r.gateway.is_empty() {
+            "?"
+        } else {
+            &r.gateway
+        };
+        format!("{gw} ({})", r.interface)
+    });
 
     // DNS resolver from /etc/resolv.conf
     let dns_servers: Vec<String> = std::fs::read_to_string("/etc/resolv.conf")
@@ -4828,21 +4850,28 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
                 } else {
                     nic.ip_addresses.join(", ")
                 };
-                checks.push((up, "crit",
-                    format!("Interface {}  {}  MTU={}  {}  {}",
+                checks.push((
+                    up,
+                    "crit",
+                    format!(
+                        "Interface {}  {}  MTU={}  {}  {}",
                         if up { "UP · carrier" } else { "DOWN" },
                         addr_str,
                         nic.mtu,
                         nic.speed_label(),
                         nic.duplex.as_deref().unwrap_or("?")
-                    )
+                    ),
                 ));
 
                 // 2. RX/TX drops
                 if nic.rx_dropped > 0 || nic.tx_dropped > 0 {
-                    checks.push((false, "warn",
-                        format!("drops: rx={} tx={} (consider increasing ring buffer or irq affinity)",
-                            nic.rx_dropped, nic.tx_dropped)
+                    checks.push((
+                        false,
+                        "warn",
+                        format!(
+                            "drops: rx={} tx={} (consider increasing ring buffer or irq affinity)",
+                            nic.rx_dropped, nic.tx_dropped
+                        ),
                     ));
                 } else {
                     checks.push((true, "info", "no packet drops".to_string()));
@@ -4850,15 +4879,22 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
 
                 // 3. RX/TX errors
                 if nic.rx_errors > 0 || nic.tx_errors > 0 {
-                    checks.push((false, "warn",
-                        format!("errors: rx={} tx={}", nic.rx_errors, nic.tx_errors)
+                    checks.push((
+                        false,
+                        "warn",
+                        format!("errors: rx={} tx={}", nic.rx_errors, nic.tx_errors),
                     ));
                 }
 
                 // 4. MTU check: warn if not 1500 (not datacenter-tuned)
                 if nic.mtu < 1500 {
-                    checks.push((false, "warn",
-                        format!("MTU={} is below standard 1500 — possible fragmentation", nic.mtu)
+                    checks.push((
+                        false,
+                        "warn",
+                        format!(
+                            "MTU={} is below standard 1500 — possible fragmentation",
+                            nic.mtu
+                        ),
                     ));
                 }
             }
@@ -4870,16 +4906,27 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
         // 5. Routes on this interface
         let iface_routes: Vec<_> = routes.iter().filter(|r| r.interface == *iface).collect();
         if iface_routes.is_empty() {
-            checks.push((false, "warn", "no routes assigned to this interface".to_string()));
+            checks.push((
+                false,
+                "warn",
+                "no routes assigned to this interface".to_string(),
+            ));
         } else {
-            checks.push((true, "info", format!("{} route(s) via this interface", iface_routes.len())));
+            checks.push((
+                true,
+                "info",
+                format!("{} route(s) via this interface", iface_routes.len()),
+            ));
         }
 
         // 6. ethtool — autoneg / speed
         if let Ok(et) = get_ethtool_report(iface) {
             if et.autoneg.as_deref() == Some("off") && et.speed_mbps.is_some() {
-                checks.push((false, "warn",
-                    "auto-negotiation disabled — ensure manual speed matches link partner".to_string()
+                checks.push((
+                    false,
+                    "warn",
+                    "auto-negotiation disabled — ensure manual speed matches link partner"
+                        .to_string(),
                 ));
             }
             if let Some(mbps) = et.speed_mbps {
@@ -4903,14 +4950,17 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
                 let ok = issue.severity == IssueSeverity::Info;
                 let sev = match issue.severity {
                     IssueSeverity::Critical => "crit",
-                    IssueSeverity::Warning  => "warn",
-                    IssueSeverity::Info     => "info",
+                    IssueSeverity::Warning => "warn",
+                    IssueSeverity::Info => "info",
                 };
                 checks.push((ok, sev, issue.message.clone()));
             }
         }
 
-        reports.push(IfaceReport { name: iface.to_string(), checks });
+        reports.push(IfaceReport {
+            name: iface.to_string(),
+            checks,
+        });
     }
 
     // ── output ────────────────────────────────────────────────────────────────
@@ -4931,19 +4981,29 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
         println!("  \"global\": {{");
         println!("    \"established_connections\": {established},");
         println!("    \"listening_ports\": {listeners},");
-        println!("    \"default_route\": \"{}\",", default_via.as_deref().unwrap_or("none"));
-        println!("    \"dns_servers\": [{}]", dns_servers.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", "));
+        println!(
+            "    \"default_route\": \"{}\",",
+            default_via.as_deref().unwrap_or("none")
+        );
+        println!(
+            "    \"dns_servers\": [{}]",
+            dns_servers
+                .iter()
+                .map(|s| format!("\"{s}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         println!("  }}");
         println!("}}");
         return Ok(());
     }
 
     // ── pretty-print ─────────────────────────────────────────────────────────
-    const OK:   &str = "\x1b[1;32m✓\x1b[0m";
+    const OK: &str = "\x1b[1;32m✓\x1b[0m";
     const FAIL: &str = "\x1b[1;31m✗\x1b[0m";
     const WARN: &str = "\x1b[1;33m⚠\x1b[0m";
     const BOLD: &str = "\x1b[1m";
-    const RST:  &str = "\x1b[0m";
+    const RST: &str = "\x1b[0m";
 
     let sep = "─".repeat(72);
     println!("\n{BOLD}pktana diagnose{RST} — network health check\n{sep}");
@@ -4954,8 +5014,17 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
     for r in &reports {
         println!("\n  {BOLD}{}{RST}", r.name);
         for (ok, sev, msg) in &r.checks {
-            let icon = if *ok { OK } else if *sev == "crit" { total_crit += 1; FAIL } else { WARN };
-            if !ok { total_issues += 1; }
+            let icon = if *ok {
+                OK
+            } else if *sev == "crit" {
+                total_crit += 1;
+                FAIL
+            } else {
+                WARN
+            };
+            if !ok {
+                total_issues += 1;
+            }
             println!("    {icon}  {msg}");
         }
     }
@@ -4964,12 +5033,16 @@ fn run_diagnose(args: &[String]) -> Result<(), CliError> {
 
     // Global section
     println!("  {BOLD}Global{RST}");
-    println!("    {OK}  {} established connections · {} listeners", established, listeners);
+    println!(
+        "    {OK}  {} established connections · {} listeners",
+        established, listeners
+    );
     if let Some(ref gw) = default_via {
         println!("    {OK}  default route via {gw}");
     } else {
         println!("    {FAIL}  no default route found");
-        total_issues += 1; total_crit += 1;
+        total_issues += 1;
+        total_crit += 1;
     }
     if dns_servers.is_empty() {
         println!("    {WARN}  no DNS nameservers in /etc/resolv.conf");
@@ -5004,18 +5077,28 @@ fn run_export(args: &[String]) -> Result<(), CliError> {
     }
 
     // Parse --format
-    let format = args.windows(2)
+    let format = args
+        .windows(2)
         .find(|w| w[0] == "--format" || w[0] == "-f")
         .map(|w| w[1].to_lowercase())
         .unwrap_or_else(|| "json".to_string());
 
     let clean_args: Vec<String> = {
         let mut skip_next = false;
-        args.iter().filter(|a| {
-            if skip_next { skip_next = false; return false; }
-            if **a == "--format" || **a == "-f" { skip_next = true; return false; }
-            true
-        }).cloned().collect()
+        args.iter()
+            .filter(|a| {
+                if skip_next {
+                    skip_next = false;
+                    return false;
+                }
+                if **a == "--format" || **a == "-f" {
+                    skip_next = true;
+                    return false;
+                }
+                true
+            })
+            .cloned()
+            .collect()
     };
 
     let target = &clean_args[0];
@@ -5027,7 +5110,9 @@ fn run_export(args: &[String]) -> Result<(), CliError> {
 }
 
 fn emit_packet_json(no: usize, ts: &str, dp: &pktana_core::DeepPacket, bytes: usize, first: bool) {
-    if !first { print!(",\n"); }
+    if !first {
+        print!(",\n");
+    }
     let src = dp_src_str(dp);
     let dst = dp_dst_str(dp);
     let proto = dp_proto_label(dp);
@@ -5059,7 +5144,11 @@ fn export_live(iface: &str, format: &str, rest: &[String]) -> Result<(), CliErro
     let (max_packets, filter) = parse_count_filter(rest);
     let config = CaptureConfig {
         interface: iface.to_string(),
-        max_packets: if max_packets == 0 { usize::MAX } else { max_packets },
+        max_packets: if max_packets == 0 {
+            usize::MAX
+        } else {
+            max_packets
+        },
         promiscuous: true,
         snapshot_len: 65_535,
         filter,
@@ -5108,7 +5197,13 @@ fn export_pcap(path: &str, format: &str, _rest: &[String]) -> Result<(), CliErro
     LinuxCaptureEngine::read_pcap_file(path, |pkt| {
         pkt_num += 1;
         let ts_epoch = pkt.timestamp_sec as f64 + pkt.timestamp_usec as f64 / 1_000_000.0;
-        let rel = match base_ts { None => { base_ts = Some(ts_epoch); 0.0 } Some(b) => ts_epoch - b };
+        let rel = match base_ts {
+            None => {
+                base_ts = Some(ts_epoch);
+                0.0
+            }
+            Some(b) => ts_epoch - b,
+        };
         let ts_str = format!("{:.6}", rel);
         let bytes = pkt.data.len();
         let mut dp = inspect(&pkt.data);
@@ -5134,7 +5229,11 @@ fn parse_count_filter(args: &[String]) -> (usize, Option<String>) {
         None => (0, None),
         Some(s) => match s.parse::<usize>() {
             Ok(n) => {
-                let f = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
+                let f = if args.len() > 1 {
+                    Some(args[1..].join(" "))
+                } else {
+                    None
+                };
                 (n, f)
             }
             Err(_) => (0, Some(args.join(" "))),
@@ -5233,9 +5332,7 @@ fn run_build_app() -> Result<(), CliError> {
             println!("  {G}✓{R}  Workflow dispatched via gh CLI.");
             println!();
             println!("  Monitor:");
-            println!(
-                "    {Y}gh run list --workflow=build-app.yml --repo omnayak27199/pktana{R}"
-            );
+            println!("    {Y}gh run list --workflow=build-app.yml --repo omnayak27199/pktana{R}");
             println!(
                 "    {DIM}https://github.com/omnayak27199/pktana/actions/workflows/build-app.yml{R}"
             );
