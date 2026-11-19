@@ -1,16 +1,9 @@
 name: Desktop macOS
 
 on:
+  # Tag-based releases are handled by release.yml (all platforms in one workflow).
+  # Use this for manual desktop-only rebuilds (e.g. UI-only changes).
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
-    paths:
-      - 'pktana-desktop/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/desktop-macos.yml'
 
 permissions:
   contents: write

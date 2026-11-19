@@ -378,6 +378,8 @@
       color: #fff;
       box-shadow: 0 2px 8px rgba(234,88,12,0.4);
     }
+    .dl-pane { display: none; }
+    .dl-pane.active { display: block; }
     .dl-grid {
       display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
       gap: 14px;
@@ -1087,16 +1089,29 @@
     <div class="container">
       <div class="section-header">
         <div class="tag">Download · Install</div>
-        <h2 class="section-h">Get pktana on your Linux server.</h2>
+        <h2 class="section-h">Get pktana on any platform.</h2>
         <p class="section-sub">
-          Native packages for RHEL/Rocky/Alma 7 &amp; 9, Ubuntu 22.04/24.04, and Debian 12.
-          Published on <a href="https://github.com/omnayak27199/pktana/releases" target="_blank" rel="noreferrer" style="color:var(--primary-d);font-weight:700;">GitHub Releases</a> and <a href="https://crates.io/users/omnayak27199" target="_blank" rel="noreferrer" style="color:var(--primary-d);font-weight:700;">crates.io</a>.
+          Native packages for RHEL/Rocky/Alma 7 &amp; 9, Ubuntu 22.04/24.04, Debian 12, macOS, and Windows.
+          Built automatically on every release tag and published to
+          <a href="https://github.com/omnayak27199/pktana/releases" target="_blank" rel="noreferrer" style="color:var(--primary-d);font-weight:700;">GitHub Releases</a>
+          and <a href="https://crates.io/users/omnayak27199" target="_blank" rel="noreferrer" style="color:var(--primary-d);font-weight:700;">crates.io</a>.
+          <span id="dl-version-badge" style="display:none;margin-left:8px;padding:2px 8px;background:var(--primary);color:#fff;border-radius:4px;font-size:0.8rem;font-weight:600;"></span>
         </p>
       </div>
 
       <div class="dl-panel">
+        <!-- ── Tab selector ─────────────────────────────────────── -->
+        <div class="dl-tabs">
+          <button class="dl-tab active" data-target="cli">pktana CLI</button>
+          <button class="dl-tab" data-target="tracer">Packet Tracer</button>
+        </div>
+
+        <!-- ── pktana CLI downloads (existing) ──────────────────── -->
+        <div id="dl-pane-cli" class="dl-pane active">
         <div class="dl-grid">
-          <div class="dl-card">
+
+          <!-- RHEL 9 -->
+          <div class="dl-card" data-dl-key="el9">
             <div class="dl-os">
               <div class="dl-os-icon">🟥</div>
               <div>
@@ -1104,12 +1119,14 @@
                 <div class="dl-os-sub">el9 · x86_64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana-0.6.0-1.el9.x86_64.rpm</div>
+            <div class="dl-filename" id="dl-fn-el9">pktana-el9.rpm</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el9.x86_64.rpm">⬇ RPM</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-el9.rpm">⬇ RPM</a>
             </div>
           </div>
-          <div class="dl-card">
+
+          <!-- RHEL 7 -->
+          <div class="dl-card" data-dl-key="el7">
             <div class="dl-os">
               <div class="dl-os-icon">🟥</div>
               <div>
@@ -1117,12 +1134,14 @@
                 <div class="dl-os-sub">el7 · x86_64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana-0.6.0-1.el7.x86_64.rpm</div>
+            <div class="dl-filename" id="dl-fn-el7">pktana-el7.rpm</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el7.x86_64.rpm">⬇ RPM</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-el7.rpm">⬇ RPM</a>
             </div>
           </div>
-          <div class="dl-card">
+
+          <!-- Ubuntu 22.04 -->
+          <div class="dl-card" data-dl-key="ubuntu22.04">
             <div class="dl-os">
               <div class="dl-os-icon">🟧</div>
               <div>
@@ -1130,13 +1149,15 @@
                 <div class="dl-os-sub">Jammy · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.6.0_amd64_ubuntu22.04.deb</div>
+            <div class="dl-filename" id="dl-fn-ubuntu22.04">pktana-ubuntu22.04.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu22.04.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-ubuntu22.04-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-ubuntu22.04.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-ubuntu22.04.tar.gz">tar.gz</a>
             </div>
           </div>
-          <div class="dl-card">
+
+          <!-- Ubuntu 24.04 -->
+          <div class="dl-card" data-dl-key="ubuntu24.04">
             <div class="dl-os">
               <div class="dl-os-icon">🟧</div>
               <div>
@@ -1144,13 +1165,15 @@
                 <div class="dl-os-sub">Noble · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.6.0_amd64_ubuntu24.04.deb</div>
+            <div class="dl-filename" id="dl-fn-ubuntu24.04">pktana-ubuntu24.04.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu24.04.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-ubuntu24.04-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-ubuntu24.04.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-ubuntu24.04.tar.gz">tar.gz</a>
             </div>
           </div>
-          <div class="dl-card">
+
+          <!-- Debian 12 -->
+          <div class="dl-card" data-dl-key="debian12">
             <div class="dl-os">
               <div class="dl-os-icon">🟪</div>
               <div>
@@ -1158,18 +1181,51 @@
                 <div class="dl-os-sub">Bookworm · amd64</div>
               </div>
             </div>
-            <div class="dl-filename">pktana_0.6.0_amd64_debian12.deb</div>
+            <div class="dl-filename" id="dl-fn-debian12">pktana-debian12.deb</div>
             <div class="dl-actions">
-              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_debian12.deb">⬇ .deb</a>
-              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-debian12-x86_64.tar.gz">tar.gz</a>
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-debian12.deb">⬇ .deb</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-debian12.tar.gz">tar.gz</a>
             </div>
           </div>
+
+          <!-- macOS -->
+          <div class="dl-card" data-dl-key="macos">
+            <div class="dl-os">
+              <div class="dl-os-icon">🍎</div>
+              <div>
+                <div class="dl-os-name">macOS</div>
+                <div class="dl-os-sub">Electron desktop app · Apple Silicon + Intel</div>
+              </div>
+            </div>
+            <div class="dl-filename" id="dl-fn-macos">pktana-macos.dmg</div>
+            <div class="dl-actions">
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-macos.dmg">⬇ .dmg</a>
+              <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-macos.zip">.zip</a>
+            </div>
+          </div>
+
+          <!-- Windows -->
+          <div class="dl-card" data-dl-key="windows">
+            <div class="dl-os">
+              <div class="dl-os-icon">🪟</div>
+              <div>
+                <div class="dl-os-name">Windows</div>
+                <div class="dl-os-sub">Electron installer · x64 · requires Npcap</div>
+              </div>
+            </div>
+            <div class="dl-filename" id="dl-fn-windows">pktana-windows-setup.exe</div>
+            <div class="dl-actions">
+              <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-windows-setup.exe">⬇ .exe</a>
+            </div>
+          </div>
+
+          <!-- Build from source -->
           <div class="dl-card">
             <div class="dl-os">
               <div class="dl-os-icon">🦀</div>
               <div>
                 <div class="dl-os-name">Build from source</div>
-                <div class="dl-os-sub">Any Linux · Cargo</div>
+                <div class="dl-os-sub">Any platform · Cargo</div>
               </div>
             </div>
             <div class="dl-filename">cargo install pktana-cli --features pcap,tui</div>
@@ -1178,7 +1234,8 @@
               <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana" target="_blank" rel="noreferrer">GitHub</a>
             </div>
           </div>
-        </div>
+
+        </div><!-- /.dl-grid -->
 
         <div class="dl-cargo-box">
           <div class="dl-cargo-label">Use as a Rust library</div>
@@ -1198,9 +1255,115 @@
           <a href="https://crates.io/crates/pktana-core" target="_blank" rel="noreferrer" class="dl-extra-link">📦 pktana-core on crates.io</a>
           <a href="https://pktana.online" target="_blank" rel="noreferrer" class="dl-extra-link">🌐 pktana.online</a>
         </div>
-      </div>
+        </div><!-- end dl-pane-cli -->
+
+        <!-- ── Packet Tracer downloads ───────────────────────────── -->
+        <div id="dl-pane-tracer" class="dl-pane">
+          <div class="dl-grid">
+
+            <!-- Windows -->
+            <div class="dl-card">
+              <div class="dl-os">
+                <div class="dl-os-icon">🪟</div>
+                <div>
+                  <div class="dl-os-name">Windows 10 / 11</div>
+                  <div class="dl-os-sub">x64 · NSIS installer</div>
+                </div>
+              </div>
+              <div class="dl-filename">pktana-packet-tracer-setup.exe · v<span class="pt-ver">0.2.0</span></div>
+              <div class="dl-actions">
+                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer-setup.exe">⬇ .exe</a>
+              </div>
+            </div>
+
+            <!-- macOS -->
+            <div class="dl-card">
+              <div class="dl-os">
+                <div class="dl-os-icon">🍎</div>
+                <div>
+                  <div class="dl-os-name">macOS</div>
+                  <div class="dl-os-sub">Apple Silicon + Intel · DMG</div>
+                </div>
+              </div>
+              <div class="dl-filename">pktana-packet-tracer.dmg · v<span class="pt-ver">0.2.0</span></div>
+              <div class="dl-actions">
+                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.dmg">⬇ .dmg</a>
+              </div>
+            </div>
+
+            <!-- Linux -->
+            <div class="dl-card">
+              <div class="dl-os">
+                <div class="dl-os-icon">🐧</div>
+                <div>
+                  <div class="dl-os-name">Linux</div>
+                  <div class="dl-os-sub">x64 · AppImage + RPM</div>
+                </div>
+              </div>
+              <div class="dl-filename">pktana-packet-tracer.AppImage · v<span class="pt-ver">0.2.0</span></div>
+              <div class="dl-actions">
+                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.AppImage">⬇ AppImage</a>
+                <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.rpm">⬇ RPM</a>
+              </div>
+            </div>
+
+          </div><!-- /.dl-grid -->
+
+          <div class="dl-extra">
+            <a href="https://github.com/omnayak27199/pktana/releases" target="_blank" rel="noreferrer" class="dl-extra-link">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
+              All releases on GitHub
+            </a>
+            <a href="https://github.com/omnayak27199/pktana/releases/latest" target="_blank" rel="noreferrer" class="dl-extra-link">🏷 Latest release notes</a>
+          </div>
+        </div><!-- end dl-pane-tracer -->
+
+      </div><!-- end dl-panel -->
     </div>
   </section>
+
+  <script>
+  /* Fetch the latest release tag from GitHub API and show versioned filenames.
+     The download hrefs already use /releases/latest/download/<stable-name> so
+     they always work even if this fetch fails (e.g. API rate-limit). */
+  (function () {
+    fetch('https://api.github.com/repos/omnayak27199/pktana/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json' }
+    })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (rel) {
+      if (!rel || !rel.tag_name) return;
+      var v = rel.tag_name.replace(/^v/, '');
+      var badge = document.getElementById('dl-version-badge');
+      if (badge) { badge.textContent = rel.tag_name; badge.style.display = 'inline'; }
+      var map = {
+        'el9':        'pktana-' + v + '-1.el9.x86_64.rpm',
+        'el7':        'pktana-' + v + '-1.el7.x86_64.rpm',
+        'ubuntu22.04':'pktana_' + v + '_amd64_ubuntu22.04.deb',
+        'ubuntu24.04':'pktana_' + v + '_amd64_ubuntu24.04.deb',
+        'debian12':   'pktana_' + v + '_amd64_debian12.deb',
+        'macos':      'pktana-' + v + '.dmg',
+        'windows':    'pktana-' + v + '-Setup.exe'
+      };
+      Object.keys(map).forEach(function (key) {
+        var el = document.getElementById('dl-fn-' + key);
+        if (el) el.textContent = map[key];
+      });
+    })
+    .catch(function () { /* silent — stable links still work */ });
+  })();
+
+  // ── download tab switching ───────────────────────────────────────
+  document.querySelectorAll('.dl-tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      document.querySelectorAll('.dl-tab').forEach(function (t) { t.classList.remove('active'); });
+      document.querySelectorAll('.dl-pane').forEach(function (p) { p.classList.remove('active'); });
+      tab.classList.add('active');
+      var pane = document.getElementById('dl-pane-' + tab.dataset.target);
+      if (pane) pane.classList.add('active');
+    });
+  });
+  </script>
 
   <!-- ── Features ───────────────────────────────────────────────── -->
   <section class="section section-alt" id="features">

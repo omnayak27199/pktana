@@ -1,7 +1,7 @@
 {
   "name": "pktana-packet-tracer",
-  "version": "0.2.0",
-  "description": "Cisco Packet Tracer-style network learning lab for Windows and macOS",
+  "version": "1.0.0",
+  "description": "Cisco Packet Tracer-style network learning lab for Windows, macOS, and Linux",
   "author": "Omprakash <omnayak27199@gmail.com>",
   "license": "Apache-2.0",
   "main": "electron/main.js",
@@ -10,7 +10,9 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux",
+    "dist:all": "electron-builder --win --mac --linux"
   },
   "build": {
     "appId": "online.pktana.packet-tracer",
@@ -30,27 +32,23 @@
     "mac": {
       "category": "public.app-category.education",
       "target": [
-        "dmg",
-        "zip"
+        { "target": "dmg", "arch": ["arm64", "x64"] }
       ],
-      "artifactName": "pktana-packet-tracer-${version}-mac.${ext}"
+      "artifactName": "pktana-packet-tracer.${ext}"
     },
     "win": {
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
+        { "target": "nsis", "arch": ["x64"] }
       ],
-      "artifactName": "pktana-packet-tracer-${version}-win-${arch}.${ext}"
+      "artifactName": "pktana-packet-tracer-setup.${ext}"
+    },
+    "linux": {
+      "category": "Education",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "rpm",      "arch": ["x64"] }
+      ],
+      "artifactName": "pktana-packet-tracer.${ext}"
     },
     "nsis": {
       "oneClick": false,

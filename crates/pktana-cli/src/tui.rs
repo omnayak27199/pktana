@@ -47,7 +47,7 @@ pub mod inner {
         layout::{Constraint, Direction, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Clear, Paragraph, Row, Table, TableState, Wrap},
+        widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
         Frame, Terminal,
     };
 
@@ -875,6 +875,7 @@ pub mod inner {
             )
         };
 
+        let has_high_risk = app.connections.iter().any(|c| c.risk_score > 69);
         let tabs = [
             ("[1]Overview", Tab::Overview),
             ("[2]Packets", Tab::Packets),
@@ -899,6 +900,12 @@ pub mod inner {
                 Style::default().fg(Color::DarkGray)
             };
             spans.push(Span::styled(format!(" {label} "), style));
+            if *tab == Tab::Flows && has_high_risk {
+                spans.push(Span::styled(
+                    "⚠ ",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ));
+            }
         }
         let widget = Paragraph::new(Line::from(spans)).block(
             Block::default()
@@ -1044,9 +1051,15 @@ pub mod inner {
                 let svc = svc_name(c.remote_port)
                     .or_else(|| svc_name(c.local_port))
                     .unwrap_or(&c.remote_ip);
+                let elapsed_secs = c
+                    .last_seen
+                    .duration_since(c.first_seen)
+                    .as_secs_f64()
+                    .max(0.1);
+                let bps = (c.bytes_sent + c.bytes_recv) as f64 / elapsed_secs;
                 format!(
                     "{:<8} {:<10} {}",
-                    fmt_bytes(c.bytes_sent + c.bytes_recv),
+                    format!("{}/s", fmt_bytes(bps as u64)),
                     proc,
                     svc
                 )
@@ -1246,11 +1259,17 @@ pub mod inner {
                 } else {
                     format!("⚠{}", c.anomalies.len())
                 };
-                let risk = if c.risk_score == 0 {
-                    "-".into()
+                let (risk_label, risk_color) = if c.risk_score == 0 {
+                    ("-".to_string(), Color::DarkGray)
+                } else if c.risk_score >= 70 {
+                    (format!("HIGH({})", c.risk_score), Color::Red)
+                } else if c.risk_score >= 30 {
+                    (format!("MED({})", c.risk_score), Color::Yellow)
                 } else {
-                    format!("{}", c.risk_score)
+                    (format!("LOW({})", c.risk_score), Color::Green)
                 };
+                let risk_cell = Cell::from(risk_label)
+                    .style(Style::default().fg(risk_color).add_modifier(Modifier::BOLD));
                 let pkts = format!("{}↑{}↓", c.packets_sent, c.packets_recv);
                 let bytes = fmt_bytes(c.bytes_sent + c.bytes_recv);
                 let age = fmt_dur(c.first_seen.elapsed());
@@ -1266,18 +1285,18 @@ pub mod inner {
                 };
 
                 Row::new(vec![
-                    c.protocol.clone(),
-                    local,
-                    remote,
-                    c.state.clone(),
-                    app_sni,
-                    proc,
-                    geo,
-                    badge,
-                    risk,
-                    pkts,
-                    bytes,
-                    age,
+                    Cell::from(c.protocol.clone()),
+                    Cell::from(local),
+                    Cell::from(remote),
+                    Cell::from(c.state.clone()),
+                    Cell::from(app_sni),
+                    Cell::from(proc),
+                    Cell::from(geo),
+                    Cell::from(badge),
+                    risk_cell,
+                    Cell::from(pkts),
+                    Cell::from(bytes),
+                    Cell::from(age),
                 ])
                 .style(style)
             })

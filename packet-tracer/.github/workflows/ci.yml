@@ -1,0 +1,100 @@
+name: packet-tracer CI
+
+on:
+  push:
+    paths:
+      - "packet-tracer/**"
+  pull_request:
+    paths:
+      - "packet-tracer/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packet-tracer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check required web app files
+        run: |
+          test -f index.html
+          test -f css/app.css
+          test -f js/app.js
+          test -f js/canvas.js
+          test -f js/labs.js
+          test -f js/models.js
+          test -f js/simulator.js
+          test -f js/router-cli.js
+          test -f electron/main.js
+          test -f electron/preload.js
+          test -f package.json
+
+      - name: Smoke test labs module
+        run: |
+          node --input-type=module -e "
+            import { LABS, finalizeLab } from './js/labs.js';
+            import { simulatePing } from './js/simulator.js';
+            for (const lab of LABS) {
+              const topo = finalizeLab(lab.build());
+              console.log(lab.id, topo.devices.length, 'devices', topo.links.length, 'links');
+            }
+            const star = finalizeLab(LABS[0].build());
+            const pc = star.devices.find(d => d.type === 'pc');
+            const r = simulatePing(star, pc.id, '192.168.1.20');
+            if (!r.ok) throw new Error(r.error);
+            console.log('ping steps:', r.steps.length);
+          "
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Verify Electron entry syntax
+        run: |
+          node --check electron/main.js
+          node --check electron/preload.js
+
+  build-desktop:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            npm_script: dist:mac
+          - os: windows-latest
+            npm_script: dist:win
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: packet-tracer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install and build desktop app
+        run: |
+          npm install
+          npm run ${{ matrix.npm_script }}
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            packet-tracer/dist/*.dmg
+            packet-tracer/dist/*.zip
+            packet-tracer/dist/*.exe
+            packet-tracer/dist/*.nsis.7z
+          if-no-files-found: warn

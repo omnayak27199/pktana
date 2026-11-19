@@ -1,27 +1,55 @@
-name: Build & Upload Release Artifacts
+name: Release
+
+# Triggers on any v* tag push (e.g. v0.7.0) or manually.
+# Builds RPM, .deb, tarball, macOS .dmg, Windows installer → uploads all to
+# the GitHub Release so that the stable /releases/latest/download/ URLs always
+# point to the newest version.
 
 on:
-  release:
-    types: [created, published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to upload artifacts to (e.g. v0.6.0)"
+        description: 'Tag to build (must already exist, e.g. v0.7.0)'
         required: true
 
 permissions:
   contents: write
 
 env:
-  VERSION: "0.6.0"
-  RELEASE_NUM: "1"
+  CARGO_TERM_COLOR: always
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. RESOLVE VERSION from the git tag
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
-  # ---------------------------------------------------------------------------
-  # RPM builds (RHEL/Rocky/Alma 9 + RHEL/CentOS 7)
-  # ---------------------------------------------------------------------------
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag:     ${{ steps.ver.outputs.tag }}
+    steps:
+      - id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building pktana $VERSION (tag: $TAG)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. RPM — RHEL/Rocky/Alma 9  and  RHEL/CentOS 7
+# ─────────────────────────────────────────────────────────────────────────────
   rpm:
     name: RPM (${{ matrix.os_type }})
+    needs: meta
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -33,49 +61,69 @@ jobs:
             image: centos:7
     container:
       image: ${{ matrix.image }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Install build deps (el9)
         if: matrix.os_type == 'el9'
         run: |
           dnf install -y epel-release dnf-plugins-core
           dnf config-manager --set-enabled crb
-          dnf install -y --allowerasing gcc libpcap-devel openssl-devel pkgconf-pkg-config perl-core rpm-build make git curl tar gzip ca-certificates
+          dnf install -y --allowerasing \
+            gcc libpcap-devel openssl-devel pkgconf-pkg-config \
+            perl-core rpm-build make git curl tar gzip ca-certificates
 
       - name: Install build deps (el7)
         if: matrix.os_type == 'el7'
         run: |
-          sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
-          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
-          yum install -y gcc libpcap-devel openssl-devel pkgconfig perl-IPC-Cmd perl-Data-Dumper rpm-build make git curl tar gzip ca-certificates
+          sed -i 's/mirrorlist/#mirrorlist/g'               /etc/yum.repos.d/CentOS-*
+          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+            /etc/yum.repos.d/CentOS-*
+          yum install -y \
+            gcc libpcap-devel openssl-devel pkgconfig perl-IPC-Cmd \
+            perl-Data-Dumper rpm-build make git curl tar gzip ca-certificates
 
       - uses: actions/checkout@v4
 
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Build RPM
+      - name: Stamp version into release.conf
+        run: |
+          sed -i "s/^VERSION=.*/VERSION=$VERSION/"              release.conf
+          sed -i "s/^RELEASE=.*/RELEASE=1/"                    release.conf
+          sed -i "s/^OS_TYPE=.*/OS_TYPE=${{ matrix.os_type }}/" release.conf
+
+      - name: Build release binary
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          # Override release.conf OS_TYPE for this matrix entry
-          sed -i "s/^OS_TYPE=.*/OS_TYPE=${{ matrix.os_type }}/" release.conf
+          cargo build --release --features pcap,tui -p pktana-cli
+
+      - name: Build RPM via Makefile
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
           make pktana
           mkdir -p dist/upload
           find dist/rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/upload/ \;
-          ls -la dist/upload/
+          # Stable alias — no version in filename so /releases/latest/download/ always works
+          find dist/upload -name '*.rpm' ! -name 'pktana-${{ matrix.os_type }}.rpm' \
+            -exec cp {} "dist/upload/pktana-${{ matrix.os_type }}.rpm" \;
+          ls -lh dist/upload/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: rpm-${{ matrix.os_type }}
           path: dist/upload/*.rpm
 
-  # ---------------------------------------------------------------------------
-  # .deb + tar.gz builds (Ubuntu 22.04, 24.04, Debian 12)
-  # ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. DEB + tarball — Ubuntu 22.04 / 24.04 / Debian 12
+# ─────────────────────────────────────────────────────────────────────────────
   deb:
-    name: deb (${{ matrix.label }})
+    name: DEB (${{ matrix.label }})
+    needs: meta
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -89,6 +137,8 @@ jobs:
             image: debian:12
     container:
       image: ${{ matrix.image }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Install build deps
         run: |
@@ -101,13 +151,14 @@ jobs:
 
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Build release binary
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
-          cargo build --release --features pcap,tui
+          cargo build --release --features pcap,tui -p pktana-cli
 
       - name: Build .deb with cargo-deb
         run: |
@@ -115,54 +166,198 @@ jobs:
           cargo install cargo-deb --locked
           mkdir -p dist
           cd crates/pktana-cli
-          cargo deb --no-build --no-strip --output "../../dist/pktana_${VERSION}_amd64_${{ matrix.label }}.deb"
+          cargo deb --no-build --no-strip \
+            --output "../../dist/pktana_${VERSION}_amd64_${{ matrix.label }}.deb"
 
-      - name: Build tarball
+      - name: Build tarball and stable aliases
         run: |
-          mkdir -p dist
-          tar -czf "dist/pktana-${VERSION}-${{ matrix.label }}-x86_64.tar.gz" -C target/release pktana
-          ls -la dist/
+          # Versioned tarball
+          tar -czf "dist/pktana-${VERSION}-${{ matrix.label }}-x86_64.tar.gz" \
+            -C target/release pktana
+          # Stable aliases — these are what /releases/latest/download/ resolves to
+          cp "dist/pktana_${VERSION}_amd64_${{ matrix.label }}.deb" \
+             "dist/pktana-${{ matrix.label }}.deb"
+          cp "dist/pktana-${VERSION}-${{ matrix.label }}-x86_64.tar.gz" \
+             "dist/pktana-${{ matrix.label }}.tar.gz"
+          ls -lh dist/
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: deb-${{ matrix.label }}
           path: |
             dist/*.deb
             dist/*.tar.gz
 
-  # ---------------------------------------------------------------------------
-  # Publish all artifacts to the GitHub Release
-  # ---------------------------------------------------------------------------
-  publish:
-    name: Publish artifacts to release
-    needs: [rpm, deb]
-    runs-on: ubuntu-latest
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. macOS .dmg (Electron desktop app)
+# ─────────────────────────────────────────────────────────────────────────────
+  macos:
+    name: macOS .dmg
+    needs: meta
+    runs-on: macos-latest
+    continue-on-error: true
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - name: Download all artifacts
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libpcap
+        run: brew install libpcap
+
+      - name: Build pktana binary
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/opt/libpcap/lib/pkgconfig:/usr/local/opt/libpcap/lib/pkgconfig
+        run: cargo build --release --features pcap,tui -p pktana-cli
+
+      - name: Stage binary for Electron
+        run: |
+          mkdir -p pktana-desktop/resources/bin
+          cp target/release/pktana pktana-desktop/resources/bin/pktana
+          chmod +x pktana-desktop/resources/bin/pktana
+          pktana-desktop/resources/bin/pktana --version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Package .dmg
+        working-directory: pktana-desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm install
+          npm run dist:mac
+          # Ad-hoc codesign nested .app bundles
+          find dist -name '*.app' -print0 | while IFS= read -r -d '' app; do
+            codesign --force --deep --sign - "$app" || true
+            bin="$app/Contents/Resources/bin/pktana"
+            [ -x "$bin" ] && codesign --force --sign - "$bin" || true
+            codesign --force --deep --sign - "$app" || true
+          done
+          # Stable aliases
+          dmg=$(find dist -maxdepth 1 -name '*.dmg' | head -1)
+          [ -n "$dmg" ] && cp "$dmg" dist/pktana-macos.dmg && echo "Stable DMG: dist/pktana-macos.dmg"
+          zip=$(find dist -maxdepth 1 -name '*.zip' | head -1)
+          [ -n "$zip" ] && cp "$zip" dist/pktana-macos.zip || true
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos
+          path: |
+            pktana-desktop/dist/*.dmg
+            pktana-desktop/dist/*.zip
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Windows .exe installer (Electron + Npcap SDK)
+# ─────────────────────────────────────────────────────────────────────────────
+  windows:
+    name: Windows installer
+    needs: meta
+    runs-on: windows-latest
+    continue-on-error: true
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Npcap SDK
+        shell: pwsh
+        run: |
+          $sdk = "C:\Npc_SDK"
+          New-Item -ItemType Directory -Force -Path $sdk | Out-Null
+          Invoke-WebRequest -Uri "https://npcap.com/dist/npcap-sdk-1.13.zip" -OutFile npcap-sdk.zip
+          Expand-Archive -Path npcap-sdk.zip -DestinationPath $sdk -Force
+          if (-not (Test-Path "$sdk\Include") -and (Test-Path "$sdk\npcap-sdk-1.13\Include")) {
+            Copy-Item -Recurse "$sdk\npcap-sdk-1.13\*" $sdk -Force
+          }
+          "NPCAP_SDK=$sdk"             >> $env:GITHUB_ENV
+          "LIB=$sdk\Lib\x64;$env:LIB" >> $env:GITHUB_ENV
+          "INCLUDE=$sdk\Include;$env:INCLUDE" >> $env:GITHUB_ENV
+
+      - name: Build pktana.exe
+        shell: pwsh
+        run: |
+          cargo build --release --features pcap,tui -p pktana-cli
+          $exe = "target\release\pktana.exe"
+          if (-not (Test-Path $exe)) {
+            $found = Get-ChildItem -Path target -Recurse -Filter pktana.exe |
+              Where-Object { $_.FullName -match '\\release\\pktana\.exe$' } |
+              Select-Object -First 1
+            if (-not $found) { Write-Error "pktana.exe not found after build"; exit 1 }
+            $exe = $found.FullName
+          }
+          New-Item -ItemType Directory -Force -Path pktana-desktop\resources\bin | Out-Null
+          Copy-Item $exe pktana-desktop\resources\bin\pktana.exe -Force
+
+      - name: Package Windows installer
+        working-directory: pktana-desktop
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          if (-not (Test-Path resources\bin\pktana.exe)) {
+            Write-Error "resources\bin\pktana.exe missing"; exit 1
+          }
+          npm install
+          npm run dist:win
+          # Stable alias
+          $setup = Get-ChildItem -Path dist -Filter '*Setup*.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($setup) {
+            Copy-Item $setup.FullName dist\pktana-windows-setup.exe
+            Write-Host "Stable alias: dist\pktana-windows-setup.exe"
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: pktana-desktop/dist/*.exe
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. PUBLISH — collect every artifact, create/update GitHub Release
+# ─────────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish to GitHub Release
+    needs: [meta, rpm, deb, macos, windows]
+    # Run even if macOS/Windows failed — Linux packages are what matter most
+    if: always() && (needs.rpm.result == 'success' || needs.deb.result == 'success')
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      TAG:     ${{ needs.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Flatten artifact tree
+      - name: Flatten into upload/
         run: |
           mkdir -p upload
-          find artifacts -type f \( -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' \) -exec cp {} upload/ \;
-          ls -la upload/
+          find artifacts -type f \( \
+            -name '*.rpm' -o -name '*.deb' -o -name '*.tar.gz' \
+            -o -name '*.dmg' -o -name '*.zip' -o -name '*.exe' \
+          \) -exec cp {} upload/ \;
+          echo "──── Release assets for $TAG ────"
+          ls -lh upload/ | sort -k5 -h
 
-      - name: Determine release tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload to GitHub Release
+      - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ env.TAG }}
+          name: "pktana ${{ env.TAG }}"
+          generate_release_notes: true
           files: upload/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

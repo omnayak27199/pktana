@@ -344,13 +344,14 @@ fn parse_ipv4(data: &[u8], _raw: &[u8], dp: &mut DeepPacket, anomalies: &mut Vec
         anomalies.push("TTL=1 (will expire on next hop)".into());
     }
 
-    // Check source IP sanity
-    let src = dp.ip_src.unwrap();
-    if src.is_unspecified() {
-        anomalies.push("Source IP is 0.0.0.0".into());
-    }
-    if src.is_broadcast() {
-        anomalies.push("Source IP is broadcast (spoofed?)".into());
+    // Check source IP sanity (ip_src was just set above)
+    if let Some(src) = dp.ip_src {
+        if src.is_unspecified() {
+            anomalies.push("Source IP is 0.0.0.0".into());
+        }
+        if src.is_broadcast() {
+            anomalies.push("Source IP is broadcast (spoofed?)".into());
+        }
     }
 
     let transport = &data[ihl..];
@@ -610,7 +611,21 @@ fn detect_app_tcp(src: u16, dst: u16, payload: &[u8], dp: &mut DeepPacket) {
         80 | 8080 | 8000 => {
             detect_http(payload, dp);
         }
-        443 | 8443 => detect_tls(payload, dp),
+        443 | 8443 => {
+            detect_tls(payload, dp);
+            // DoH: TLS on 443 with "dns" ALPN signals DNS-over-HTTPS
+            if dp.tls_alpn.iter().any(|a| a == "dns") {
+                dp.app_proto = Some("DoH".into());
+                dp.app_detail.push("Protocol : DNS-over-HTTPS (DoH)".into());
+            }
+        }
+        853 => {
+            // DoT: DNS-over-TLS (RFC 7858)
+            detect_tls(payload, dp);
+            dp.app_proto = Some("DoT".into());
+            dp.app_detail
+                .push("Protocol : DNS-over-TLS (DoT / RFC 7858)".into());
+        }
         22 => detect_ssh_banner(payload, dp),
         25 | 587 | 465 => detect_smtp(payload, dp),
         110 | 995 => {
@@ -1998,6 +2013,8 @@ impl DeepPacket {
             "QUIC/HTTP3" => "Web Browsing (QUIC)".into(),
             "gRPC" => "RPC / Microservices".into(),
             "DNS" => "DNS".into(),
+            "DoH" => "DNS-over-HTTPS".into(),
+            "DoT" => "DNS-over-TLS".into(),
             "DHCP" => "Network Infrastructure".into(),
             "NTP" => "Time Synchronization".into(),
             "SSH" => "Remote Access".into(),
@@ -2035,35 +2052,32 @@ impl DeepPacket {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn decode_tcp_flags(flags: u16) -> String {
-    let mut parts = Vec::new();
-    if flags & 0x0002 != 0 {
-        parts.push("SYN");
+    // Avoid per-call Vec allocation: build directly into a stack String.
+    // Ordering: canonical Wireshark order (SYN before ACK before FIN …).
+    const FLAG_BITS: &[(u16, &str)] = &[
+        (0x0100, "NS"),
+        (0x0080, "CWR"),
+        (0x0040, "ECE"),
+        (0x0020, "URG"),
+        (0x0010, "ACK"),
+        (0x0008, "PSH"),
+        (0x0004, "RST"),
+        (0x0002, "SYN"),
+        (0x0001, "FIN"),
+    ];
+    let mut out = String::with_capacity(32);
+    for (mask, name) in FLAG_BITS {
+        if flags & mask != 0 {
+            if !out.is_empty() {
+                out.push('|');
+            }
+            out.push_str(name);
+        }
     }
-    if flags & 0x0010 != 0 {
-        parts.push("ACK");
-    }
-    if flags & 0x0001 != 0 {
-        parts.push("FIN");
-    }
-    if flags & 0x0004 != 0 {
-        parts.push("RST");
-    }
-    if flags & 0x0008 != 0 {
-        parts.push("PSH");
-    }
-    if flags & 0x0020 != 0 {
-        parts.push("URG");
-    }
-    if flags & 0x0040 != 0 {
-        parts.push("ECE");
-    }
-    if flags & 0x0080 != 0 {
-        parts.push("CWR");
-    }
-    if parts.is_empty() {
+    if out.is_empty() {
         "[none]".into()
     } else {
-        parts.join("|")
+        out
     }
 }
 

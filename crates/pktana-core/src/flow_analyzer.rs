@@ -102,6 +102,7 @@ pub struct TcpHandshakeAnalysis {
     pub complete: bool,
     pub syn_retransmits: u32,
     pub flags_observed: Vec<String>,
+    pub last_seen: Instant,
 }
 
 impl Default for TcpHandshakeAnalysis {
@@ -117,10 +118,12 @@ impl TcpHandshakeAnalysis {
             complete: false,
             syn_retransmits: 0,
             flags_observed: Vec::new(),
+            last_seen: Instant::now(),
         }
     }
 
     pub fn analyze(&mut self, dp: &DeepPacket, timestamp: Instant) -> Option<String> {
+        self.last_seen = timestamp;
         let flags = dp.tcp_flags_str.as_ref()?;
         self.flags_observed.push(flags.clone());
 
@@ -141,7 +144,7 @@ impl TcpHandshakeAnalysis {
                 }
                 if flags.contains("SYN") && flags.contains("ACK") {
                     let ack_seq = dp.tcp_ack?;
-                    if ack_seq == seq + 1 {
+                    if ack_seq == seq.wrapping_add(1) {
                         let syn_ack_seq = dp.tcp_seq?;
                         self.state = TcpHandshakeState::SynAckReceived {
                             syn_seq: *seq,
@@ -153,7 +156,7 @@ impl TcpHandshakeAnalysis {
                         self.state = TcpHandshakeState::Failed {
                             reason: format!(
                                 "Invalid ACK number: expected {}, got {}",
-                                seq + 1,
+                                seq.wrapping_add(1),
                                 ack_seq
                             ),
                         };
@@ -167,7 +170,7 @@ impl TcpHandshakeAnalysis {
                 timestamp: syn_ack_time,
             } if flags.contains("ACK") && !flags.contains("SYN") => {
                 let ack_seq = dp.tcp_ack?;
-                if ack_seq == syn_ack_seq + 1 {
+                if ack_seq == syn_ack_seq.wrapping_add(1) {
                     let rtt_ms =
                         timestamp.duration_since(*syn_ack_time).as_micros() as f64 / 1000.0;
                     self.state = TcpHandshakeState::Established { timestamp, rtt_ms };
@@ -177,7 +180,7 @@ impl TcpHandshakeAnalysis {
                     self.state = TcpHandshakeState::Failed {
                         reason: format!(
                             "Invalid final ACK: expected {}, got {}",
-                            syn_ack_seq + 1,
+                            syn_ack_seq.wrapping_add(1),
                             ack_seq
                         ),
                     };
@@ -224,6 +227,7 @@ pub struct TlsHandshakeAnalysis {
     pub sni: Option<String>,
     pub alpn: Vec<String>,
     pub version: Option<String>,
+    pub last_seen: Instant,
 }
 
 impl Default for TlsHandshakeAnalysis {
@@ -241,10 +245,12 @@ impl TlsHandshakeAnalysis {
             sni: None,
             alpn: Vec::new(),
             version: None,
+            last_seen: Instant::now(),
         }
     }
 
     pub fn analyze(&mut self, dp: &DeepPacket, timestamp: Instant) -> Option<String> {
+        self.last_seen = timestamp;
         // Check if this is a TLS packet
         let app_proto = dp.app_proto.as_ref()?;
         if !app_proto.to_lowercase().contains("tls") && !app_proto.to_lowercase().contains("ssl") {
@@ -361,6 +367,7 @@ pub struct DhcpDoraAnalysis {
     pub assigned_ip: Option<Ipv4Addr>,
     pub server_ip: Option<Ipv4Addr>,
     pub lease_time: Option<u32>,
+    pub last_seen: Instant,
     discover_timestamp: Option<Instant>,
 }
 
@@ -379,11 +386,13 @@ impl DhcpDoraAnalysis {
             assigned_ip: None,
             server_ip: None,
             lease_time: None,
+            last_seen: Instant::now(),
             discover_timestamp: None,
         }
     }
 
     pub fn analyze(&mut self, dp: &DeepPacket, timestamp: Instant) -> Option<String> {
+        self.last_seen = timestamp;
         // Check if this is a DHCP packet (UDP port 67 or 68)
         if dp.udp_src_port != Some(67)
             && dp.udp_src_port != Some(68)
@@ -527,6 +536,7 @@ pub struct DnsTransactionAnalysis {
     pub rtt_ms: Option<f64>,
     pub response_ips: Vec<Ipv4Addr>,
     pub complete: bool,
+    pub last_seen: Instant,
 }
 
 impl Default for DnsTransactionAnalysis {
@@ -544,12 +554,18 @@ impl DnsTransactionAnalysis {
             rtt_ms: None,
             response_ips: Vec::new(),
             complete: false,
+            last_seen: Instant::now(),
         }
     }
 
     pub fn analyze(&mut self, dp: &DeepPacket, timestamp: Instant) -> Option<String> {
-        // Check if this is a DNS packet (UDP port 53)
-        if dp.udp_src_port != Some(53) && dp.udp_dst_port != Some(53) {
+        self.last_seen = timestamp;
+        // DNS on UDP/TCP port 53 or TCP port 853 (DoT)
+        let is_dns_port = dp.udp_src_port == Some(53)
+            || dp.udp_dst_port == Some(53)
+            || dp.tcp_src_port == Some(53)
+            || dp.tcp_dst_port == Some(53);
+        if !is_dns_port {
             return None;
         }
 
@@ -558,7 +574,9 @@ impl DnsTransactionAnalysis {
             return None;
         }
 
-        if dp.udp_dst_port == Some(53) {
+        let to_server = dp.udp_dst_port == Some(53) || dp.tcp_dst_port == Some(53);
+        let from_server = dp.udp_src_port == Some(53) || dp.tcp_src_port == Some(53);
+        if to_server {
             // This is a query
             self.query_name = dp.dns_query_name.clone();
             self.query_time = Some(timestamp);
@@ -566,7 +584,7 @@ impl DnsTransactionAnalysis {
                 "DNS Query: {}",
                 self.query_name.as_deref().unwrap_or("unknown")
             ));
-        } else if dp.udp_src_port == Some(53) && self.query_time.is_some() {
+        } else if from_server && self.query_time.is_some() {
             // This is a response
             self.response_time = Some(timestamp);
             if let Some(query_time) = self.query_time {
@@ -599,9 +617,8 @@ impl DnsTransactionAnalysis {
 pub struct FlowAnalyzer {
     tcp_flows: HashMap<FlowId, TcpHandshakeAnalysis>,
     tls_flows: HashMap<FlowId, TlsHandshakeAnalysis>,
-    dhcp_flows: HashMap<Ipv4Addr, DhcpDoraAnalysis>, // keyed by client MAC/IP
+    dhcp_flows: HashMap<Ipv4Addr, DhcpDoraAnalysis>, // keyed by client IP
     dns_flows: HashMap<u16, DnsTransactionAnalysis>, // keyed by DNS transaction ID
-    #[allow(dead_code)]
     flow_timeout: Duration,
 }
 
@@ -666,8 +683,12 @@ impl FlowAnalyzer {
             }
         }
 
-        // DNS query/response analysis
-        if dp.udp_src_port == Some(53) || dp.udp_dst_port == Some(53) {
+        // DNS query/response analysis (UDP/TCP port 53)
+        let is_dns = dp.udp_src_port == Some(53)
+            || dp.udp_dst_port == Some(53)
+            || dp.tcp_src_port == Some(53)
+            || dp.tcp_dst_port == Some(53);
+        if is_dns {
             let tx_id = dp.dns_txid.unwrap_or(0);
             let analysis = self.dns_flows.entry(tx_id).or_default();
 
@@ -706,10 +727,24 @@ impl FlowAnalyzer {
         }
     }
 
-    /// Clean up old flows
+    /// Evict flows that have not seen a packet within `flow_timeout`.
+    /// Call periodically (e.g. every 10 s) on long-running captures to prevent unbounded growth.
     pub fn cleanup_old_flows(&mut self) {
-        // Note: Would need to track timestamps to actually clean up
-        // For now, just provide the API
+        let timeout = self.flow_timeout;
+        let now = Instant::now();
+        self.tcp_flows
+            .retain(|_, v| now.duration_since(v.last_seen) < timeout);
+        self.tls_flows
+            .retain(|_, v| now.duration_since(v.last_seen) < timeout);
+        self.dhcp_flows
+            .retain(|_, v| now.duration_since(v.last_seen) < timeout);
+        self.dns_flows
+            .retain(|_, v| now.duration_since(v.last_seen) < timeout);
+    }
+
+    /// Total number of tracked flow entries across all tables.
+    pub fn flow_count(&self) -> usize {
+        self.tcp_flows.len() + self.tls_flows.len() + self.dhcp_flows.len() + self.dns_flows.len()
     }
 }
 

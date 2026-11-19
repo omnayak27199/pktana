@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pktana Packet Tracer — Network Learning Lab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="../index.html">
+      <span class="brand-mark">P</span>
+      <span>pktana <strong>Packet Tracer</strong></span>
+    </a>
+    <span class="tagline">Build networks · Learn routing · ARP · DNS · MAC tables</span>
+    <a class="learn-link" href="../learn.html">← Learn docs</a>
+  </header>
+
+  <nav class="toolbar" id="toolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <button type="button" id="btnLabs" class="tb-btn tb-accent" aria-label="Open learning labs">
+          <span class="tb-icon" aria-hidden="true">📚</span>
+          <span class="tb-label">Labs</span>
+        </button>
+        <span class="tb-sep"></span>
+        <button type="button" id="btnSelect" class="tb-btn tool-btn active" aria-label="Select and move devices" title="Click a device to select it, then drag to move">
+          <span class="tb-icon" aria-hidden="true">↖</span>
+          <span class="tb-label">Select</span>
+        </button>
+        <button type="button" id="btnPan" class="tb-btn tool-btn" aria-label="Pan canvas" title="Drag the empty canvas background to move the view">
+          <span class="tb-icon" aria-hidden="true">✋</span>
+          <span class="tb-label">Pan</span>
+        </button>
+        <button type="button" id="btnConnect" class="tb-btn tool-btn" aria-label="Connect cable between ports" title="Click two device ports to connect them with a cable">
+          <span class="tb-icon" aria-hidden="true">🔗</span>
+          <span class="tb-label">Connect</span>
+        </button>
+        <button type="button" id="btnDelete" class="tb-btn tool-btn tb-danger" aria-label="Delete selected device" title="Remove the selected device from the canvas">
+          <span class="tb-icon" aria-hidden="true">🗑</span>
+          <span class="tb-label">Delete</span>
+        </button>
+        <button type="button" id="btnResetView" class="tb-btn" aria-label="Reset zoom and pan" title="Return canvas to default zoom and position">
+          <span class="tb-icon" aria-hidden="true">⌂</span>
+          <span class="tb-label">Reset</span>
+        </button>
+      </div>
+      <div class="toolbar-group" id="devicePalette"></div>
+      <div class="toolbar-group tb-sim">
+        <label class="tb-field">
+          <span class="tb-field-label">From</span>
+          <select id="pingSource" aria-label="Ping source PC"></select>
+        </label>
+        <span class="tb-arrow" aria-hidden="true">→</span>
+        <label class="tb-field">
+          <span class="tb-field-label">To</span>
+          <input id="pingDest" type="text" value="192.168.1.20" placeholder="IP or hostname" aria-label="Ping destination" />
+        </label>
+        <button type="button" id="btnPing" class="tb-btn tb-run" aria-label="Run ping simulation">
+          <span class="tb-icon" aria-hidden="true">▶</span>
+          <span class="tb-label">Ping</span>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <p id="labGoal" class="lab-goal-bar">Tip: use <strong>Select</strong> to move devices · <strong>Connect</strong> to cable ports · <strong>Ping</strong> to watch packet flow hop-by-hop</p>
+
+  <div class="app-main">
+    <div class="canvas-wrap" id="canvasWrap">
+      <svg id="canvas" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="canvas-hint">Select = move devices · Pan = drag canvas · Scroll = zoom · Connect = click two ports</div>
+    </div>
+
+    <aside class="inspector">
+      <div class="inspector-tabs" id="inspectorTabs">
+        <button type="button" class="insp-tab active" data-tab="config">Config</button>
+        <button type="button" class="insp-tab" data-tab="routing">Routing</button>
+        <button type="button" class="insp-tab" data-tab="arp">ARP</button>
+        <button type="button" class="insp-tab" data-tab="mac">MAC</button>
+        <button type="button" class="insp-tab" data-tab="dns">DNS</button>
+        <button type="button" class="insp-tab" data-tab="cli">CLI</button>
+        <button type="button" class="insp-tab" data-tab="log">Log</button>
+      </div>
+
+      <div id="panelConfig" class="insp-panel active">
+        <div id="propsPanel" class="props-panel">
+          <p class="muted">Select a device on the canvas.</p>
+        </div>
+      </div>
+
+      <div id="panelRouting" class="insp-panel">
+        <p class="panel-tip">Routing table — connected (C), static (S), RIP (R), OSPF (O)</p>
+        <div id="routingTable" class="data-table-wrap"></div>
+      </div>
+
+      <div id="panelArp" class="insp-panel">
+        <p class="panel-tip">ARP cache — maps IP addresses to MAC addresses (Layer 2)</p>
+        <div id="arpTable" class="data-table-wrap"></div>
+      </div>
+
+      <div id="panelMac" class="insp-panel">
+        <p class="panel-tip">MAC address table — switch learns which MAC is on which port</p>
+        <div id="macTable" class="data-table-wrap"></div>
+      </div>
+
+      <div id="panelDns" class="insp-panel">
+        <p class="panel-tip">DNS records — hostname → IP (Layer 7)</p>
+        <div id="dnsTable" class="data-table-wrap"></div>
+      </div>
+
+      <div id="panelCli" class="insp-panel">
+        <p class="panel-tip muted">Select a router · IOS: enable · conf t · int g0/0 · ip address · no shutdown</p>
+        <div id="cliSection">
+          <div id="cliOutput" class="cli-output"></div>
+          <div class="cli-input-row">
+            <span id="cliPrompt" class="cli-prompt">Router&gt;</span>
+            <input id="cliInput" type="text" class="cli-input" autocomplete="off" spellcheck="false" placeholder="enable" />
+          </div>
+        </div>
+        <p id="cliEmpty" class="muted">Click a router to open CLI.</p>
+      </div>
+
+      <div id="panelLog" class="insp-panel">
+        <div class="sim-header">
+          <p id="simStatus" class="sim-status">Ready — run a simulation from the toolbar.</p>
+          <button type="button" id="btnClearLog" class="text-btn">Clear</button>
+        </div>
+        <div id="simLog" class="sim-log"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div id="labsModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" id="labsBackdrop"></div>
+    <div class="modal-sheet" role="dialog" aria-labelledby="labsTitle">
+      <header class="modal-header">
+        <div>
+          <h2 id="labsTitle">📚 Learning Labs</h2>
+          <p class="muted">Pick a guided task — goal shown in the bar below the toolbar.</p>
+        </div>
+        <button type="button" id="btnCloseLabs" class="modal-close" aria-label="Close">✕</button>
+      </header>
+      <div id="labList" class="lab-grid"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

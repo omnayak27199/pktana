@@ -256,6 +256,12 @@ fn run() -> Result<(), CliError> {
             Ok(())
         }
 
+        // ── Network health doctor ─────────────────────────────────────────────
+        "diagnose" | "diag" | "doctor" => run_diagnose(&args[2..]),
+
+        // ── Structured export (JSON / CSV) ────────────────────────────────────
+        "export" => run_export(&args[2..]),
+
         // ── GeoIP lookup ──────────────────────────────────────────────────────
         "geoip" | "geo" => run_geoip(&args[2..]),
 
@@ -266,6 +272,19 @@ fn run() -> Result<(), CliError> {
                 Ok(())
             }
         },
+
+        // ── build ────────────────────────────────────────────────────────────
+        "build" => {
+            let sub = args.get(2).map(|s| s.as_str()).unwrap_or("app");
+            if sub == "app" {
+                run_build_app()
+            } else {
+                eprintln!("\x1b[1;33mUsage:\x1b[0m  pktana build app");
+                eprintln!("        Trigger the pktana Packet Tracer multi-platform build.");
+                eprintln!("        Builds: Windows .exe · macOS .dmg · Linux .rpm + .AppImage");
+                Ok(())
+            }
+        }
 
         // ── shorthand: pktana <interface> [count] [filter] ───────────────────
         _ => {
@@ -550,13 +569,29 @@ fn run_capture(args: &[String]) -> Result<(), CliError> {
         ));
     }
 
-    // Check for flow analysis flag
+    // Check for flow analysis flag and --format
     let flow_analyze = args.iter().any(|a| a == "--flow-analyze" || a == "-a");
-    let args: Vec<String> = args
-        .iter()
-        .filter(|a| *a != "--flow-analyze" && *a != "-a")
-        .cloned()
-        .collect();
+    let format_arg = args.windows(2)
+        .find(|w| w[0] == "--format")
+        .map(|w| w[1].to_lowercase());
+    let args: Vec<String> = {
+        let mut skip = false;
+        args.iter().filter(|a| {
+            if skip { skip = false; return false; }
+            if **a == "--flow-analyze" || **a == "-a" { return false; }
+            if **a == "--format" { skip = true; return false; }
+            true
+        }).cloned().collect()
+    };
+    if let Some(ref fmt) = format_arg {
+        if fmt == "json" || fmt == "csv" {
+            return run_export(&{
+                let mut v = vec![args[0].clone(), "--format".to_string(), fmt.clone()];
+                v.extend_from_slice(&args[1..]);
+                v
+            });
+        }
+    }
 
     let interface = &args[0];
 
@@ -900,10 +935,17 @@ fn run_pcap_file(args: &[String]) -> Result<(), CliError> {
         match args.first() {
             Some(p) => p.as_str(),
             None => return Err(CliError::Usage(
-                "usage: pktana pcap <FILE.pcap> [BPF_FILTER]\n       (also: pktana <FILE.pcap>)"
+                "usage: pktana pcap <FILE.pcap> [--format json|csv]\n       (also: pktana <FILE.pcap>)"
                     .into(),
             )),
         };
+
+    // Handle --format flag: delegate to export_pcap
+    if let Some(fmt) = args.windows(2).find(|w| w[0] == "--format").map(|w| w[1].to_lowercase()) {
+        if fmt == "json" || fmt == "csv" {
+            return export_pcap(path, &fmt, &[]);
+        }
+    }
 
     // Optional BPF filter label (informational only — offline filtering not
     // supported by this path; user can pre-filter with tcpdump -w)
@@ -2237,6 +2279,20 @@ fn print_usage() {
     println!("  {G}pktana route{R} {Y}[--json] [IFACE]{R}   Full routing table (IPv4 + IPv6)");
     println!();
 
+    println!("{C}NETWORK DIAGNOSTICS{R}");
+    println!("  {G}pktana diagnose{R} {Y}[IFACE] [--json]{R}  Network doctor: check all interfaces for issues");
+    println!("  {G}pktana diagnose{R} {Y}eth0{R}              Diagnose a specific interface");
+    println!();
+
+    println!("{C}EXPORT / STRUCTURED OUTPUT{R}");
+    println!("  {G}pktana export{R} {Y}<IFACE> --format json{R}   Live capture → NDJSON stream");
+    println!("  {G}pktana export{R} {Y}<FILE.pcap> --format csv{R} Pcap file → CSV");
+    println!(
+        "  {G}pktana capture{R} {Y}... --format json{R}      Capture with structured output"
+    );
+    println!("  {G}pktana pcap{R} {Y}... --format csv{R}          Pcap analysis as CSV");
+    println!();
+
     println!("{C}LIVE NETWORK MONITORING{R}");
     println!("  {G}pktana conn{R} {Y}[--json]{R}             TCP/UDP connections + PID + GeoIP");
     println!("  {G}pktana stats{R} {Y}<IFACE>{R}            Live dashboard: PPS, BPS, top talkers");
@@ -2246,6 +2302,7 @@ fn print_usage() {
     println!("  {G}pktana tui{R} {Y}<IFACE | PCAP>{R}       Terminal UI dashboard — realtime packets & flows");
     println!("  {G}pktana web{R} {Y}[PORT] [-f]{R}         Web UI dashboard (starts in background, -f for foreground)");
     println!("  {G}pktana mcp{R} {Y}[--port N] [--stdio]{R}  MCP server for AI agent integration");
+    println!("  {G}pktana build app{R}                 Build Packet Tracer for Windows · macOS · Linux (via GitHub Actions)");
     println!();
 
     println!("{C}AI INTEGRATION{R} {DIM}(requires build --features mcp){R}");
@@ -4710,6 +4767,381 @@ fn print_nic_watch(nic: &NicInfo, interval: u64) {
     );
 }
 
+// ─── Network health doctor ───────────────────────────────────────────────────
+//  usage: pktana diagnose [IFACE] [--json]
+
+fn run_diagnose(args: &[String]) -> Result<(), CliError> {
+    use pktana_core::{get_ethtool_report, get_nic_info, list_routes, list_connections};
+
+    let json_out = args.iter().any(|a| a == "--json" || a == "-j");
+    let iface_filter: Option<&str> = args.iter().find(|a| !a.starts_with('-')).map(|s| s.as_str());
+
+    // ── collect interfaces to check ───────────────────────────────────────────
+    let all_nics = list_nics()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|n| iface_filter.map_or(!n.is_loopback(), |f| n.name == f))
+        .collect::<Vec<_>>();
+
+    if all_nics.is_empty() {
+        let target = iface_filter.unwrap_or("any interface");
+        return Err(CliError::Usage(format!("no matching interface: {target}")));
+    }
+    let iface_names: Vec<String> = all_nics.iter().map(|n| n.name.clone()).collect();
+
+    // ── global context ────────────────────────────────────────────────────────
+    let routes = list_routes();
+    let connections = list_connections();
+    let established = connections.iter().filter(|c| c.state == "ESTABLISHED").count();
+    let listeners   = connections.iter().filter(|c| c.state == "LISTEN").count();
+    let default_via = routes.iter().find(|r| r.is_default)
+        .map(|r| {
+            let gw = if r.gateway.is_empty() { "?" } else { &r.gateway };
+            format!("{gw} ({})", r.interface)
+        });
+
+    // DNS resolver from /etc/resolv.conf
+    let dns_servers: Vec<String> = std::fs::read_to_string("/etc/resolv.conf")
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("nameserver"))
+        .filter_map(|l| l.split_whitespace().nth(1).map(|s| s.to_string()))
+        .collect();
+
+    // ── per-interface checks ──────────────────────────────────────────────────
+    struct IfaceReport {
+        name: String,
+        checks: Vec<(bool, &'static str, String)>, // (ok, severity, message)
+    }
+
+    let mut reports: Vec<IfaceReport> = Vec::new();
+
+    for iface in &iface_names {
+        let mut checks: Vec<(bool, &'static str, String)> = Vec::new();
+
+        // 1. NIC up / carrier
+        match get_nic_info(iface) {
+            Ok(nic) => {
+                let up = nic.is_up();
+                let addr_str = if nic.ip_addresses.is_empty() {
+                    "no IP".to_string()
+                } else {
+                    nic.ip_addresses.join(", ")
+                };
+                checks.push((up, "crit",
+                    format!("Interface {}  {}  MTU={}  {}  {}",
+                        if up { "UP · carrier" } else { "DOWN" },
+                        addr_str,
+                        nic.mtu,
+                        nic.speed_label(),
+                        nic.duplex.as_deref().unwrap_or("?")
+                    )
+                ));
+
+                // 2. RX/TX drops
+                if nic.rx_dropped > 0 || nic.tx_dropped > 0 {
+                    checks.push((false, "warn",
+                        format!("drops: rx={} tx={} (consider increasing ring buffer or irq affinity)",
+                            nic.rx_dropped, nic.tx_dropped)
+                    ));
+                } else {
+                    checks.push((true, "info", "no packet drops".to_string()));
+                }
+
+                // 3. RX/TX errors
+                if nic.rx_errors > 0 || nic.tx_errors > 0 {
+                    checks.push((false, "warn",
+                        format!("errors: rx={} tx={}", nic.rx_errors, nic.tx_errors)
+                    ));
+                }
+
+                // 4. MTU check: warn if not 1500 (not datacenter-tuned)
+                if nic.mtu < 1500 {
+                    checks.push((false, "warn",
+                        format!("MTU={} is below standard 1500 — possible fragmentation", nic.mtu)
+                    ));
+                }
+            }
+            Err(e) => {
+                checks.push((false, "crit", format!("failed to read NIC info: {e}")));
+            }
+        }
+
+        // 5. Routes on this interface
+        let iface_routes: Vec<_> = routes.iter().filter(|r| r.interface == *iface).collect();
+        if iface_routes.is_empty() {
+            checks.push((false, "warn", "no routes assigned to this interface".to_string()));
+        } else {
+            checks.push((true, "info", format!("{} route(s) via this interface", iface_routes.len())));
+        }
+
+        // 6. ethtool — autoneg / speed
+        if let Ok(et) = get_ethtool_report(iface) {
+            if et.autoneg.as_deref() == Some("off") && et.speed_mbps.is_some() {
+                checks.push((false, "warn",
+                    "auto-negotiation disabled — ensure manual speed matches link partner".to_string()
+                ));
+            }
+            if let Some(mbps) = et.speed_mbps {
+                checks.push((true, "info", format!("link speed {mbps} Mbps (ethtool)")));
+            }
+        }
+
+        // 7. ARP neighbor count via /proc/net/arp
+        let arp_count = std::fs::read_to_string("/proc/net/arp")
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains(iface))
+            .count();
+        if arp_count > 0 {
+            checks.push((true, "info", format!("ARP cache: {arp_count} neighbor(s)")));
+        }
+
+        // 8. path_diag for XDP/BPF/DPDK issues
+        if let Ok(diag) = diagnose_path(iface) {
+            for issue in &diag.issues {
+                let ok = issue.severity == IssueSeverity::Info;
+                let sev = match issue.severity {
+                    IssueSeverity::Critical => "crit",
+                    IssueSeverity::Warning  => "warn",
+                    IssueSeverity::Info     => "info",
+                };
+                checks.push((ok, sev, issue.message.clone()));
+            }
+        }
+
+        reports.push(IfaceReport { name: iface.to_string(), checks });
+    }
+
+    // ── output ────────────────────────────────────────────────────────────────
+    if json_out {
+        println!("{{");
+        println!("  \"interfaces\": [");
+        for (ri, r) in reports.iter().enumerate() {
+            println!("    {{ \"name\": \"{}\", \"checks\": [", r.name);
+            for (ci, (ok, sev, msg)) in r.checks.iter().enumerate() {
+                let comma = if ci + 1 < r.checks.len() { "," } else { "" };
+                let msg_escaped = msg.replace('"', "\\\"");
+                println!("      {{ \"ok\": {ok}, \"severity\": \"{sev}\", \"message\": \"{msg_escaped}\" }}{comma}");
+            }
+            let comma = if ri + 1 < reports.len() { "," } else { "" };
+            println!("    ] }}{comma}");
+        }
+        println!("  ],");
+        println!("  \"global\": {{");
+        println!("    \"established_connections\": {established},");
+        println!("    \"listening_ports\": {listeners},");
+        println!("    \"default_route\": \"{}\",", default_via.as_deref().unwrap_or("none"));
+        println!("    \"dns_servers\": [{}]", dns_servers.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", "));
+        println!("  }}");
+        println!("}}");
+        return Ok(());
+    }
+
+    // ── pretty-print ─────────────────────────────────────────────────────────
+    const OK:   &str = "\x1b[1;32m✓\x1b[0m";
+    const FAIL: &str = "\x1b[1;31m✗\x1b[0m";
+    const WARN: &str = "\x1b[1;33m⚠\x1b[0m";
+    const BOLD: &str = "\x1b[1m";
+    const RST:  &str = "\x1b[0m";
+
+    let sep = "─".repeat(72);
+    println!("\n{BOLD}pktana diagnose{RST} — network health check\n{sep}");
+
+    let mut total_issues = 0usize;
+    let mut total_crit = 0usize;
+
+    for r in &reports {
+        println!("\n  {BOLD}{}{RST}", r.name);
+        for (ok, sev, msg) in &r.checks {
+            let icon = if *ok { OK } else if *sev == "crit" { total_crit += 1; FAIL } else { WARN };
+            if !ok { total_issues += 1; }
+            println!("    {icon}  {msg}");
+        }
+    }
+
+    println!("\n{sep}");
+
+    // Global section
+    println!("  {BOLD}Global{RST}");
+    println!("    {OK}  {} established connections · {} listeners", established, listeners);
+    if let Some(ref gw) = default_via {
+        println!("    {OK}  default route via {gw}");
+    } else {
+        println!("    {FAIL}  no default route found");
+        total_issues += 1; total_crit += 1;
+    }
+    if dns_servers.is_empty() {
+        println!("    {WARN}  no DNS nameservers in /etc/resolv.conf");
+        total_issues += 1;
+    } else {
+        println!("    {OK}  DNS resolvers: {}", dns_servers.join(", "));
+    }
+
+    println!("\n{sep}");
+    if total_issues == 0 {
+        println!("  \x1b[1;32mall checks passed\x1b[0m");
+    } else {
+        println!(
+            "  \x1b[1;{}m{} issue(s) found\x1b[0m  ({} critical)",
+            if total_crit > 0 { "31" } else { "33" },
+            total_issues,
+            total_crit
+        );
+    }
+    println!();
+    Ok(())
+}
+
+// ─── Structured export (JSON / CSV) ──────────────────────────────────────────
+//  usage: pktana export <IFACE | FILE.pcap> [--format json|csv] [COUNT] [FILTER]
+
+fn run_export(args: &[String]) -> Result<(), CliError> {
+    if args.is_empty() {
+        return Err(CliError::Usage(
+            "usage: pktana export <IFACE | FILE.pcap> [--format json|csv] [COUNT] [FILTER]".into(),
+        ));
+    }
+
+    // Parse --format
+    let format = args.windows(2)
+        .find(|w| w[0] == "--format" || w[0] == "-f")
+        .map(|w| w[1].to_lowercase())
+        .unwrap_or_else(|| "json".to_string());
+
+    let clean_args: Vec<String> = {
+        let mut skip_next = false;
+        args.iter().filter(|a| {
+            if skip_next { skip_next = false; return false; }
+            if **a == "--format" || **a == "-f" { skip_next = true; return false; }
+            true
+        }).cloned().collect()
+    };
+
+    let target = &clean_args[0];
+    if is_pcap_path(target) {
+        export_pcap(target, &format, &clean_args[1..])
+    } else {
+        export_live(target, &format, &clean_args[1..])
+    }
+}
+
+fn emit_packet_json(no: usize, ts: &str, dp: &pktana_core::DeepPacket, bytes: usize, first: bool) {
+    if !first { print!(",\n"); }
+    let src = dp_src_str(dp);
+    let dst = dp_dst_str(dp);
+    let proto = dp_proto_label(dp);
+    let info = dp_info_str(dp).replace('"', "'");
+    let risk = dp.risk_score;
+    let anomalies = dp.anomalies.len();
+    let app = dp.app_category.as_deref().unwrap_or("").replace('"', "'");
+    print!(
+        r#"  {{"no":{no},"time":"{ts}","src":"{src}","dst":"{dst}","proto":"{proto}","bytes":{bytes},"risk":{risk},"anomalies":{anomalies},"category":"{app}","info":"{info}"}}"#
+    );
+}
+
+fn emit_csv_header() {
+    println!("no,time,src,dst,proto,bytes,risk_score,anomalies,category,info");
+}
+
+fn emit_packet_csv(no: usize, ts: &str, dp: &pktana_core::DeepPacket, bytes: usize) {
+    let src = dp_src_str(dp);
+    let dst = dp_dst_str(dp);
+    let proto = dp_proto_label(dp);
+    let info = dp_info_str(dp).replace(',', ";").replace('"', "'");
+    let risk = dp.risk_score;
+    let anomalies = dp.anomalies.len();
+    let app = dp.app_category.as_deref().unwrap_or("").replace(',', ";");
+    println!("{no},{ts},{src},{dst},{proto},{bytes},{risk},{anomalies},{app},{info}");
+}
+
+fn export_live(iface: &str, format: &str, rest: &[String]) -> Result<(), CliError> {
+    let (max_packets, filter) = parse_count_filter(rest);
+    let config = CaptureConfig {
+        interface: iface.to_string(),
+        max_packets: if max_packets == 0 { usize::MAX } else { max_packets },
+        promiscuous: true,
+        snapshot_len: 65_535,
+        filter,
+        pcap_export: None,
+    };
+
+    let mut pkt_num: usize = 0;
+    if format == "csv" {
+        emit_csv_header();
+    } else {
+        println!("[");
+    }
+
+    LinuxCaptureEngine::capture_streaming(&config, |pkt| {
+        pkt_num += 1;
+        let ts = format_timestamp(pkt.timestamp_sec, pkt.timestamp_usec);
+        let bytes = pkt.data.len();
+        let mut dp = inspect(&pkt.data);
+        dp.classify_app_category();
+
+        if format == "csv" {
+            emit_packet_csv(pkt_num, &ts, &dp, bytes);
+        } else {
+            emit_packet_json(pkt_num, &ts, &dp, bytes, pkt_num == 1);
+        }
+        let _ = std::io::stdout().flush();
+        true
+    })?;
+
+    if format != "csv" {
+        println!("\n]");
+    }
+    Ok(())
+}
+
+fn export_pcap(path: &str, format: &str, _rest: &[String]) -> Result<(), CliError> {
+    let mut pkt_num: usize = 0;
+    let mut base_ts: Option<f64> = None;
+
+    if format == "csv" {
+        emit_csv_header();
+    } else {
+        println!("[");
+    }
+
+    LinuxCaptureEngine::read_pcap_file(path, |pkt| {
+        pkt_num += 1;
+        let ts_epoch = pkt.timestamp_sec as f64 + pkt.timestamp_usec as f64 / 1_000_000.0;
+        let rel = match base_ts { None => { base_ts = Some(ts_epoch); 0.0 } Some(b) => ts_epoch - b };
+        let ts_str = format!("{:.6}", rel);
+        let bytes = pkt.data.len();
+        let mut dp = inspect(&pkt.data);
+        dp.classify_app_category();
+
+        if format == "csv" {
+            emit_packet_csv(pkt_num, &ts_str, &dp, bytes);
+        } else {
+            emit_packet_json(pkt_num, &ts_str, &dp, bytes, pkt_num == 1);
+        }
+        let _ = std::io::stdout().flush();
+        true
+    })?;
+
+    if format != "csv" {
+        println!("\n]");
+    }
+    Ok(())
+}
+
+fn parse_count_filter(args: &[String]) -> (usize, Option<String>) {
+    match args.first() {
+        None => (0, None),
+        Some(s) => match s.parse::<usize>() {
+            Ok(n) => {
+                let f = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
+                (n, f)
+            }
+            Err(_) => (0, Some(args.join(" "))),
+        },
+    }
+}
+
 // ─── GeoIP lookup command ─────────────────────────────────────────────────────
 
 fn run_geoip(args: &[String]) -> Result<(), CliError> {
@@ -4762,6 +5194,66 @@ fn run_geoip(args: &[String]) -> Result<(), CliError> {
                 ip, geo.country_code, geo.continent, geo.country_name
             ),
             None => println!("{:<18}  --    --         Private / Unknown", ip),
+        }
+    }
+    Ok(())
+}
+
+// ─── build app ───────────────────────────────────────────────────────────────
+
+fn run_build_app() -> Result<(), CliError> {
+    const G: &str = "\x1b[1;32m";
+    const Y: &str = "\x1b[1;33m";
+    const C: &str = "\x1b[1;36m";
+    const R: &str = "\x1b[0m";
+    const DIM: &str = "\x1b[2m";
+
+    println!("{C}pktana Packet Tracer — multi-platform build{R}");
+    println!();
+    println!("  Targets:");
+    println!("    {G}Windows{R}   pktana-packet-tracer-setup.exe  {DIM}(NSIS installer){R}");
+    println!("    {G}macOS{R}     pktana-packet-tracer.dmg         {DIM}(arm64 + x64){R}");
+    println!("    {G}Linux{R}     pktana-packet-tracer.rpm         {DIM}(RHEL/Rocky/Alma){R}");
+    println!("              pktana-packet-tracer.AppImage    {DIM}(portable){R}");
+    println!();
+
+    // Try gh CLI — trigger the GitHub Actions workflow
+    let gh_result = std::process::Command::new("gh")
+        .args([
+            "workflow",
+            "run",
+            "build-app.yml",
+            "--repo",
+            "omnayak27199/pktana",
+        ])
+        .status();
+
+    match gh_result {
+        Ok(s) if s.success() => {
+            println!("  {G}✓{R}  Workflow dispatched via gh CLI.");
+            println!();
+            println!("  Monitor:");
+            println!(
+                "    {Y}gh run list --workflow=build-app.yml --repo omnayak27199/pktana{R}"
+            );
+            println!(
+                "    {DIM}https://github.com/omnayak27199/pktana/actions/workflows/build-app.yml{R}"
+            );
+            println!();
+            println!("  Artifacts are uploaded to a GitHub Release on completion.");
+            println!("  Download links in index.html are updated automatically by the workflow.");
+        }
+        _ => {
+            println!("  {Y}!{R}  gh CLI not found or not authenticated.");
+            println!();
+            println!("  Install:   {Y}https://cli.github.com{R}");
+            println!("  Auth:      {Y}gh auth login{R}");
+            println!();
+            println!("  Or trigger manually:");
+            println!(
+                "    {Y}https://github.com/omnayak27199/pktana/actions/workflows/build-app.yml{R}"
+            );
+            println!("    → Run workflow → Run workflow button");
         }
     }
     Ok(())

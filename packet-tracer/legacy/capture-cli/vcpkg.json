@@ -1,0 +1,8 @@
+{
+  "name": "pktana-packet-tracer",
+  "version-string": "0.1.0",
+  "description": "Cross-platform packet tracer for macOS and Windows",
+  "dependencies": [
+    "libpcap"
+  ]
+}

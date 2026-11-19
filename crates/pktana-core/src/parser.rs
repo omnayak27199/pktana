@@ -200,7 +200,7 @@ fn parse_tcp(payload: &[u8]) -> Result<(Option<TransportHeader>, usize), ParseEr
     if payload.len() < data_offset {
         return Err(ParseError::Truncated("tcp options"));
     }
-    let flags = u16::from_be_bytes([payload[12] & 0x1f, payload[13]]);
+    let flags = u16::from_be_bytes([payload[12] & 0x01, payload[13]]);
     let window_size = u16::from_be_bytes([payload[14], payload[15]]);
     let payload_len = payload.len().saturating_sub(data_offset);
 

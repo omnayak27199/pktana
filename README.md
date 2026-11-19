@@ -1,21 +1,34 @@
 # pktana
 
-**A high-performance, zero-dependency network inspection toolkit for Linux — written in Rust.**
-
-> Replaces `tcpdump`, `ethtool`, `ss`, `ip route`, `iftop`, and Wireshark with a single binary,
-> plus a multi-window **browser UI** for parallel per-interface capture.
-> Built for production infrastructure, network security, and cloud-native environments.
+**Wireshark + tcpdump + ethtool + threat detection — one Rust binary, runs over SSH**
 
 [![CI](https://github.com/omnayak27199/pktana/actions/workflows/ci.yml/badge.svg)](https://github.com/omnayak27199/pktana/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.6.0)
+[![Version](https://img.shields.io/badge/version-0.7.0-green.svg)](https://github.com/omnayak27199/pktana/releases/tag/v0.7.0)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%2F%20RHEL%20%2F%20Rocky%20%2F%20Ubuntu%20%2F%20Debian-lightgrey.svg)]()
 [![crates.io](https://img.shields.io/crates/v/pktana-cli.svg)](https://crates.io/crates/pktana-cli)
 [![Website](https://img.shields.io/badge/website-pktana.online-orange.svg)](https://pktana.online)
 
 🌐 **Website**: [pktana.online](https://pktana.online)
 📦 **crates.io**: [pktana-cli](https://crates.io/crates/pktana-cli) · [pktana-core](https://crates.io/crates/pktana-core)
-📥 **Downloads**: [GitHub Releases](https://github.com/omnayak27199/pktana/releases/tag/v0.6.0)
+📥 **Downloads**: [GitHub Releases](https://github.com/omnayak27199/pktana/releases/tag/v0.7.0)
+
+---
+
+## Quick start
+
+```bash
+# Install (RHEL/Rocky/Alma 9)
+sudo rpm -i https://github.com/omnayak27199/pktana/releases/latest/download/pktana-el9.rpm
+
+# Or via cargo
+cargo install pktana-cli --features pcap,tui
+
+# 30-second demo
+sudo pktana diagnose          # network doctor: checks all interfaces
+sudo pktana tui eth0          # Wireshark-like TUI over SSH
+sudo pktana web 8080          # browser dashboard
+```
 
 ---
 
@@ -258,30 +271,48 @@ curl -fsSL https://raw.githubusercontent.com/omnayak27199/pktana/main/install.sh
 
 ```bash
 sudo dnf install -y \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el9.x86_64.rpm
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-el9.rpm
 ```
 
 ### RHEL / CentOS 7
 
 ```bash
 sudo yum install -y \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-0.6.0-1.el7.x86_64.rpm
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-el7.rpm
 ```
 
 ### Ubuntu 22.04 / 24.04 · Debian 12
 
 ```bash
 curl -L -o pktana.deb \
-  https://github.com/omnayak27199/pktana/releases/latest/download/pktana_0.6.0_amd64_ubuntu24.04.deb
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-ubuntu24.04.deb
 sudo apt install -y ./pktana.deb
 ```
 
 (Replace `ubuntu24.04` with `ubuntu22.04` or `debian12` for the matching `.deb`.)
 
-### Verify the RPM signature
+### macOS (Electron desktop app)
 
 ```bash
-rpm --checksig pktana-0.6.0-1.el9.x86_64.rpm
+# Download pktana-macos.dmg from the latest release and open it
+curl -L -o pktana-macos.dmg \
+  https://github.com/omnayak27199/pktana/releases/latest/download/pktana-macos.dmg
+open pktana-macos.dmg
+```
+
+### Windows (Electron installer)
+
+Download `pktana-windows-setup.exe` from the latest release.
+Requires [Npcap](https://npcap.com/) for live packet capture.
+
+```
+https://github.com/omnayak27199/pktana/releases/latest/download/pktana-windows-setup.exe
+```
+
+### Verify the RPM
+
+```bash
+rpm --checksig pktana-el9.rpm
 ```
 
 ### Build from source

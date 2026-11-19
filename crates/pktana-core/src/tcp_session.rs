@@ -341,6 +341,8 @@ pub struct TcpSession {
 
     /// Bounded event log (most recent 64 events)
     pub events: Vec<TcpSessionEvent>,
+    /// Events silently dropped because the 64-entry ring was full
+    pub events_dropped: u32,
 }
 
 impl TcpSession {
@@ -371,12 +373,15 @@ impl TcpSession {
             client_window_scale: 0,
             server_window_scale: 0,
             events: Vec::new(),
+            events_dropped: 0,
         }
     }
 
     fn push_event(&mut self, ev: TcpSessionEvent) {
         if self.events.len() < 64 {
             self.events.push(ev);
+        } else {
+            self.events_dropped += 1;
         }
     }
 
@@ -743,9 +748,10 @@ impl TcpSessionTable {
             );
 
             if session.state.is_terminal() {
-                let done = self.active.remove(&key).unwrap();
-                if self.completed.len() < self.max_completed {
-                    self.completed.push(done);
+                if let Some(done) = self.active.remove(&key) {
+                    if self.completed.len() < self.max_completed {
+                        self.completed.push(done);
+                    }
                 }
             }
         }
