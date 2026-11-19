@@ -32,7 +32,7 @@ sudo pktana web 8080          # browser dashboard
 
 ---
 
-## What's new in v0.6.0
+## What's new in v0.7.0
 
 - 🛡 **DLP engine (Sophos-style)** — detect credentials, PAN/PCI, SSN, IBAN, private keys, cloud API keys, and bulk PII in HTTP/FTP/SMTP payloads; custom regex identifiers supported.
 - 🚨 **IDPS engine (Suricata-style)** — signature matching, DPI risk bridge, port-scan / SSH brute / DNS-tunnel / NTP-amp heuristics, JA3 blocklists, and custom Suricata rules.
@@ -40,7 +40,7 @@ sudo pktana web 8080          # browser dashboard
 - 🪟 **Web / CLI / TUI / MCP integration** — security config, alerts, flows, and per-interface stats available across every capture path.
 - 📊 **Per-interface security stats** — live alert counts and flow summaries that reset cleanly when an engine is disabled.
 
-See [v0.6.0_release_note.md](v0.6.0_release_note.md) and [CHANGELOG.md](CHANGELOG.md) for the full list.
+See [v0.7.0_release_note.md](v0.7.0_release_note.md) and [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ---
 
@@ -431,7 +431,7 @@ See [docs/architecture.md](docs/architecture.md) for detailed design notes.
 
 ```toml
 [dependencies]
-pktana-core = "0.6.0"
+pktana-core = "0.7.0"
 ```
 
 ```rust

@@ -130,13 +130,13 @@ Releases are tagged from `main`:
 ```bash
 # Bump version in all Cargo.toml files
 # (workspace package + both crate Cargo.toml files)
-vim crates/pktana-core/Cargo.toml   # version = "0.6.0"
-vim crates/pktana-cli/Cargo.toml    # version = "0.6.0"
+vim crates/pktana-core/Cargo.toml   # version = "0.7.0"
+vim crates/pktana-cli/Cargo.toml    # version = "0.7.0"
 
 # Update changelog / release notes
 git add -A
-git commit -m "release: v0.6.0"
-git tag v0.6.0
+git commit -m "release: v0.7.0"
+git tag v0.7.0
 git push origin main --tags
 ```
 

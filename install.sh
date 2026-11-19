@@ -2,7 +2,7 @@
 # pktana automatic installation script
 set -euo pipefail
 
-PKTANA_VERSION="v0.6.0"
+PKTANA_VERSION="v0.7.0"
 
 if [ -f /etc/os-release ]; then
     # shellcheck source=/dev/null

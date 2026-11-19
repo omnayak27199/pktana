@@ -51,6 +51,6 @@ pktana route
 
 ## Version
 
-Current release: **v0.6.0**  
+Current release: **v0.7.0**  
 License: Apache-2.0  
 Repository: https://github.com/omnayak27199/pktana

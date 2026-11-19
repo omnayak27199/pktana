@@ -26,11 +26,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-IMAGE_NAME="${PKTANA_IMAGE:-pktana-web:0.6.0}"
+IMAGE_NAME="${PKTANA_IMAGE:-pktana-web:0.7.0}"
 CONTAINER_NAME="${PKTANA_CONTAINER:-pktana-web}"
 DEFAULT_PORT="${PKTANA_PORT:-8080}"
 PLATFORM="${PKTANA_PLATFORM:-linux/amd64}"
-VERSION="${PKTANA_VERSION:-0.6.0}"
+VERSION="${PKTANA_VERSION:-0.7.0}"
 
 have_docker() {
   command -v docker >/dev/null 2>&1 || {
