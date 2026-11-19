@@ -5111,7 +5111,7 @@ fn run_export(args: &[String]) -> Result<(), CliError> {
 
 fn emit_packet_json(no: usize, ts: &str, dp: &pktana_core::DeepPacket, bytes: usize, first: bool) {
     if !first {
-        print!(",\n");
+        println!(",");
     }
     let src = dp_src_str(dp);
     let dst = dp_dst_str(dp);
