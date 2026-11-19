@@ -46,6 +46,11 @@ jobs:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. RPM — RHEL/Rocky/Alma 9  and  RHEL/CentOS 7
+#
+# Strategy: run on ubuntu-latest so actions/checkout works (Node.js 24
+# requires GLIBC 2.27+ which CentOS 7 doesn't have).  The entire Rust build
+# and rpmbuild run inside the target OS via `docker run`, so the binary links
+# against the correct glibc and the .el7/.el9 dist tag is set properly.
 # ─────────────────────────────────────────────────────────────────────────────
   rpm:
     name: RPM (${{ matrix.os_type }})
@@ -59,58 +64,87 @@ jobs:
             image: rockylinux:9
           - os_type: el7
             image: centos:7
-    container:
-      image: ${{ matrix.image }}
     env:
       VERSION: ${{ needs.meta.outputs.version }}
     steps:
-      - name: Install build deps (el9)
-        if: matrix.os_type == 'el9'
-        run: |
-          dnf install -y epel-release dnf-plugins-core
-          dnf config-manager --set-enabled crb
-          dnf install -y --allowerasing \
-            gcc libpcap-devel openssl-devel pkgconf-pkg-config \
-            perl-core rpm-build make git curl tar gzip ca-certificates
-
-      - name: Install build deps (el7)
-        if: matrix.os_type == 'el7'
-        run: |
-          sed -i 's/mirrorlist/#mirrorlist/g'               /etc/yum.repos.d/CentOS-*
-          sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
-            /etc/yum.repos.d/CentOS-*
-          yum install -y \
-            gcc libpcap-devel openssl-devel pkgconfig perl-IPC-Cmd \
-            perl-Data-Dumper rpm-build make git curl tar gzip ca-certificates
-
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      # Write the build script to a file — avoids all quoting issues inside
+      # the docker run command when mixing GitHub expressions with bash vars.
+      - name: Write in-container build script
         run: |
+          cat > /tmp/rpm-build.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          set -euxo pipefail
+          OS_TYPE="$1"
+          PKG_VERSION="$2"
+
+          # ── package manager setup ────────────────────────────────────────
+          if [ "$OS_TYPE" = "el7" ]; then
+            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' \
+              /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            yum install -y gcc libpcap-devel openssl-devel pkgconfig \
+              perl-IPC-Cmd perl-Data-Dumper rpm-build make curl tar gzip ca-certificates
+          else
+            dnf install -y epel-release dnf-plugins-core
+            dnf config-manager --set-enabled crb
+            dnf install -y gcc libpcap-devel openssl-devel pkgconf-pkg-config \
+              perl-core rpm-build make curl tar gzip ca-certificates
+          fi
+
+          # ── Rust ─────────────────────────────────────────────────────────
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
             sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # shellcheck source=/dev/null
+          source "$HOME/.cargo/env"
 
-      - name: Stamp version into release.conf
-        run: |
-          sed -i "s/^VERSION=.*/VERSION=$VERSION/"              release.conf
-          sed -i "s/^RELEASE=.*/RELEASE=1/"                    release.conf
-          sed -i "s/^OS_TYPE=.*/OS_TYPE=${{ matrix.os_type }}/" release.conf
-
-      - name: Build release binary
-        run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
+          # ── build binary ─────────────────────────────────────────────────
           cargo build --release --features pcap,tui -p pktana-cli
 
-      - name: Build RPM via Makefile
+          # ── create RPM (mirrors what `make pktana` does, without check) ──
+          mkdir -p dist/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p "dist/rpm-src/pktana-$PKG_VERSION"
+          cp target/release/pktana "dist/rpm-src/pktana-$PKG_VERSION/pktana"
+          cp README.md             "dist/rpm-src/pktana-$PKG_VERSION/README.md"
+          tar -czf "dist/pktana-$PKG_VERSION.tar.gz" -C dist/rpm-src "pktana-$PKG_VERSION"
+          cp "dist/pktana-$PKG_VERSION.tar.gz" dist/rpmbuild/SOURCES/
+          cp deploy/centos/pktana.spec          dist/rpmbuild/SPECS/pktana.spec
+          rpmbuild \
+            --define "_topdir $(pwd)/dist/rpmbuild" \
+            --define "pkg_version $PKG_VERSION" \
+            --define "pkg_release 1" \
+            --define "dist .$OS_TYPE" \
+            -bb dist/rpmbuild/SPECS/pktana.spec
+          echo "✅ RPM built:"
+          find dist/rpmbuild/RPMS -name '*.rpm'
+
+          # Fix ownership so the ubuntu runner can read the output
+          chown -R "$(stat -c '%u:%g' /workspace)" dist/ target/ || true
+          SCRIPT
+          chmod +x /tmp/rpm-build.sh
+
+      - name: Build RPM inside ${{ matrix.image }}
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          make pktana
+          # Mount the workspace and the build script into the target OS container.
+          # Also mount the host cargo registry to avoid re-downloading all crates.
+          mkdir -p ~/.cargo/registry ~/.cargo/git
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -v "/tmp/rpm-build.sh:/rpm-build.sh:ro" \
+            -v "$HOME/.cargo/registry:/root/.cargo/registry" \
+            -v "$HOME/.cargo/git:/root/.cargo/git" \
+            -w /workspace \
+            "${{ matrix.image }}" \
+            bash /rpm-build.sh "${{ matrix.os_type }}" "$VERSION"
+
+      - name: Collect RPMs and create stable alias
+        run: |
           mkdir -p dist/upload
           find dist/rpmbuild/RPMS -name '*.rpm' -exec cp {} dist/upload/ \;
-          # Stable alias — no version in filename so /releases/latest/download/ always works
-          find dist/upload -name '*.rpm' ! -name 'pktana-${{ matrix.os_type }}.rpm' \
-            -exec cp {} "dist/upload/pktana-${{ matrix.os_type }}.rpm" \;
+          src=$(find dist/upload -name '*.rpm' \
+                  ! -name "pktana-${{ matrix.os_type }}.rpm" | head -1)
+          [ -n "$src" ] && cp "$src" "dist/upload/pktana-${{ matrix.os_type }}.rpm"
           ls -lh dist/upload/
 
       - uses: actions/upload-artifact@v4
