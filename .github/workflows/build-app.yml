@@ -1,6 +1,9 @@
 name: Build Packet Tracer App
 
 on:
+  push:
+    tags:
+      - 'pt-v*'          # e.g. pt-v1.0.0 → auto-build + publish release
   workflow_dispatch:
     inputs:
       version:

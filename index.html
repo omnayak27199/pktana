@@ -1259,6 +1259,14 @@
 
         <!-- ── Packet Tracer downloads ───────────────────────────── -->
         <div id="dl-pane-tracer" class="dl-pane">
+          <div class="section-header" style="margin-bottom:32px;">
+            <p class="section-sub" style="margin:0;">
+              Cisco Packet Tracer-style network learning lab — drag-and-drop topology,
+              IOS router CLI, animated packet flows, and guided lab exercises.
+              <span id="pt-version-badge" style="display:none;margin-left:8px;padding:2px 8px;background:var(--primary);color:#fff;border-radius:4px;font-size:0.8rem;font-weight:600;"></span>
+            </p>
+          </div>
+
           <div class="dl-grid">
 
             <!-- Windows -->
@@ -1270,9 +1278,11 @@
                   <div class="dl-os-sub">x64 · NSIS installer</div>
                 </div>
               </div>
-              <div class="dl-filename">pktana-packet-tracer-setup.exe · v<span class="pt-ver">1.0.0</span></div>
+              <div class="dl-filename" id="pt-fn-windows">pktana-packet-tracer-setup.exe · v1.0.0</div>
               <div class="dl-actions">
-                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer-setup.exe">⬇ .exe</a>
+                <a class="dl-btn dl-btn-primary"
+                   href="https://github.com/omnayak27199/pktana/releases/download/pt-v1.0.0/pktana-packet-tracer-setup.exe"
+                   data-pt-asset="pktana-packet-tracer-setup.exe">⬇ .exe</a>
               </div>
             </div>
 
@@ -1285,9 +1295,11 @@
                   <div class="dl-os-sub">Apple Silicon + Intel · DMG</div>
                 </div>
               </div>
-              <div class="dl-filename">pktana-packet-tracer.dmg · v<span class="pt-ver">1.0.0</span></div>
+              <div class="dl-filename" id="pt-fn-macos">pktana-packet-tracer.dmg · v1.0.0</div>
               <div class="dl-actions">
-                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.dmg">⬇ .dmg</a>
+                <a class="dl-btn dl-btn-primary"
+                   href="https://github.com/omnayak27199/pktana/releases/download/pt-v1.0.0/pktana-packet-tracer.dmg"
+                   data-pt-asset="pktana-packet-tracer.dmg">⬇ .dmg</a>
               </div>
             </div>
 
@@ -1300,10 +1312,14 @@
                   <div class="dl-os-sub">x64 · AppImage + deb</div>
                 </div>
               </div>
-              <div class="dl-filename">pktana-packet-tracer.AppImage · v<span class="pt-ver">1.0.0</span></div>
+              <div class="dl-filename" id="pt-fn-linux">pktana-packet-tracer.AppImage · v1.0.0</div>
               <div class="dl-actions">
-                <a class="dl-btn dl-btn-primary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.AppImage">⬇ AppImage</a>
-                <a class="dl-btn dl-btn-secondary" href="https://github.com/omnayak27199/pktana/releases/latest/download/pktana-packet-tracer.deb">⬇ .deb</a>
+                <a class="dl-btn dl-btn-primary"
+                   href="https://github.com/omnayak27199/pktana/releases/download/pt-v1.0.0/pktana-packet-tracer.AppImage"
+                   data-pt-asset="pktana-packet-tracer.AppImage">⬇ AppImage</a>
+                <a class="dl-btn dl-btn-secondary"
+                   href="https://github.com/omnayak27199/pktana/releases/download/pt-v1.0.0/pktana-packet-tracer.deb"
+                   data-pt-asset="pktana-packet-tracer.deb">⬇ .deb</a>
               </div>
             </div>
 
@@ -1314,7 +1330,8 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
               All releases on GitHub
             </a>
-            <a href="https://github.com/omnayak27199/pktana/releases/latest" target="_blank" rel="noreferrer" class="dl-extra-link">🏷 Latest release notes</a>
+            <a href="https://github.com/omnayak27199/pktana/releases/tag/pt-v1.0.0" target="_blank" rel="noreferrer" class="dl-extra-link">🏷 Packet Tracer release notes</a>
+            <a href="https://github.com/omnayak27199/pktana/tree/main/packet-tracer" target="_blank" rel="noreferrer" class="dl-extra-link">📂 Source code</a>
           </div>
         </div><!-- end dl-pane-tracer -->
 
@@ -1323,46 +1340,80 @@
   </section>
 
   <script>
-  /* Fetch the latest release tag from GitHub API and show versioned filenames.
-     The download hrefs already use /releases/latest/download/<stable-name> so
-     they always work even if this fetch fails (e.g. API rate-limit). */
   (function () {
-    fetch('https://api.github.com/repos/omnayak27199/pktana/releases/latest', {
-      headers: { Accept: 'application/vnd.github+json' }
-    })
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (rel) {
-      if (!rel || !rel.tag_name) return;
-      var v = rel.tag_name.replace(/^v/, '');
-      var badge = document.getElementById('dl-version-badge');
-      if (badge) { badge.textContent = rel.tag_name; badge.style.display = 'inline'; }
-      var map = {
-        'el9':        'pktana-' + v + '-1.el9.x86_64.rpm',
-        'el7':        'pktana-' + v + '-1.el7.x86_64.rpm',
-        'ubuntu22.04':'pktana_' + v + '_amd64_ubuntu22.04.deb',
-        'ubuntu24.04':'pktana_' + v + '_amd64_ubuntu24.04.deb',
-        'debian12':   'pktana_' + v + '_amd64_debian12.deb',
-        'macos':      'pktana-' + v + '.dmg',
-        'windows':    'pktana-' + v + '-Setup.exe'
-      };
-      Object.keys(map).forEach(function (key) {
-        var el = document.getElementById('dl-fn-' + key);
-        if (el) el.textContent = map[key];
-      });
-    })
-    .catch(function () { /* silent — stable links still work */ });
-  })();
+    var REPO = 'omnayak27199/pktana';
+    var API  = 'https://api.github.com/repos/' + REPO;
+    var GH   = 'https://github.com/' + REPO;
 
-  // ── download tab switching ───────────────────────────────────────
-  document.querySelectorAll('.dl-tab').forEach(function (tab) {
-    tab.addEventListener('click', function () {
-      document.querySelectorAll('.dl-tab').forEach(function (t) { t.classList.remove('active'); });
-      document.querySelectorAll('.dl-pane').forEach(function (p) { p.classList.remove('active'); });
-      tab.classList.add('active');
-      var pane = document.getElementById('dl-pane-' + tab.dataset.target);
-      if (pane) pane.classList.add('active');
+    /* ── 1. pktana CLI: fetch latest v* release, show versioned filenames ── */
+    fetch(API + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        if (!rel || !rel.tag_name) return;
+        var v = rel.tag_name.replace(/^v/, '');
+        var badge = document.getElementById('dl-version-badge');
+        if (badge) { badge.textContent = rel.tag_name; badge.style.display = 'inline'; }
+        var map = {
+          'el9':         'pktana-' + v + '-1.el9.x86_64.rpm',
+          'el7':         'pktana-' + v + '-1.el7.x86_64.rpm',
+          'ubuntu22.04': 'pktana_' + v + '_amd64_ubuntu22.04.deb',
+          'ubuntu24.04': 'pktana_' + v + '_amd64_ubuntu24.04.deb',
+          'debian12':    'pktana_' + v + '_amd64_debian12.deb',
+          'macos':       'pktana-' + v + '.dmg',
+          'windows':     'pktana-' + v + '-Setup.exe'
+        };
+        Object.keys(map).forEach(function (key) {
+          var el = document.getElementById('dl-fn-' + key);
+          if (el) el.textContent = map[key];
+        });
+      })
+      .catch(function () {});
+
+    /* ── 2. Packet Tracer: fetch latest pt-v* release, wire up all links ── */
+    /* pt-v* releases are separate from the pktana v* releases.             */
+    fetch(API + '/releases?per_page=20', { headers: { Accept: 'application/vnd.github+json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (releases) {
+        if (!releases) return;
+        var pt = releases.find(function (r) { return /^pt-v/.test(r.tag_name); });
+        if (!pt) return;
+        var tag = pt.tag_name;                          /* e.g. pt-v1.0.0  */
+        var v   = tag.replace(/^pt-v/, '');             /* e.g. 1.0.0      */
+        var base = GH + '/releases/download/' + tag;
+
+        /* update version badge */
+        var badge = document.getElementById('pt-version-badge');
+        if (badge) { badge.textContent = tag; badge.style.display = 'inline'; }
+
+        /* update filename labels */
+        var fnMap = {
+          'pt-fn-windows': 'pktana-packet-tracer-setup.exe  ·  v' + v,
+          'pt-fn-macos':   'pktana-packet-tracer.dmg  ·  v' + v,
+          'pt-fn-linux':   'pktana-packet-tracer.AppImage  ·  v' + v
+        };
+        Object.keys(fnMap).forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.textContent = fnMap[id];
+        });
+
+        /* update every download button that carries data-pt-asset */
+        document.querySelectorAll('[data-pt-asset]').forEach(function (a) {
+          a.href = base + '/' + a.getAttribute('data-pt-asset');
+        });
+      })
+      .catch(function () {});
+
+    /* ── 3. Tab switching ─────────────────────────────────────────────── */
+    document.querySelectorAll('.dl-tab').forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        document.querySelectorAll('.dl-tab').forEach(function (t) { t.classList.remove('active'); });
+        document.querySelectorAll('.dl-pane').forEach(function (p) { p.classList.remove('active'); });
+        tab.classList.add('active');
+        var pane = document.getElementById('dl-pane-' + tab.dataset.target);
+        if (pane) pane.classList.add('active');
+      });
     });
-  });
+  })();
   </script>
 
   <!-- ── Features ───────────────────────────────────────────────── -->

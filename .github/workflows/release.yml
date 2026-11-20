@@ -89,8 +89,10 @@ jobs:
           else
             dnf install -y epel-release dnf-plugins-core
             dnf config-manager --set-enabled crb
+            # curl-minimal is pre-installed in rockylinux:9 and conflicts with curl;
+            # omit curl from the list — curl-minimal suffices for rustup download.
             dnf install -y gcc libpcap-devel openssl-devel pkgconf-pkg-config \
-              perl-core rpm-build make curl tar gzip ca-certificates
+              perl-core rpm-build make tar gzip ca-certificates
           fi
 
           # ── Rust ─────────────────────────────────────────────────────────
